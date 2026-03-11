@@ -212,6 +212,17 @@ npm run build
 .\build-linux.ps1
 ```
 
+### 一键构建前后端并打包（Linux amd64）
+
+```bash
+bash scripts/build_release.sh
+```
+
+构建完成后会在 `build/caiyun-linux-amd64.tar.gz` 生成可下载发布包，包含：
+- 前端静态文件（`frontend/`）
+- 后端 Linux amd64 二进制（`backend/caiyun-api`、`backend/caiyun-worker`）
+- `.env.example` 与 `README.md`
+
 ## 环境变量配置（后端）
 
 后端运行时默认从 `backend/.env` 读取配置。完整示例见：`backend/configs/.env.example`。
@@ -582,4 +593,3 @@ SOFTWARE.
 Made with ❤️ by 移动云盘管理系统团队
 
 </div>
-

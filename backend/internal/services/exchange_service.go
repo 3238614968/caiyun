@@ -2,7 +2,6 @@ package services
 
 import (
 	"caiyun/internal/constants"
-	"caiyun/internal/core/api"
 	"caiyun/internal/core/auth"
 	"caiyun/internal/models"
 	"caiyun/internal/repository"
