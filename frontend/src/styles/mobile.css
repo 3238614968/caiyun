@@ -1,0 +1,876 @@
+﻿/**
+ * 移动端适配样式
+ * 仅在屏幕宽度小于 768px 时生效
+ */
+
+/* 移动端隐藏元素 */
+@media screen and (max-width: 768px) {
+  .hidden-mobile {
+    display: none !important;
+  }
+}
+
+/* PC端隐藏元素 */
+@media screen and (min-width: 769px) {
+  .hidden-pc {
+    display: none !important;
+  }
+}
+
+/* ==================== 布局适配 ==================== */
+@media screen and (max-width: 768px) {
+  /* 主容器 */
+  .layout-container {
+    flex-direction: column !important;
+  }
+
+  /* 侧边栏 - 移动端变为底部导航 */
+  .sidebar {
+    width: 100% !important;
+    height: 60px !important;
+    position: fixed !important;
+    bottom: 0 !important;
+    left: 0 !important;
+    z-index: 1000 !important;
+    flex-direction: row !important;
+    background: linear-gradient(90deg, #e0f2fe 0%, #bae6fd 50%, #7dd3fc 100%) !important;
+    border-top: 1px solid rgba(255, 255, 255, 0.3);
+    box-shadow: 0 -4px 20px rgba(0, 0, 0, 0.1);
+  }
+
+  .logo-container,
+  .sidebar-footer {
+    display: none !important;
+  }
+
+  .sidebar-menu {
+    flex: 1;
+    padding: 0 !important;
+    display: flex !important;
+    flex-direction: row !important;
+    justify-content: space-around !important;
+    align-items: center !important;
+    height: 100% !important;
+    background: transparent !important;
+  }
+
+  .sidebar-menu .el-menu-item {
+    margin: 0 !important;
+    padding: 0 10px !important;
+    height: 50px !important;
+    line-height: 1.2 !important;
+    flex-direction: column !important;
+    justify-content: center !important;
+    align-items: center !important;
+    border-radius: 8px !important;
+    font-size: 12px !important;
+  }
+
+  .sidebar-menu .el-icon {
+    margin-right: 0 !important;
+    margin-bottom: 2px !important;
+    font-size: 20px !important;
+  }
+
+  /* 主内容区 */
+  .main-container {
+    padding-bottom: 60px !important;
+  }
+
+  .main-content {
+    padding: 8px !important;
+  }
+
+  /* 顶部导航 */
+  .header {
+    height: 56px !important;
+    padding: 0 12px !important;
+  }
+
+  .header-left {
+    display: none !important;
+  }
+
+  .header-right {
+    gap: 8px !important;
+    margin-left: auto;
+  }
+
+  .user-info .username {
+    display: none !important;
+  }
+
+  /* 页脚 */
+  .footer {
+    display: none !important;
+  }
+}
+
+/* ==================== Element Plus 组件适配 ==================== */
+@media screen and (max-width: 768px) {
+  /* 卡片 */
+  .el-card {
+    margin-bottom: 8px !important;
+    border-radius: 12px !important;
+  }
+
+  .el-card__header {
+    padding: 12px 16px !important;
+    font-size: 15px !important;
+  }
+
+  .el-card__body {
+    padding: 12px !important;
+  }
+
+  /* 表格 */
+  .el-table {
+    font-size: 13px !important;
+  }
+
+  .el-table .cell {
+    padding: 4px 6px !important;
+  }
+
+  .el-table th.el-table__cell {
+    padding: 8px 0 !important;
+    font-size: 12px !important;
+  }
+
+  .el-table td.el-table__cell {
+    padding: 6px 0 !important;
+  }
+
+  /* 按钮 */
+  .el-button {
+    padding: 6px 12px !important;
+    font-size: 13px !important;
+  }
+
+  .el-button--small {
+    padding: 4px 8px !important;
+    font-size: 12px !important;
+  }
+
+  /* 表单 */
+  .el-form-item {
+    margin-bottom: 12px !important;
+  }
+
+  .el-form-item__label {
+    font-size: 13px !important;
+    padding: 0 0 4px !important;
+  }
+
+  .el-input__inner {
+    height: 36px !important;
+    line-height: 36px !important;
+  }
+
+  /* 对话框 */
+  .el-dialog {
+    width: 95% !important;
+    max-width: 400px;
+    margin: 20px auto !important;
+    border-radius: 16px !important;
+  }
+
+  .el-dialog__header {
+    padding: 16px 20px !important;
+    font-size: 16px !important;
+  }
+
+  .el-dialog__body {
+    padding: 16px 20px !important;
+  }
+
+  .el-dialog__footer {
+    padding: 12px 20px 16px !important;
+  }
+
+  /* 分页 */
+  .el-pagination {
+    justify-content: center !important;
+    flex-wrap: wrap !important;
+    gap: 4px !important;
+    padding: 8px 0 !important;
+  }
+
+  .el-pagination .el-pagination__sizes,
+  .el-pagination .el-pagination__jump,
+  .el-pagination .el-pagination__total {
+    display: none !important;
+  }
+
+  .el-pagination button {
+    min-width: 28px !important;
+    height: 28px !important;
+  }
+
+  .el-pagination .el-pager li {
+    min-width: 28px !important;
+    height: 28px !important;
+    line-height: 28px !important;
+  }
+
+  /* 下拉菜单 */
+  .el-dropdown-menu {
+    max-width: 200px;
+  }
+
+  /* 消息提示 */
+  .el-message {
+    min-width: 280px !important;
+    max-width: 90% !important;
+  }
+
+  /* 单选按钮组 */
+  .el-radio-group {
+    display: flex !important;
+    flex-wrap: wrap;
+    gap: 4px;
+  }
+
+  .el-radio-button {
+    flex: 1;
+  }
+
+  .el-radio-button__inner {
+    padding: 6px 12px !important;
+    font-size: 12px !important;
+  }
+}
+
+/* ==================== 仪表盘适配 ==================== */
+@media screen and (max-width: 768px) {
+  .dashboard-container {
+    padding: 0 !important;
+  }
+
+  /* 统计卡片 - 2列布局 */
+  .dashboard-container .el-row {
+    margin-left: -4px !important;
+    margin-right: -4px !important;
+  }
+
+  .dashboard-container .el-col {
+    width: 50% !important;
+    max-width: 50% !important;
+    flex: 0 0 50% !important;
+    padding: 0 4px !important;
+    margin-bottom: 8px !important;
+  }
+
+  .stat-card {
+    margin-bottom: 0 !important;
+  }
+
+  .stat-card .el-card__body {
+    padding: 12px 8px !important;
+  }
+
+  .stat-content {
+    flex-direction: column !important;
+    align-items: center !important;
+    text-align: center !important;
+  }
+
+  .stat-icon {
+    width: 36px !important;
+    height: 36px !important;
+    margin-bottom: 6px !important;
+    margin-right: 0 !important;
+  }
+
+  .stat-icon .el-icon {
+    font-size: 18px !important;
+  }
+
+  .stat-value {
+    font-size: 18px !important;
+    font-weight: 600 !important;
+    line-height: 1.2 !important;
+  }
+
+  .stat-label {
+    font-size: 11px !important;
+    color: #666 !important;
+    margin-top: 2px !important;
+  }
+
+  .stat-diff {
+    font-size: 11px !important;
+    margin-top: 2px !important;
+  }
+
+  /* 趋势图和排名 - 全宽并上下排列 */
+  .dashboard-container .el-row:nth-child(2) .el-col {
+    width: 100% !important;
+    max-width: 100% !important;
+    flex: 0 0 100% !important;
+    padding: 0 4px !important;
+    margin-bottom: 8px !important;
+  }
+
+  .chart-card {
+    margin-top: 0 !important;
+  }
+
+  .chart-card .el-card__body {
+    padding: 12px !important;
+  }
+
+  /* 趋势图 */
+  .chart-card [ref="trendChartRef"] {
+    height: 200px !important;
+  }
+
+  .chart-card .card-header {
+    flex-direction: column !important;
+    align-items: flex-start !important;
+    gap: 8px !important;
+  }
+
+  .chart-card .card-header .el-radio-group {
+    width: 100% !important;
+  }
+
+  /* 排名表格 */
+  .ranking-wrapper {
+    max-height: 250px;
+    overflow-y: auto;
+  }
+
+  .ranking-table {
+    font-size: 12px !important;
+  }
+
+  .ranking-table .el-table__cell {
+    padding: 4px 0 !important;
+  }
+
+  .ranking-table .cell {
+    line-height: 1.3 !important;
+  }
+
+  /* 快速操作 */
+  .quick-actions {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .quick-actions .el-button {
+    width: 100%;
+    margin: 0 !important;
+    height: 40px !important;
+  }
+}
+
+/* ==================== 账号管理适配 ==================== */
+@media screen and (max-width: 768px) {
+  .account-manage-container {
+    padding: 0 !important;
+  }
+
+  .account-manage-container .el-card {
+    margin-bottom: 8px !important;
+  }
+
+  .account-manage-container .el-card__body {
+    padding: 12px !important;
+  }
+
+  /* 卡片头部 */
+  .account-manage-container .card-header {
+    flex-direction: row !important;
+    justify-content: space-between !important;
+    align-items: center !important;
+  }
+
+  .account-manage-container .card-header span {
+    font-size: 15px !important;
+    font-weight: 600 !important;
+  }
+
+  /* 搜索表单 */
+  .account-manage-container .search-form {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-bottom: 12px !important;
+    padding: 12px !important;
+    background: rgba(255, 255, 255, 0.8);
+    border-radius: 10px;
+  }
+
+  .account-manage-container .search-form .el-form-item {
+    margin-bottom: 0 !important;
+    margin-right: 0 !important;
+    width: 100% !important;
+  }
+
+  .account-manage-container .search-form .el-form-item__content {
+    width: 100%;
+  }
+
+  .account-manage-container .search-form .el-input {
+    width: 100% !important;
+  }
+
+  .account-manage-container .search-form .el-button {
+    flex: 1;
+  }
+
+  /* 表格容器 */
+  .account-manage-container .el-table {
+    font-size: 12px !important;
+  }
+
+  .account-manage-container .el-table__header-wrapper {
+    font-size: 11px !important;
+  }
+
+  /* 操作按钮组 */
+  .account-manage-container .action-buttons {
+    display: flex;
+    flex-wrap: nowrap;
+    gap: 4px;
+    justify-content: flex-end;
+  }
+
+  .account-manage-container .action-buttons .el-button {
+    padding: 2px 6px !important;
+    font-size: 11px !important;
+    margin: 0 !important;
+  }
+
+  /* 表格横向滚动 */
+  .account-manage-container .el-table__body-wrapper {
+    overflow-x: auto !important;
+  }
+
+  /* 分页 */
+  .account-manage-container .el-pagination {
+    margin-top: 12px !important;
+  }
+
+  /* 添加/编辑对话框 */
+  .account-manage-container .el-dialog {
+    width: 95% !important;
+    max-width: 380px;
+    margin: 10px auto !important;
+  }
+
+  .account-manage-container .el-dialog__body {
+    padding: 16px !important;
+  }
+
+  /* 登录标签页 */
+  .account-manage-container .login-tabs .el-tabs__item {
+    font-size: 13px !important;
+    padding: 0 16px !important;
+    height: 36px !important;
+    line-height: 36px !important;
+  }
+
+  .account-manage-container .el-form-item__label {
+    font-size: 13px !important;
+  }
+
+  .account-manage-container .el-input__inner,
+  .account-manage-container .el-textarea__inner {
+    font-size: 14px !important;
+  }
+
+  /* 短信验证码输入框 */
+  .account-manage-container .el-form-item .el-input + .el-button {
+    margin-left: 8px !important;
+    padding: 0 12px !important;
+    font-size: 12px !important;
+    white-space: nowrap;
+  }
+}
+
+/* ==================== 日志页面适配 ==================== */
+@media screen and (max-width: 768px) {
+  .task-logs-container {
+    padding: 0 !important;
+  }
+
+  .task-logs-container .el-card {
+    margin-bottom: 8px !important;
+  }
+
+  .task-logs-container .el-card__body {
+    padding: 12px !important;
+  }
+
+  /* 卡片头部 */
+  .task-logs-container .card-header {
+    font-size: 15px !important;
+    font-weight: 600 !important;
+  }
+
+  /* 搜索表单 */
+  .task-logs-container .search-form {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-bottom: 12px !important;
+    padding: 12px !important;
+    background: rgba(255, 255, 255, 0.8);
+    border-radius: 10px;
+  }
+
+  .task-logs-container .search-form .el-form-item {
+    margin-bottom: 0 !important;
+    margin-right: 0 !important;
+    width: 100% !important;
+  }
+
+  .task-logs-container .search-form .el-form-item__label {
+    font-size: 13px !important;
+    width: auto !important;
+    padding-right: 8px;
+  }
+
+  .task-logs-container .search-form .el-form-item__content {
+    flex: 1;
+  }
+
+  .task-logs-container .search-form .el-select,
+  .task-logs-container .search-form .el-input {
+    width: 100% !important;
+  }
+
+  .task-logs-container .search-form .el-button {
+    flex: 1;
+  }
+
+  /* 表格 */
+  .task-logs-container .el-table {
+    font-size: 12px !important;
+  }
+
+  .task-logs-container .el-table__header-wrapper {
+    font-size: 11px !important;
+  }
+
+  .task-logs-container .el-table .cell {
+    line-height: 1.3 !important;
+    padding: 4px !important;
+  }
+
+  .task-logs-container .el-table th.el-table__cell {
+    padding: 6px 0 !important;
+  }
+
+  .task-logs-container .el-table td.el-table__cell {
+    padding: 6px 0 !important;
+  }
+
+  /* 标签 */
+  .task-logs-container .el-tag {
+    font-size: 11px !important;
+    padding: 0 6px !important;
+    height: 20px !important;
+    line-height: 18px !important;
+  }
+
+  /* 详情按钮 */
+  .task-logs-container .el-button--link {
+    padding: 0 !important;
+    font-size: 12px !important;
+  }
+
+  /* 分页 */
+  .task-logs-container .el-pagination {
+    margin-top: 12px !important;
+  }
+
+  /* 详情对话框 */
+  .task-logs-container .el-dialog {
+    width: 95% !important;
+    max-width: 380px;
+    margin: 10px auto !important;
+  }
+
+  .task-logs-container .el-dialog__body {
+    padding: 16px !important;
+  }
+
+  .task-logs-container .el-descriptions {
+    font-size: 13px !important;
+  }
+
+  .task-logs-container .el-descriptions__label {
+    width: 80px !important;
+    font-size: 12px !important;
+  }
+
+  .task-logs-container .el-descriptions__content {
+    font-size: 12px !important;
+  }
+
+  .task-logs-container pre {
+    font-size: 11px !important;
+    line-height: 1.4 !important;
+  }
+}
+
+/* ==================== 登录/注册页面适配 ==================== */
+@media screen and (max-width: 768px) {
+  .login-container,
+  .register-container {
+    padding: 16px !important;
+    min-height: 100vh !important;
+  }
+
+  .login-card,
+  .register-card {
+    width: 100% !important;
+    max-width: 100%;
+    padding: 24px 20px !important;
+    border-radius: 16px !important;
+  }
+
+  .login-card .logo,
+  .register-card .logo {
+    width: 60px !important;
+    height: 60px !important;
+  }
+
+  .login-card .logo .el-icon,
+  .register-card .logo .el-icon {
+    font-size: 32px !important;
+  }
+
+  .card-header h2 {
+    font-size: 22px !important;
+    margin: 12px 0 4px !important;
+  }
+
+  .subtitle {
+    font-size: 13px !important;
+  }
+
+  .login-form,
+  .register-form {
+    margin-top: 20px !important;
+  }
+
+  .login-form .el-form-item,
+  .register-form .el-form-item {
+    margin-bottom: 16px !important;
+  }
+
+  .login-form .el-input__inner,
+  .register-form .el-input__inner {
+    height: 44px !important;
+  }
+
+  .submit-btn {
+    height: 44px !important;
+    font-size: 15px !important;
+  }
+
+  .register-link,
+  .login-link {
+    font-size: 13px !important;
+    margin-top: 16px !important;
+  }
+
+  /* 背景装饰 */
+  .circle-1 {
+    width: 150px !important;
+    height: 150px !important;
+    top: -50px !important;
+    right: -50px !important;
+  }
+
+  .circle-2 {
+    width: 100px !important;
+    height: 100px !important;
+    bottom: -30px !important;
+    left: -30px !important;
+  }
+
+  .circle-3 {
+    width: 80px !important;
+    height: 80px !important;
+    top: 50% !important;
+    right: 10% !important;
+  }
+}
+
+/* ==================== 管理员面板适配 ==================== */
+@media screen and (max-width: 768px) {
+  .admin-panel-container {
+    padding: 0 !important;
+  }
+
+  .admin-panel-container .el-card {
+    margin-bottom: 8px !important;
+  }
+
+  .admin-panel-container .el-card__body {
+    padding: 12px !important;
+  }
+
+  /* 标签页 */
+  .admin-panel-container .el-tabs__header {
+    margin-bottom: 12px !important;
+  }
+
+  .admin-panel-container .el-tabs__item {
+    font-size: 13px !important;
+    padding: 0 12px !important;
+    height: 36px !important;
+    line-height: 36px !important;
+  }
+
+  /* 表格 */
+  .admin-panel-container .el-table {
+    font-size: 12px !important;
+  }
+
+  .admin-panel-container .el-table__header-wrapper {
+    font-size: 11px !important;
+  }
+
+  .admin-panel-container .el-table .cell {
+    line-height: 1.3 !important;
+    padding: 4px !important;
+  }
+
+  /* 统计卡片 */
+  .admin-panel-container .el-col {
+    width: 50% !important;
+    max-width: 50% !important;
+    flex: 0 0 50% !important;
+    padding: 0 4px !important;
+    margin-bottom: 8px !important;
+  }
+
+  .admin-panel-container .stat-card .el-card__body {
+    padding: 12px 8px !important;
+  }
+
+  /* 分页 */
+  .admin-panel-container .el-pagination {
+    margin-top: 12px !important;
+  }
+}
+
+/* ==================== 任务状态监控适配 ==================== */
+@media screen and (max-width: 768px) {
+  .task-monitor .el-col {
+    width: 100% !important;
+    max-width: 100% !important;
+    flex: 0 0 100% !important;
+  }
+
+  .task-status-list {
+    max-height: 250px;
+    overflow-y: auto;
+  }
+
+  .task-item {
+    padding: 8px !important;
+  }
+}
+
+/* ==================== 通用工具类 ==================== */
+@media screen and (max-width: 768px) {
+  /* 文字截断 */
+  .text-truncate {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* 全宽按钮 */
+  .btn-full-width {
+    width: 100% !important;
+  }
+
+  /* 减小间距 */
+  .mb-0-mobile {
+    margin-bottom: 0 !important;
+  }
+
+  .p-0-mobile {
+    padding: 0 !important;
+  }
+
+  /* 横向滚动容器 */
+  .scroll-x {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+
+  .scroll-x::-webkit-scrollbar {
+    display: none;
+  }
+
+  /* 弹性布局工具 */
+  .flex-column-mobile {
+    flex-direction: column !important;
+  }
+
+  .flex-wrap-mobile {
+    flex-wrap: wrap !important;
+  }
+
+  .gap-8-mobile {
+    gap: 8px !important;
+  }
+
+  /* 字体大小 */
+  .text-xs-mobile {
+    font-size: 11px !important;
+  }
+
+  .text-sm-mobile {
+    font-size: 12px !important;
+  }
+
+  .text-base-mobile {
+    font-size: 13px !important;
+  }
+}
+
+/* ==================== 平板适配 (768px - 992px) ==================== */
+@media screen and (min-width: 769px) and (max-width: 992px) {
+  .sidebar {
+    width: 180px !important;
+  }
+
+  .main-content {
+    padding: 16px !important;
+  }
+
+  /* 统计卡片 - 2列布局 */
+  .dashboard-container .el-col {
+    width: 50% !important;
+    max-width: 50% !important;
+    flex: 0 0 50% !important;
+  }
+}
+
+/* ==================== 安全区域适配 (iPhone X+) ==================== */
+@supports (padding-bottom: env(safe-area-inset-bottom)) {
+  @media screen and (max-width: 768px) {
+    .sidebar {
+      padding-bottom: env(safe-area-inset-bottom) !important;
+      height: calc(60px + env(safe-area-inset-bottom)) !important;
+    }
+
+    .main-container {
+      padding-bottom: calc(60px + env(safe-area-inset-bottom)) !important;
+    }
+  }
+}

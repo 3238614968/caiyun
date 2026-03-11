@@ -1,0 +1,188 @@
+package services
+
+import (
+	"caiyun/internal/core/api"
+	"caiyun/internal/core/auth"
+	corehttp "caiyun/internal/core/http"
+	"caiyun/internal/models"
+	"caiyun/internal/repository"
+	"encoding/json"
+	"fmt"
+	"time"
+)
+
+// ProductService 商品管理服务。
+type ProductService struct {
+	productRepo *repository.ProductRepository
+	accountRepo *repository.AccountRepository
+}
+
+// NewProductService 创建商品管理服务。
+func NewProductService(productRepo *repository.ProductRepository, accountRepo *repository.AccountRepository) *ProductService {
+	return &ProductService{
+		productRepo: productRepo,
+		accountRepo: accountRepo,
+	}
+}
+
+// GetProducts 获取商品列表。
+func (s *ProductService) GetProducts(keyword string, category string, limit int) ([]*models.Product, error) {
+	if keyword != "" {
+		return s.productRepo.Search(keyword, limit)
+	}
+
+	if category != "" {
+		return s.productRepo.FindByCategory(category)
+	}
+
+	return s.productRepo.FindActive()
+}
+
+// GetCategories 获取商品分类。
+func (s *ProductService) GetCategories() ([]string, error) {
+	return s.productRepo.GetCategories()
+}
+
+// UpdateProducts 从云盘接口拉取商品并写入本地。
+func (s *ProductService) UpdateProducts(accountID uint) (int64, error) {
+	return syncProductsFromCloud(s.productRepo, s.accountRepo, accountID)
+}
+
+func syncProductsFromCloud(productRepo *repository.ProductRepository, accountRepo *repository.AccountRepository, accountID uint) (int64, error) {
+	if productRepo == nil || accountRepo == nil {
+		return 0, fmt.Errorf("商品或账号仓储未初始化")
+	}
+
+	account, err := accountRepo.GetByID(accountID)
+	if err != nil {
+		return 0, fmt.Errorf("获取账号失败: %w", err)
+	}
+
+	authStr := sanitizeAuthValue(account.Auth)
+	if authStr == "" {
+		return 0, fmt.Errorf("账号 Auth 为空")
+	}
+
+	authClient := corehttp.NewClient()
+	authClient.SetAuth(authStr)
+	jwtToken, err := auth.NewAuth(authClient).GetJWTToken(account.Phone)
+	if err != nil {
+		return 0, fmt.Errorf("获取账号 JWT 失败: %w", err)
+	}
+	if jwtToken == "" {
+		return 0, fmt.Errorf("账号 JWT 为空")
+	}
+
+	client := corehttp.NewClient()
+	client.SetAuth(authStr)
+	client.SetJWTToken(jwtToken)
+
+	resp, err := api.NewCaiyunAPI(client).GetProductList()
+	if err != nil {
+		return 0, fmt.Errorf("获取商品列表失败: %w", err)
+	}
+
+	code := 0
+	switch v := resp.Code.(type) {
+	case int:
+		code = v
+	case float64:
+		code = int(v)
+	case string:
+		if v != "0" {
+			code = 1
+		}
+	default:
+		code = 1
+	}
+	if code != 0 {
+		msg := resp.Message
+		if msg == "" {
+			msg = resp.Msg
+		}
+		return 0, fmt.Errorf("商品列表返回失败: %s", msg)
+	}
+
+	type prizeInfo struct {
+		PrizeName           string `json:"prizeName"`
+		POrder              int    `json:"pOrder"`
+		DailyRemainderCount int    `json:"dailyRemainderCount"`
+		DailyLimitCount     int    `json:"dailyLimitCount"`
+		Memo                string `json:"memo"`
+		PrizeID             int    `json:"prizeId"`
+	}
+
+	resultBytes, err := json.Marshal(resp.Result)
+	if err != nil {
+		return 0, fmt.Errorf("序列化商品数据失败: %w", err)
+	}
+
+	var grouped map[string][]prizeInfo
+	if err := json.Unmarshal(resultBytes, &grouped); err != nil {
+		return 0, fmt.Errorf("解析商品数据失败: %w", err)
+	}
+
+	categoryMap := map[string]string{
+		"0":  "其他权益奖品",
+		"1":  "视频类会员",
+		"2":  "音乐类会员",
+		"5":  "外卖美食权益",
+		"7":  "快递寄件券",
+		"8":  "云盘转存券",
+		"9":  "实用工具类",
+		"10": "奶茶饮品权益",
+		"11": "奶茶饮品权益",
+		"13": "咖啡饮品权益",
+		"14": "游戏礼包权益",
+		"15": "全国通用流量权益",
+	}
+
+	now := time.Now()
+	products := make([]*models.Product, 0, 128)
+	for categoryID, prizes := range grouped {
+		category := categoryMap[categoryID]
+		if category == "" {
+			category = "未知分类" + categoryID
+		}
+
+		for _, item := range prizes {
+			prizeID := item.Memo
+			if prizeID == "" && item.PrizeID > 0 {
+				prizeID = fmt.Sprintf("%d", item.PrizeID)
+			}
+			if prizeID == "" {
+				continue
+			}
+
+			stockStatus := "sold_out"
+			if item.DailyRemainderCount > 0 {
+				stockStatus = "available"
+			}
+
+			products = append(products, &models.Product{
+				PrizeID:             prizeID,
+				PrizedName:          item.PrizeName,
+				POrder:              item.POrder,
+				Category:            category,
+				DailyRemainderCount: item.DailyRemainderCount,
+				DailyLimitCount:     item.DailyLimitCount,
+				StockStatus:         stockStatus,
+				LastStockCheck:      &now,
+				Memo:                item.Memo,
+				IsActive:            true,
+				IsDeleted:           false,
+			})
+		}
+	}
+
+	if len(products) == 0 {
+		return 0, fmt.Errorf("未获取到任何商品数据")
+	}
+
+	updated, inserted, _, err := productRepo.UpsertProducts(products)
+	if err != nil {
+		return 0, fmt.Errorf("保存商品失败: %w", err)
+	}
+
+	return int64(updated + inserted), nil
+}

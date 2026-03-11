@@ -1,0 +1,94 @@
+version: '3.8'
+
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: caiyun-mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: root123
+      MYSQL_DATABASE: caiyun
+      TZ: Asia/Shanghai
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql-data:/var/lib/mysql
+      - ./backend/scripts/init_caiyun_database.sql:/docker-entrypoint-initdb.d/001_init_caiyun_database.sql:ro
+    networks:
+      - caiyun-network
+
+  redis:
+    image: redis:7.0
+    container_name: caiyun-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    networks:
+      - caiyun-network
+
+  backend-api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.api
+    container_name: caiyun-api
+    ports:
+      - "8080:8080"
+    depends_on:
+      - mysql
+      - redis
+    environment:
+      DB_HOST: mysql
+      DB_PORT: 3306
+      DB_USER: root
+      DB_PASSWORD: root123
+      DB_NAME: caiyun
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      JWT_SECRET: your-secret-key-change-in-production
+      TASK_CONCURRENCY: 10
+    networks:
+      - caiyun-network
+
+  backend-worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.worker
+    container_name: caiyun-worker
+    ports:
+      - "8081:8081"
+    depends_on:
+      - mysql
+      - redis
+    environment:
+      DB_HOST: mysql
+      DB_PORT: 3306
+      DB_USER: root
+      DB_PASSWORD: root123
+      DB_NAME: caiyun
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      TASK_CONCURRENCY: 10
+      TASK_SCHEDULE: "0 8 * * *"
+      WORKER_MONITOR_PORT: 8081
+    networks:
+      - caiyun-network
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: caiyun-frontend
+    ports:
+      - "80:80"
+    depends_on:
+      - backend-api
+    networks:
+      - caiyun-network
+
+volumes:
+  mysql-data:
+  redis-data:
+
+networks:
+  caiyun-network:
+    driver: bridge

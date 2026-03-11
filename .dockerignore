@@ -1,0 +1,51 @@
+# Binaries
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+caiyun-api
+caiyun-worker
+caiyun-api-linux
+caiyun-worker-linux
+
+# Test files
+*_test.go
+
+# Dependency directories
+vendor/
+gopath/pkg/mod/
+
+# Build output
+dist/
+build/
+
+# Environment files
+backend/configs/.env
+.env.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# Node modules (frontend)
+node_modules/
+
+# Go workspace
+go.work

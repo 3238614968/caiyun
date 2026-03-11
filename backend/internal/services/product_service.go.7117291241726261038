@@ -1,0 +1,134 @@
+﻿package services
+
+import (
+	"caiyun/internal/core/api"
+	corehttp "caiyun/internal/core/http"
+	"caiyun/internal/models"
+	"caiyun/internal/repository"
+	"encoding/json"
+	"fmt"
+)
+
+// ProductService 商品管理服务。
+type ProductService struct {
+	productRepo *repository.ProductRepository
+	accountRepo *repository.AccountRepository
+}
+
+// NewProductService 创建商品管理服务。
+func NewProductService(productRepo *repository.ProductRepository, accountRepo *repository.AccountRepository) *ProductService {
+	return &ProductService{
+		productRepo: productRepo,
+		accountRepo: accountRepo,
+	}
+}
+
+// GetProducts 获取商品列表。
+func (s *ProductService) GetProducts(keyword string, category string, limit int) ([]*models.Product, error) {
+	if keyword != "" {
+		return s.productRepo.Search(keyword, limit)
+	}
+
+	if category != "" {
+		return s.productRepo.FindByCategory(category)
+	}
+
+	return s.productRepo.FindActive()
+}
+
+// GetCategories 获取商品分类。
+func (s *ProductService) GetCategories() ([]string, error) {
+	return s.productRepo.GetCategories()
+}
+
+// UpdateProducts 从云盘接口拉取商品并写入本地。
+func (s *ProductService) UpdateProducts(accountID uint) (int64, error) {
+	if s.accountRepo == nil {
+		return 0, fmt.Errorf("账号仓储未初始化")
+	}
+
+	// 1. 获取账号认证信息。
+	account, err := s.accountRepo.GetByID(accountID)
+	if err != nil {
+		return 0, fmt.Errorf("获取账号失败: %w", err)
+	}
+	if account.Auth == "" {
+		return 0, fmt.Errorf("账号 Auth 为空")
+	}
+
+	// 2. 创建 HTTP 客户端并设置鉴权头。
+	client := corehttp.NewClient()
+	authStr := account.Auth
+	if len(authStr) > 6 && authStr[:6] != "Basic " {
+		authStr = "Basic " + authStr
+	}
+	client.SetAuth(authStr)
+
+	// 3. 调用云盘接口获取商品列表。
+	caiyunAPI := api.NewCaiyunAPI(client)
+	resp, err := caiyunAPI.GetProductList()
+	if err != nil {
+		return 0, fmt.Errorf("获取商品列表失败: %w", err)
+	}
+
+	// 4. 解析返回结构中的商品列表。
+	var productData struct {
+		PrizeList []struct {
+			ID                  int    `json:"id"`
+			Name                string `json:"name"`
+			POrder              int    `json:"p_order"`
+			Type                string `json:"type"`
+			DailyRemainderCount int    `json:"daily_remainder_count"`
+			Memo                string `json:"memo"`
+		} `json:"prize_list"`
+	}
+
+	resultBytes, err := json.Marshal(resp.Result)
+	if err != nil {
+		return 0, fmt.Errorf("序列化商品数据失败: %w", err)
+	}
+	if err := json.Unmarshal(resultBytes, &productData); err != nil {
+		return 0, fmt.Errorf("解析商品数据失败: %w", err)
+	}
+
+	categoryMap := map[string]string{
+		"0":  "其他权益奖品",
+		"1":  "视频类会员",
+		"2":  "音乐类会员",
+		"3":  "外卖美食权益",
+		"4":  "快递寄件券",
+		"5":  "云盘转存券",
+		"6":  "实用工具类",
+		"7":  "奶茶饮品权益",
+		"8":  "咖啡饮品权益",
+		"9":  "游戏礼包权益",
+		"10": "全国通用流量",
+	}
+
+	// 5. Upsert 写入本地商品表。
+	var count int64
+	for _, item := range productData.PrizeList {
+		prizeID := fmt.Sprintf("%d", item.ID)
+		category := categoryMap[item.Type]
+		if category == "" {
+			category = "其他权益奖品"
+		}
+
+		product := &models.Product{
+			PrizeID:             prizeID,
+			PrizedName:          item.Name,
+			POrder:              item.POrder,
+			Category:            category,
+			DailyRemainderCount: item.DailyRemainderCount,
+			Memo:                item.Memo,
+			IsActive:            true,
+		}
+
+		if err := s.productRepo.Upsert(product); err != nil {
+			continue
+		}
+		count++
+	}
+
+	return count, nil
+}

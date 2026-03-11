@@ -1,0 +1,251 @@
+﻿package handlers
+
+import (
+	"caiyun/internal/services"
+	"net/http"
+	"strconv"
+
+	"github.com/gin-gonic/gin"
+)
+
+// AdminHandler 管理员处理器
+type AdminHandler struct {
+	adminService *services.AdminService
+}
+
+// NewAdminHandler 创建管理员处理器
+func NewAdminHandler(adminService *services.AdminService) *AdminHandler {
+	return &AdminHandler{
+		adminService: adminService,
+	}
+}
+
+// GetAllUsers 获取所有用户
+func (h *AdminHandler) GetAllUsers(c *gin.Context) {
+	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	size, _ := strconv.Atoi(c.DefaultQuery("size", "10"))
+	if page < 1 {
+		page = 1
+	}
+	if size < 1 || size > 100 {
+		size = 10
+	}
+
+	users, total, err := h.adminService.GetAllUsers(page, size)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, ErrorResponse{Message: err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"users": users,
+		"total": total,
+		"page":  page,
+		"size":  size,
+	})
+}
+
+// GetAllAccounts 获取所有账号
+func (h *AdminHandler) GetAllAccounts(c *gin.Context) {
+	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "10"))
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 || pageSize > 100 {
+		pageSize = 10
+	}
+
+	accounts, total, err := h.adminService.GetAllAccounts(page, pageSize)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, ErrorResponse{Message: err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"accounts":  accounts,
+		"total":     total,
+		"page":      page,
+		"page_size": pageSize,
+	})
+}
+
+// GetAccountSummaries 获取所有账号概况
+func (h *AdminHandler) GetAccountSummaries(c *gin.Context) {
+	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "20"))
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 || pageSize > 100 {
+		pageSize = 20
+	}
+
+	summaries, total, err := h.adminService.GetAccountSummaries(page, pageSize)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, ErrorResponse{Message: err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"summaries": summaries,
+		"total":     total,
+		"page":      page,
+		"page_size": pageSize,
+	})
+}
+
+// GetAdminDashboard 获取管理员仪表盘数据
+func (h *AdminHandler) GetAdminDashboard(c *gin.Context) {
+	data, err := h.adminService.GetAdminDashboard()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, ErrorResponse{Message: err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"data": data})
+}
+
+// UpdateUserRole 更新用户角色
+func (h *AdminHandler) UpdateUserRole(c *gin.Context) {
+	userID, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, ErrorResponse{Message: "无效的用户ID"})
+		return
+	}
+
+	var req services.UpdateUserRoleRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, ErrorResponse{Message: err.Error()})
+		return
+	}
+
+	if err := h.adminService.UpdateUserRole(uint(userID), &req); err != nil {
+		if err == services.ErrUserNotFound {
+			c.JSON(http.StatusNotFound, ErrorResponse{Message: "用户不存在"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, ErrorResponse{Message: err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, SuccessResponse{Message: "角色更新成功"})
+}
+
+// UpdateAccountStatusRequest 更新账号状态请求
+type UpdateAccountStatusRequest = services.UpdateAccountStatusRequest
+
+// UpdateAccountStatus 更新账号状态
+func (h *AdminHandler) UpdateAccountStatus(c *gin.Context) {
+	accountID, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, ErrorResponse{Message: "无效的账号ID"})
+		return
+	}
+
+	var req services.UpdateAccountStatusRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, ErrorResponse{Message: err.Error()})
+		return
+	}
+
+	if err := h.adminService.UpdateAccountStatus(uint(accountID), &req); err != nil {
+		c.JSON(http.StatusInternalServerError, ErrorResponse{Message: err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, SuccessResponse{Message: "账号状态更新成功"})
+}
+
+// DeleteUser 删除用户
+func (h *AdminHandler) DeleteUser(c *gin.Context) {
+	userID, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, ErrorResponse{Message: "无效的用户ID"})
+		return
+	}
+
+	currentUserID, exists := c.Get("user_id")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, ErrorResponse{Message: "未授权"})
+		return
+	}
+
+	if err := h.adminService.DeleteUser(uint(userID), currentUserID.(uint)); err != nil {
+		if err == services.ErrCannotDeleteSelf {
+			c.JSON(http.StatusBadRequest, ErrorResponse{Message: "不能删除自己"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, ErrorResponse{Message: err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, SuccessResponse{Message: "用户删除成功"})
+}
+
+// DeleteAccount 删除账号
+func (h *AdminHandler) DeleteAccount(c *gin.Context) {
+	accountID, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, ErrorResponse{Message: "无效的账号ID"})
+		return
+	}
+
+	if err := h.adminService.DeleteAccount(uint(accountID)); err != nil {
+		c.JSON(http.StatusInternalServerError, ErrorResponse{Message: err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, SuccessResponse{Message: "账号删除成功"})
+}
+
+// GetStatsOverview 获取统计概览
+func (h *AdminHandler) GetStatsOverview(c *gin.Context) {
+	stats, err := h.adminService.GetStatsOverview()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, ErrorResponse{Message: err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"user_count":    stats.UserCount,
+		"account_count": stats.AccountCount,
+		"total_cloud":   stats.TotalCloud,
+		"active_tasks":  stats.ActiveTasks,
+	})
+}
+
+// GetTaskConfigs 获取任务配置列表
+func (h *AdminHandler) GetTaskConfigs(c *gin.Context) {
+	configs, err := h.adminService.GetTaskConfigs()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, ErrorResponse{Message: err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"configs": configs})
+}
+
+// UpdateTaskConfig 更新任务配置（上架/下架）
+func (h *AdminHandler) UpdateTaskConfig(c *gin.Context) {
+	taskType := c.Param("task_type")
+	if taskType == "" {
+		c.JSON(http.StatusBadRequest, ErrorResponse{Message: "缺少任务类型"})
+		return
+	}
+
+	var req services.UpdateTaskConfigRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, ErrorResponse{Message: err.Error()})
+		return
+	}
+
+	if err := h.adminService.UpdateTaskConfig(taskType, &req); err != nil {
+		c.JSON(http.StatusInternalServerError, ErrorResponse{Message: err.Error()})
+		return
+	}
+
+	action := "上架"
+	if !req.IsEnabled {
+		action = "下架"
+	}
+	c.JSON(http.StatusOK, SuccessResponse{Message: "任务已" + action})
+}
