@@ -1,4 +1,4 @@
-﻿import axios, { type AxiosInstance, type AxiosRequestConfig, type AxiosResponse } from 'axios'
+import axios, { type AxiosInstance, type AxiosRequestConfig, type AxiosResponse } from 'axios'
 import { ElMessage } from 'element-plus'
 import { useAuthStore } from '@/store/auth'
 
@@ -75,4 +75,18 @@ service.interceptors.response.use(
 // 封装请求方法
 export default function request<T = any>(config: AxiosRequestConfig): Promise<T> {
   return service.request(config) as Promise<T>
+}
+
+// 导出 axios 实例的方法
+export const http = {
+  get: <T = any>(url: string, config?: AxiosRequestConfig): Promise<T> =>
+    service.get(url, config) as Promise<T>,
+  post: <T = any>(url: string, data?: any, config?: AxiosRequestConfig): Promise<T> =>
+    service.post(url, data, config) as Promise<T>,
+  put: <T = any>(url: string, data?: any, config?: AxiosRequestConfig): Promise<T> =>
+    service.put(url, data, config) as Promise<T>,
+  delete: <T = any>(url: string, config?: AxiosRequestConfig): Promise<T> =>
+    service.delete(url, config) as Promise<T>,
+  patch: <T = any>(url: string, data?: any, config?: AxiosRequestConfig): Promise<T> =>
+    service.patch(url, data, config) as Promise<T>,
 }

@@ -1,4 +1,4 @@
-﻿package handlers
+package handlers
 
 import (
 	"caiyun/internal/services"
@@ -23,12 +23,15 @@ func NewAdminHandler(adminService *services.AdminService) *AdminHandler {
 // GetAllUsers 获取所有用户
 func (h *AdminHandler) GetAllUsers(c *gin.Context) {
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
-	size, _ := strconv.Atoi(c.DefaultQuery("size", "10"))
+	size, _ := strconv.Atoi(c.DefaultQuery("size", "20"))
 	if page < 1 {
 		page = 1
 	}
-	if size < 1 || size > 100 {
-		size = 10
+	// 小于1时默认20，超过100时展示前20
+	if size < 1 {
+		size = 20
+	} else if size > 100 {
+		size = 20
 	}
 
 	users, total, err := h.adminService.GetAllUsers(page, size)
@@ -52,8 +55,11 @@ func (h *AdminHandler) GetAllAccounts(c *gin.Context) {
 	if page < 1 {
 		page = 1
 	}
-	if pageSize < 1 || pageSize > 100 {
+	// 小于1时默认10，超过100时展示前20
+	if pageSize < 1 {
 		pageSize = 10
+	} else if pageSize > 100 {
+		pageSize = 20
 	}
 
 	accounts, total, err := h.adminService.GetAllAccounts(page, pageSize)
@@ -70,6 +76,31 @@ func (h *AdminHandler) GetAllAccounts(c *gin.Context) {
 	})
 }
 
+// SearchAllAccounts 搜索所有账号（管理员用）
+func (h *AdminHandler) SearchAllAccounts(c *gin.Context) {
+	keyword := c.Query("keyword")
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "20"))
+	// 小于1时默认20，超过100时展示前20
+	if limit < 1 {
+		limit = 20
+	} else if limit > 100 {
+		limit = 20
+	}
+
+	req := &services.SearchAllAccountsRequest{
+		Keyword: keyword,
+		Limit:   limit,
+	}
+
+	resp, err := h.adminService.SearchAllAccounts(req)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, ErrorResponse{Message: err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, resp)
+}
+
 // GetAccountSummaries 获取所有账号概况
 func (h *AdminHandler) GetAccountSummaries(c *gin.Context) {
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
@@ -77,7 +108,10 @@ func (h *AdminHandler) GetAccountSummaries(c *gin.Context) {
 	if page < 1 {
 		page = 1
 	}
-	if pageSize < 1 || pageSize > 100 {
+	// 小于1时默认20，超过100时展示前20
+	if pageSize < 1 {
+		pageSize = 20
+	} else if pageSize > 100 {
 		pageSize = 20
 	}
 

@@ -1,4 +1,4 @@
-﻿package repository
+package repository
 
 import (
 	"caiyun/internal/models"
@@ -49,6 +49,17 @@ func (r *ExchangeTaskRepository) GetByID(id uint) (*models.ExchangeTask, error) 
 func (r *ExchangeTaskRepository) GetByUserID(userID uint) ([]*models.ExchangeTask, error) {
 	var tasks []*models.ExchangeTask
 	err := r.db.Where("user_id = ?", userID).
+		Preload("ExchangeAccount").
+		Preload("Product").
+		Order("status ASC, created_at DESC").
+		Find(&tasks).Error
+	return tasks, err
+}
+
+// GetAll 获取所有抢兑任务（管理员用）
+func (r *ExchangeTaskRepository) GetAll() ([]*models.ExchangeTask, error) {
+	var tasks []*models.ExchangeTask
+	err := r.db.
 		Preload("ExchangeAccount").
 		Preload("Product").
 		Order("status ASC, created_at DESC").
@@ -228,11 +239,12 @@ func (r *ExchangeTaskRepository) GetTasksByTime(hour, minute int) ([]*models.Exc
 	// 1. 状态为待执行或运行中
 	// 2. 关联的兑换账号在指定时间有抢兑任务
 	// 3. 账号处于启用状态
+	// 4. 任务未删除
 	err := r.db.Joins("JOIN exchange_accounts ON exchange_accounts.id = exchange_tasks.exchange_account_id").
 		Where("exchange_tasks.status IN ?", []string{string(models.ExchangeTaskPending), string(models.ExchangeTaskRunning)}).
 		Where("(exchange_accounts.exchange_time_1 = ? OR exchange_accounts.exchange_time_2 = ?)", timeStr, timeStr).
 		Where("exchange_accounts.is_active = ?", true).
-		Where("exchange_tasks.is_active = ?", true).
+		Where("exchange_tasks.deleted_at IS NULL").
 		Preload("ExchangeAccount").
 		Preload("Product").
 		Find(&tasks).Error

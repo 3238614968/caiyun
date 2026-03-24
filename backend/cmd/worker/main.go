@@ -330,8 +330,9 @@ func main() {
 
 	// 初始化TaskConfig仓库并同步注册表定义
 	taskConfigRepo := repository.NewTaskConfigRepository(db)
-	if err := taskConfigRepo.AutoMigrate(); err != nil {
-		log.Fatalf("任务配置表迁移失败: %v", err)
+	schemaRepo := repository.NewSchemaRepository(db)
+	if err := schemaRepo.ValidateCriticalSchema(); err != nil {
+		log.Fatalf("数据库结构校验失败: %v", err)
 	}
 	if err := taskConfigRepo.SyncDefinitions(services.DefaultTaskConfigs()); err != nil {
 		log.Fatalf("任务配置同步失败: %v", err)
@@ -381,12 +382,12 @@ func main() {
 	// 初始化兑换中心 Service
 	exchangeService := services.NewExchangeService(
 		productRepo, exchangeAccountRepo, exchangeTaskRepo,
-		accountRepo, configRepo, exchangeRecordRepo, authMgr, tokenManager,
+		accountRepo, configRepo, exchangeRecordRepo, taskLogRepo, authMgr, tokenManager,
 	)
 
 	// 初始化抢兑调度器（用于定时抢兑任务）
 	exchangeScheduler := services.NewExchangeScheduler(
-		exchangeTaskRepo, exchangeAccountRepo, exchangeRecordRepo, tokenManager,
+		exchangeTaskRepo, exchangeAccountRepo, exchangeRecordRepo, configRepo, taskLogRepo, tokenManager,
 	)
 
 	// 启动抢兑调度器

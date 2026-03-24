@@ -1,4 +1,4 @@
-﻿package services
+package services
 
 import (
 	"caiyun/internal/models"
@@ -79,6 +79,63 @@ func (s *AdminService) GetAllUsers(page, size int) ([]*UserListItem, int64, erro
 func (s *AdminService) GetAllAccounts(page, pageSize int) ([]*models.Account, int64, error) {
 	offset := (page - 1) * pageSize
 	return s.accountRepo.List(offset, pageSize)
+}
+
+// SearchAllAccountsRequest 搜索所有账号请求
+type SearchAllAccountsRequest struct {
+	Keyword string `json:"keyword" form:"keyword"`
+	Limit   int    `json:"limit" form:"limit"`
+}
+
+// SearchAllAccountsResponse 搜索所有账号响应
+type SearchAllAccountsResponse struct {
+	Accounts []*AccountSearchItem `json:"accounts"`
+}
+
+// AccountSearchItem 账号搜索项
+type AccountSearchItem struct {
+	ID       uint   `json:"id"`
+	Phone    string `json:"phone"`
+	Remark   string `json:"remark"`
+	UserID   uint   `json:"user_id"`
+	Username string `json:"username"`
+	IsActive bool   `json:"is_active"`
+}
+
+// SearchAllAccounts 搜索所有账号（管理员用）
+func (s *AdminService) SearchAllAccounts(req *SearchAllAccountsRequest) (*SearchAllAccountsResponse, error) {
+	limit := req.Limit
+	if limit <= 0 || limit > 100 {
+		limit = 20
+	}
+
+	accounts, err := s.accountRepo.SearchAll(req.Keyword, limit)
+	if err != nil {
+		return nil, err
+	}
+
+	result := make([]*AccountSearchItem, 0, len(accounts))
+	for _, acc := range accounts {
+		// 获取用户信息
+		user, err := s.userRepo.FindByID(acc.UserID)
+		username := ""
+		if err == nil && user != nil {
+			username = user.Username
+		}
+
+		result = append(result, &AccountSearchItem{
+			ID:       acc.ID,
+			Phone:    acc.Phone,
+			Remark:   acc.Remark,
+			UserID:   acc.UserID,
+			Username: username,
+			IsActive: acc.IsActive,
+		})
+	}
+
+	return &SearchAllAccountsResponse{
+		Accounts: result,
+	}, nil
 }
 
 // UpdateUserRoleRequest 更新用户角色请求

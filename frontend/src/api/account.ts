@@ -1,4 +1,4 @@
-﻿import request from './axios'
+import request from './axios'
 
 // 账号接口
 export interface Account {
@@ -191,6 +191,28 @@ export function getAllAccounts(page: number = 1, pageSize: number = 10): Promise
     url: '/api/admin/accounts',
     method: 'get',
     params: { page, page_size: pageSize }
+  })
+}
+
+// 搜索所有账号（管理员）
+export interface AccountSearchItem {
+  id: number
+  phone: string
+  remark: string
+  user_id: number
+  username: string
+  is_active: boolean
+}
+
+export interface SearchAllAccountsResponse {
+  accounts: AccountSearchItem[]
+}
+
+export function searchAllAccounts(keyword: string, limit: number = 20): Promise<SearchAllAccountsResponse> {
+  return request({
+    url: '/api/admin/accounts/search',
+    method: 'get',
+    params: { keyword, limit }
   })
 }
 

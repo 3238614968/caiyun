@@ -15,6 +15,8 @@ type Product struct {
 	Category            string         `gorm:"size:100;default:'未知分类'" json:"category"`               // 商品分类
 	DailyRemainderCount int            `gorm:"default:0" json:"daily_remainder_count"`                // 每日剩余数量
 	DailyLimitCount     int            `gorm:"default:0" json:"daily_limit_count"`                    // 每日限购数量
+	DailyCount          int            `gorm:"default:0" json:"daily_count"`                          // 每日发放上限
+	ImageURL            string         `gorm:"column:image_url;size:500;default:''" json:"image_url"` // 商品图片URL
 	StockStatus         string         `gorm:"size:20;default:'unknown'" json:"stock_status"`         // 库存状态
 	LastStockCheck      *time.Time     `json:"last_stock_check,omitempty"`                            // 最后库存检查时间
 	Memo                string         `gorm:"type:text" json:"memo"`                                 // 商品备注信息
@@ -35,8 +37,8 @@ type ExchangeAccount struct {
 	Token          string         `gorm:"type:text" json:"token"`                              // Token
 	JWTToken       string         `gorm:"type:text" column:"jwt_token" json:"jwt_token"`       // JWT Token
 	Remark         string         `gorm:"size:200" json:"remark"`                              // 备注
-	ExchangeTime1  string         `gorm:"type:time;default:'10:00:00'" json:"exchange_time_1"` // 第一次抢兑时间
-	ExchangeTime2  string         `gorm:"type:time;default:'16:00:00'" json:"exchange_time_2"` // 第二次抢兑时间
+	ExchangeTime1  string         `gorm:"column:exchange_time_1;type:time;default:'10:00:00'" json:"exchange_time_1"` // 第一次抢兑时间
+	ExchangeTime2  string         `gorm:"column:exchange_time_2;type:time;default:'16:00:00'" json:"exchange_time_2"` // 第二次抢兑时间
 	IsActive       bool           `gorm:"default:true" json:"is_active"`                       // 是否启用
 	LastExchangeAt *time.Time     `json:"last_exchange_at,omitempty"`                          // 最后抢兑时间
 	UpdatedAt      time.Time      `json:"updated_at"`

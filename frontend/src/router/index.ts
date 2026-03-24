@@ -1,4 +1,4 @@
-﻿import { createRouter, createWebHistory } from 'vue-router'
+import { createRouter, createWebHistory } from 'vue-router'
 import { useAuthStore } from '@/store/auth'
 
 const router = createRouter({
@@ -27,31 +27,31 @@ const router = createRouter({
           path: 'dashboard',
           name: 'Dashboard',
           component: () => import('@/views/Dashboard.vue'),
-          meta: { title: '仪表盘' }
+          meta: { title: '首页' }
         },
         {
           path: 'accounts',
           name: 'Accounts',
           component: () => import('@/views/AccountManage.vue'),
-          meta: { title: '账号管理' }
+          meta: { title: '账号' }
         },
         {
           path: 'logs',
           name: 'Logs',
           component: () => import('@/views/TaskLogs.vue'),
-          meta: { title: '运行日志' }
+          meta: { title: '日志' }
         },
         {
           path: 'admin',
           name: 'Admin',
           component: () => import('@/views/AdminPanel.vue'),
-          meta: { title: '管理员面板', requiresAdmin: true }
+          meta: { title: '管理', requiresAdmin: true }
         },
         {
           path: 'exchange',
           name: 'Exchange',
           component: () => import('@/views/ExchangeCenter.vue'),
-          meta: { title: '兑换中心' }
+          meta: { title: '兑换' }
         },
         {
           path: 'exchange/records',

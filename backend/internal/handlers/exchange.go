@@ -1,4 +1,4 @@
-﻿package handlers
+package handlers
 
 import (
 	"caiyun/internal/models"
@@ -33,7 +33,7 @@ type SearchProductsResponse struct {
 func (h *ExchangeHandler) SearchProducts(c *gin.Context) {
 	keyword := c.Query("keyword")
 	limitStr := c.DefaultQuery("limit", "20")
-	
+
 	limit, _ := strconv.Atoi(limitStr)
 	if limit <= 0 {
 		limit = 20
@@ -108,6 +108,7 @@ func (h *ExchangeHandler) UpdateProducts(c *gin.Context) {
 // AddExchangeAccountRequest 添加兑换账号请求
 type AddExchangeAccountRequest struct {
 	AccountID     uint   `json:"account_id" binding:"required"`
+	ProductID     *uint  `json:"product_id,omitempty"`
 	Remark        string `json:"remark"`
 	ExchangeTime1 string `json:"exchange_time_1"`
 	ExchangeTime2 string `json:"exchange_time_2"`
@@ -141,6 +142,7 @@ func (h *ExchangeHandler) AddExchangeAccount(c *gin.Context) {
 		req.Remark,
 		req.ExchangeTime1,
 		req.ExchangeTime2,
+		req.ProductID,
 	)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, ErrorResponse{Message: err.Error()})
@@ -150,10 +152,16 @@ func (h *ExchangeHandler) AddExchangeAccount(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"account": account})
 }
 
+// ExchangeAccountWithProduct 兑换账号及当前商品信息
+type ExchangeAccountWithProduct struct {
+	*models.ExchangeAccount
+	CurrentProduct *models.Product `json:"current_product,omitempty"`
+}
+
 // GetExchangeAccountsResponse 获取兑换账号列表响应
 type GetExchangeAccountsResponse struct {
-	Accounts []*models.ExchangeAccount `json:"accounts"`
-	Total    int                       `json:"total"`
+	Accounts []*ExchangeAccountWithProduct `json:"accounts"`
+	Total    int                           `json:"total"`
 }
 
 // GetExchangeAccounts 获取用户的兑换账号列表
@@ -164,15 +172,35 @@ func (h *ExchangeHandler) GetExchangeAccounts(c *gin.Context) {
 		return
 	}
 
-	accounts, err := h.exchangeService.GetExchangeAccounts(userID.(uint))
+	// 检查是否为管理员
+	role, _ := c.Get("role")
+	isAdmin := role == "admin"
+
+	accounts, err := h.exchangeService.GetExchangeAccounts(userID.(uint), isAdmin)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, ErrorResponse{Message: err.Error()})
 		return
 	}
 
+	// 为每个账号添加当前商品信息
+	var accountsWithProduct []*ExchangeAccountWithProduct
+	for _, acc := range accounts {
+		accWithProd := &ExchangeAccountWithProduct{
+			ExchangeAccount: acc,
+		}
+		// 查找该账号的待执行或进行中的任务，获取商品信息
+		for _, task := range acc.Tasks {
+			if (task.Status == "pending" || task.Status == "running") && task.Product.ID > 0 {
+				accWithProd.CurrentProduct = &task.Product
+				break
+			}
+		}
+		accountsWithProduct = append(accountsWithProduct, accWithProd)
+	}
+
 	c.JSON(http.StatusOK, GetExchangeAccountsResponse{
-		Accounts: accounts,
-		Total:    len(accounts),
+		Accounts: accountsWithProduct,
+		Total:    len(accountsWithProduct),
 	})
 }
 
@@ -182,6 +210,7 @@ type UpdateExchangeAccountRequest struct {
 	ExchangeTime1 string `json:"exchange_time_1"`
 	ExchangeTime2 string `json:"exchange_time_2"`
 	IsActive      bool   `json:"is_active"`
+	ProductID     *uint  `json:"product_id,omitempty"` // 可选：修改要抢兑的商品
 }
 
 // UpdateExchangeAccount 更新兑换账号配置
@@ -201,13 +230,19 @@ func (h *ExchangeHandler) UpdateExchangeAccount(c *gin.Context) {
 		return
 	}
 
+	// 检查是否为管理员
+	role, _ := c.Get("role")
+	isAdmin := role == "admin"
+
 	err := h.exchangeService.UpdateExchangeAccount(
 		uint(id),
 		userID.(uint),
+		isAdmin,
 		req.Remark,
 		req.ExchangeTime1,
 		req.ExchangeTime2,
 		req.IsActive,
+		req.ProductID,
 	)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, ErrorResponse{Message: err.Error()})
@@ -296,7 +331,11 @@ func (h *ExchangeHandler) GetExchangeTasks(c *gin.Context) {
 		return
 	}
 
-	tasks, err := h.exchangeService.GetExchangeTasks(userID.(uint))
+	// 检查是否为管理员
+	role, _ := c.Get("role")
+	isAdmin := role == "admin"
+
+	tasks, err := h.exchangeService.GetExchangeTasks(userID.(uint), isAdmin)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, ErrorResponse{Message: err.Error()})
 		return
@@ -415,6 +454,7 @@ type GetExchangeConfigResponse struct {
 	ExchangeMonthlyEnabled   bool   `json:"exchange_monthly_enabled"`
 	ExchangeTime             string `json:"exchange_time"`
 	MonthlyPrizeID           string `json:"monthly_prize_id"`
+	ImmediateExchangeEnabled bool   `json:"immediate_exchange_enabled"`
 }
 
 // GetExchangeConfig 获取抢兑配置（管理员）
@@ -457,24 +497,54 @@ func (h *ExchangeHandler) GetExchangeConfig(c *gin.Context) {
 		monthlyPrizeID = config.KeyValue
 	}
 
+	// 获取立即兑换开关
+	immediateExchangeEnabled := false
+	if config, err := h.exchangeService.GetSystemConfig("exchange_immediate_enabled"); err == nil {
+		immediateExchangeEnabled = config.KeyValue == "true" || config.KeyValue == "1" || config.KeyValue == "yes"
+	}
+
 	c.JSON(http.StatusOK, GetExchangeConfigResponse{
-		AutoUpdateProducts:     autoUpdate,
-		Concurrency:            concurrency,
-		Enabled:                enabled,
-		ExchangeMonthlyEnabled: exchangeMonthlyEnabled,
-		ExchangeTime:           exchangeTime,
-		MonthlyPrizeID:         monthlyPrizeID,
+		AutoUpdateProducts:       autoUpdate,
+		Concurrency:              concurrency,
+		Enabled:                  enabled,
+		ExchangeMonthlyEnabled:   exchangeMonthlyEnabled,
+		ExchangeTime:             exchangeTime,
+		MonthlyPrizeID:           monthlyPrizeID,
+		ImmediateExchangeEnabled: immediateExchangeEnabled,
+	})
+}
+
+// GetExchangeConfigPublic 获取抢兑配置（公开，普通用户可访问）
+func (h *ExchangeHandler) GetExchangeConfigPublic(c *gin.Context) {
+	// 只返回普通用户需要的配置
+
+	// 获取启用状态
+	enabled := true
+	if config, err := h.exchangeService.GetSystemConfig("exchange_enabled"); err == nil {
+		enabled = config.KeyValue == "true" || config.KeyValue == "1" || config.KeyValue == "yes"
+	}
+
+	// 获取立即兑换开关
+	immediateExchangeEnabled := false
+	if config, err := h.exchangeService.GetSystemConfig("exchange_immediate_enabled"); err == nil {
+		immediateExchangeEnabled = config.KeyValue == "true" || config.KeyValue == "1" || config.KeyValue == "yes"
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"enabled":                    enabled,
+		"immediate_exchange_enabled": immediateExchangeEnabled,
 	})
 }
 
 // UpdateExchangeConfigRequest 更新抢兑配置请求
 type UpdateExchangeConfigRequest struct {
-	AutoUpdateProducts     bool   `json:"auto_update_products"`
-	Concurrency            int    `json:"concurrency"`
-	Enabled                bool   `json:"enabled"`
-	ExchangeMonthlyEnabled bool   `json:"exchange_monthly_enabled"`
-	ExchangeTime           string `json:"exchange_time"`
-	MonthlyPrizeID         string `json:"monthly_prize_id"`
+	AutoUpdateProducts       bool   `json:"auto_update_products"`
+	Concurrency              int    `json:"concurrency"`
+	Enabled                  bool   `json:"enabled"`
+	ExchangeMonthlyEnabled   bool   `json:"exchange_monthly_enabled"`
+	ExchangeTime             string `json:"exchange_time"`
+	MonthlyPrizeID           string `json:"monthly_prize_id"`
+	ImmediateExchangeEnabled bool   `json:"immediate_exchange_enabled"`
 }
 
 // UpdateExchangeConfig 更新抢兑配置（管理员）
@@ -523,6 +593,12 @@ func (h *ExchangeHandler) UpdateExchangeConfig(c *gin.Context) {
 			c.JSON(http.StatusInternalServerError, ErrorResponse{Message: err.Error()})
 			return
 		}
+	}
+
+	// 更新立即兑换开关
+	if err := h.exchangeService.SetSystemConfig("exchange_immediate_enabled", fmt.Sprintf("%v", req.ImmediateExchangeEnabled), "是否启用立即兑换功能"); err != nil {
+		c.JSON(http.StatusInternalServerError, ErrorResponse{Message: err.Error()})
+		return
 	}
 
 	c.JSON(http.StatusOK, SuccessResponse{Message: "更新成功"})
@@ -637,8 +713,8 @@ func (h *ExchangeHandler) ExportExchangeRecords(c *gin.Context) {
 		c.Header("Content-Type", "application/json")
 		c.Header("Content-Disposition", "attachment; filename=exchange_records.json")
 		c.JSON(http.StatusOK, gin.H{
-			"records": records,
-			"total":   len(records),
+			"records":     records,
+			"total":       len(records),
 			"exported_at": time.Now().Format("2006-01-02 15:04:05"),
 		})
 		return
@@ -669,4 +745,63 @@ func (h *ExchangeHandler) ExportExchangeRecords(c *gin.Context) {
 		)
 		c.Writer.Write([]byte(line))
 	}
+}
+
+// ImmediateExchangeRequest 立即兑换请求
+type ImmediateExchangeRequest struct {
+	ExchangeAccountID uint `json:"exchange_account_id" binding:"required"`
+	ProductID         uint `json:"product_id" binding:"required"`
+}
+
+// ImmediateExchangeResponse 立即兑换响应
+type ImmediateExchangeResponse struct {
+	Success bool   `json:"success"`
+	Message string `json:"message"`
+}
+
+// ImmediateExchange 立即兑换（无需创建任务，直接执行）
+func (h *ExchangeHandler) ImmediateExchange(c *gin.Context) {
+	userID, exists := c.Get("user_id")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, ErrorResponse{Message: "未授权"})
+		return
+	}
+
+	// 检查是否启用了立即兑换功能
+	immediateEnabled := false
+	if config, err := h.exchangeService.GetSystemConfig("exchange_immediate_enabled"); err == nil {
+		immediateEnabled = config.KeyValue == "true" || config.KeyValue == "1" || config.KeyValue == "yes"
+	}
+
+	if !immediateEnabled {
+		c.JSON(http.StatusForbidden, ErrorResponse{Message: "立即兑换功能未启用"})
+		return
+	}
+
+	var req ImmediateExchangeRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, ErrorResponse{Message: "请求参数错误: " + err.Error()})
+		return
+	}
+
+	// 创建临时任务并立即执行
+	task, err := h.exchangeService.CreateExchangeTask(
+		userID.(uint),
+		req.ExchangeAccountID,
+		req.ProductID,
+		"immediate",
+		1,
+	)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, ErrorResponse{Message: "创建兑换任务失败: " + err.Error()})
+		return
+	}
+
+	// 立即执行任务
+	go h.exchangeService.ExecuteExchangeTask(task.ID, userID.(uint))
+
+	c.JSON(http.StatusOK, ImmediateExchangeResponse{
+		Success: true,
+		Message: "兑换任务已启动",
+	})
 }

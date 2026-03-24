@@ -108,8 +108,10 @@ func syncProductsFromCloud(productRepo *repository.ProductRepository, accountRep
 		POrder              int    `json:"pOrder"`
 		DailyRemainderCount int    `json:"dailyRemainderCount"`
 		DailyLimitCount     int    `json:"dailyLimitCount"`
+		DailyCount          int    `json:"dailyCount"`
 		Memo                string `json:"memo"`
 		PrizeID             int    `json:"prizeId"`
+		ImageURL            string `json:"imageUrl"`
 	}
 
 	resultBytes, err := json.Marshal(resp.Result)
@@ -166,6 +168,8 @@ func syncProductsFromCloud(productRepo *repository.ProductRepository, accountRep
 				Category:            category,
 				DailyRemainderCount: item.DailyRemainderCount,
 				DailyLimitCount:     item.DailyLimitCount,
+				DailyCount:          item.DailyCount,
+				ImageURL:            item.ImageURL,
 				StockStatus:         stockStatus,
 				LastStockCheck:      &now,
 				Memo:                item.Memo,

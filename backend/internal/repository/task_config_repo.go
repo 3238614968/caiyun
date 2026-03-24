@@ -18,8 +18,16 @@ func NewTaskConfigRepository(db *gorm.DB) *TaskConfigRepository {
 }
 
 // AutoMigrate creates the task_configs table if not exists.
+// 若表已存在且扩展列迁移失败，则保持兼容运行，避免因历史库结构导致启动失败。
 func (r *TaskConfigRepository) AutoMigrate() error {
-	return r.db.AutoMigrate(&models.TaskConfig{})
+	err := r.db.AutoMigrate(&models.TaskConfig{})
+	if err == nil {
+		return nil
+	}
+	if r.db.Migrator().HasTable(&models.TaskConfig{}) {
+		return nil
+	}
+	return err
 }
 
 // InitDefaults 仅保留兼容入口，新的默认任务定义请使用 SyncDefinitions。
@@ -30,6 +38,9 @@ func (r *TaskConfigRepository) InitDefaults() error {
 // SyncDefinitions 将代码中的任务注册表同步到数据库。
 // 已存在任务保留管理员设置的 is_enabled，仅刷新描述、排序和批次标记。
 func (r *TaskConfigRepository) SyncDefinitions(defs []models.TaskConfig) error {
+	hasDescription := r.db.Migrator().HasColumn(&models.TaskConfig{}, "description")
+	hasRunInBatch := r.db.Migrator().HasColumn(&models.TaskConfig{}, "run_in_batch")
+
 	activeCodes := make([]string, 0, len(defs))
 	seen := make(map[string]struct{}, len(defs))
 
@@ -51,19 +62,37 @@ func (r *TaskConfigRepository) SyncDefinitions(defs []models.TaskConfig) error {
 		}
 
 		if query.RowsAffected == 0 {
-			if err := r.db.Create(&def).Error; err != nil {
+			createData := map[string]interface{}{
+				"task_type":  def.TaskType,
+				"task_name":  def.TaskName,
+				"is_enabled": def.IsEnabled,
+				"sort_order": def.SortOrder,
+			}
+			if hasDescription {
+				createData["description"] = def.Description
+			}
+			if hasRunInBatch {
+				createData["run_in_batch"] = def.RunInBatch
+			}
+			if err := r.db.Model(&models.TaskConfig{}).Create(createData).Error; err != nil {
 				return err
 			}
 			continue
 		}
 
-		existing.TaskName = def.TaskName
-		existing.Description = def.Description
-		existing.SortOrder = def.SortOrder
-		existing.RunInBatch = def.RunInBatch
-		existing.UpdatedAt = time.Now()
-		existing.DeletedAt.Valid = false
-		if err := r.db.Unscoped().Save(&existing).Error; err != nil {
+		updates := map[string]interface{}{
+			"task_name":  def.TaskName,
+			"sort_order": def.SortOrder,
+			"updated_at": time.Now(),
+			"deleted_at": nil,
+		}
+		if hasDescription {
+			updates["description"] = def.Description
+		}
+		if hasRunInBatch {
+			updates["run_in_batch"] = def.RunInBatch
+		}
+		if err := r.db.Unscoped().Model(&models.TaskConfig{}).Where("id = ?", existing.ID).Updates(updates).Error; err != nil {
 			return err
 		}
 	}

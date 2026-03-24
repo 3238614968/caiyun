@@ -11,6 +11,7 @@ import (
 
 	"caiyun/internal/cache"
 	"caiyun/internal/core/auth"
+	corehttp "caiyun/internal/core/http"
 	"caiyun/internal/handlers"
 	"caiyun/internal/middleware"
 	"caiyun/internal/monitor"
@@ -65,7 +66,7 @@ func main() {
 	jwtSecret := getEnv("JWT_SECRET", "your-secret-key-change-in-production")
 	jwtExpiry := 7 * 24 * time.Hour
 	jwtManager := jwt.NewManager(jwtSecret)
-	authMgr := auth.NewAuth(nil)
+	authMgr := auth.NewAuth(corehttp.NewClient())
 
 	userRepo := repository.NewUserRepository(db)
 	accountRepo := repository.NewAccountRepository(db)
@@ -79,10 +80,11 @@ func main() {
 	configRepo := repository.NewSystemConfigRepository(db)
 	auditLogRepo := repository.NewAuditLogRepository(db)
 	redisStorage := cache.NewRedisStorage(redisCache, "caiyun:task")
+	schemaRepo := repository.NewSchemaRepository(db)
 
-	// 同步任务注册表到数据库，便于后续新增任务时自动入库。
-	if err := taskConfigRepo.AutoMigrate(); err != nil {
-		log.Printf("任务配置表迁移失败: %v", err)
+	// 显式校验数据库结构，避免依赖运行时 AutoMigrate 造成代码与 schema 漂移。
+	if err := schemaRepo.ValidateCriticalSchema(); err != nil {
+		log.Printf("数据库结构校验失败: %v", err)
 		os.Exit(1)
 	}
 	if err := taskConfigRepo.SyncDefinitions(services.DefaultTaskConfigs()); err != nil {
@@ -97,8 +99,10 @@ func main() {
 	cloudService := services.NewCloudService(accountRepo, cloudStatsRepo, taskLogRepo)
 	adminService := services.NewAdminService(userRepo, accountRepo, taskLogRepo, taskConfigRepo)
 	tokenManager := services.NewTokenManager(accountRepo, exchangeAccountRepo, authMgr)
-	exchangeService := services.NewExchangeService(productRepo, exchangeAccountRepo, exchangeTaskRepo, accountRepo, configRepo, exchangeRecordRepo, authMgr, tokenManager)
+	exchangeService := services.NewExchangeService(productRepo, exchangeAccountRepo, exchangeTaskRepo, accountRepo, configRepo, exchangeRecordRepo, taskLogRepo, authMgr, tokenManager)
 	productService := services.NewProductService(productRepo, accountRepo)
+	announcementRepo := repository.NewAnnouncementRepository(db)
+	announcementService := services.NewAnnouncementService(announcementRepo)
 	taskService.SetTokenManager(tokenManager)
 
 	// 初始化任务监控器，并注册为 API 进程可见的全局实例。
@@ -152,6 +156,7 @@ func main() {
 	queueStatusHandler := handlers.NewQueueStatusHandler(redisCache)
 	adminHandler := handlers.NewAdminHandler(adminService)
 	exchangeHandler := handlers.NewExchangeHandler(exchangeService, productService)
+	announcementHandler := handlers.NewAnnouncementHandler(announcementService)
 	auditFilter := middleware.NewAuditLogFilter()
 
 	gin.SetMode(gin.ReleaseMode)
@@ -225,6 +230,7 @@ func main() {
 			exchange.POST("/tasks/batch-execute", exchangeHandler.BatchExecuteExchangeTasks)
 			exchange.GET("/records", exchangeHandler.GetExchangeRecords)
 			exchange.GET("/records/export", exchangeHandler.ExportExchangeRecords)
+			exchange.POST("/immediate", exchangeHandler.ImmediateExchange)
 		}
 
 		// 商品中心路由。
@@ -234,6 +240,13 @@ func main() {
 			products.GET("/categories", exchangeHandler.GetCategories)
 			products.POST("/update", exchangeHandler.UpdateProducts)
 		}
+
+		// 公告路由（公开）
+		protected.GET("/announcements", announcementHandler.GetPublishedAnnouncements)
+		protected.GET("/announcements/popup", announcementHandler.GetPopupAnnouncement)
+
+		// 抢兑配置（公开，普通用户可访问）
+		protected.GET("/exchange/config", exchangeHandler.GetExchangeConfigPublic)
 	}
 
 	admin := r.Group("/api/admin")
@@ -245,6 +258,7 @@ func main() {
 	{
 		admin.GET("/users", adminHandler.GetAllUsers)
 		admin.GET("/accounts", adminHandler.GetAllAccounts)
+		admin.GET("/accounts/search", adminHandler.SearchAllAccounts)
 		admin.GET("/accounts/summaries", adminHandler.GetAccountSummaries)
 		admin.GET("/dashboard", adminHandler.GetAdminDashboard)
 		admin.PUT("/users/:id/role", adminHandler.UpdateUserRole)
@@ -259,6 +273,13 @@ func main() {
 		admin.GET("/exchange/config", exchangeHandler.GetExchangeConfig)
 		admin.PUT("/exchange/config", exchangeHandler.UpdateExchangeConfig)
 		admin.POST("/exchange/execute-monthly", exchangeHandler.ExecuteMonthlyExchange)
+
+		// 公告管理。
+		admin.GET("/announcements", announcementHandler.GetAllAnnouncements)
+		admin.POST("/announcements", announcementHandler.CreateAnnouncement)
+		admin.PUT("/announcements/:id", announcementHandler.UpdateAnnouncement)
+		admin.DELETE("/announcements/:id", announcementHandler.DeleteAnnouncement)
+		admin.GET("/announcements/:id", announcementHandler.GetAnnouncement)
 	}
 
 	// 初始化 WebSocket Hub 与离线消息存储。

@@ -1,4 +1,4 @@
-﻿package repository
+package repository
 
 import (
 	"caiyun/internal/models"
@@ -64,7 +64,9 @@ func (r *ProductRepository) FindAll() ([]*models.Product, error) {
 // FindActive 获取所有启用的商品
 func (r *ProductRepository) FindActive() ([]*models.Product, error) {
 	var products []*models.Product
-	err := r.db.Where("is_active = ?", true).Order("category ASC, p_order ASC").Find(&products).Error
+	err := r.db.Where("is_active = ?", true).
+		Order("category ASC, p_order ASC").
+		Find(&products).Error
 	return products, err
 }
 
@@ -82,7 +84,7 @@ func (r *ProductRepository) Search(keyword string, limit int) ([]*models.Product
 	if limit <= 0 {
 		limit = 20
 	}
-	
+
 	var products []*models.Product
 	searchTerm := "%" + strings.ToLower(keyword) + "%"
 	err := r.db.Where("LOWER(prize_name) LIKE ? AND is_active = ?", searchTerm, true).
@@ -114,13 +116,13 @@ func (r *ProductRepository) BatchUpdateByPrizeID(products []*models.Product) err
 		if err := r.db.WithContext(ctx).
 			Where("prize_id = ?", product.PrizeID).
 			Updates(map[string]interface{}{
-				"prize_name":              product.PrizedName,
-				"p_order":                 product.POrder,
-				"category":                product.Category,
-				"daily_remainder_count":   product.DailyRemainderCount,
-				"memo":                    product.Memo,
-				"is_active":               product.IsActive,
-				"updated_at":              time.Now(),
+				"prize_name":            product.PrizedName,
+				"p_order":               product.POrder,
+				"category":              product.Category,
+				"daily_remainder_count": product.DailyRemainderCount,
+				"memo":                  product.Memo,
+				"is_active":             product.IsActive,
+				"updated_at":            time.Now(),
 			}).Error; err != nil {
 			return err
 		}
@@ -190,12 +192,14 @@ func (r *ProductRepository) UpsertProducts(products []*models.Product) (updated,
 	// 批量更新已有商品
 	if len(toUpdate) > 0 {
 		for _, product := range toUpdate {
-			if err := tx.Where("prize_id = ?", product.PrizeID).Updates(map[string]interface{}{
+			if err := tx.Model(&models.Product{}).Where("prize_id = ?", product.PrizeID).Updates(map[string]interface{}{
 				"prize_name":            product.PrizedName,
 				"p_order":               product.POrder,
 				"category":              product.Category,
 				"daily_limit_count":     product.DailyLimitCount,
+				"daily_count":           product.DailyCount,
 				"daily_remainder_count": product.DailyRemainderCount,
+				"image_url":             product.ImageURL,
 				"stock_status":          product.StockStatus,
 				"last_stock_check":      product.LastStockCheck,
 				"is_deleted":            product.IsDeleted,
@@ -229,6 +233,6 @@ func (r *ProductRepository) UpsertProducts(products []*models.Product) (updated,
 	if tx.Error != nil {
 		return updated, inserted, deleted, tx.Error
 	}
-	
+
 	return updated, inserted, deleted, nil
 }

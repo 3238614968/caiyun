@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <div class="admin-panel-container">
     <el-card shadow="hover">
       <template #header>
@@ -127,6 +127,10 @@
                     <el-form-item label="抢兑并发数" required>
                       <el-input-number v-model="exchangeConfig.concurrency" :min="1" :max="50" />
                       <span style="margin-left: 10px; font-size: 12px; color: #999;">同时执行的抢兑任务数</span>
+                    </el-form-item>
+                    <el-form-item label="立即兑换功能">
+                      <el-switch v-model="exchangeConfig.immediate_exchange_enabled" />
+                      <span style="margin-left: 10px; font-size: 12px; color: #999;">启用后用户可直接兑换，无需创建任务</span>
                     </el-form-item>
                     <el-form-item>
                       <el-button type="primary" @click="saveExchangeConfig">保存配置</el-button>
@@ -270,6 +274,49 @@
             </el-row>
           </div>
         </el-tab-pane>
+
+        <!-- 公告管理 -->
+        <el-tab-pane label="公告管理" name="announcements">
+          <div class="tab-content">
+            <div class="announcement-header">
+              <el-button type="primary" @click="showAddAnnouncementDialog">
+                <el-icon><Plus /></el-icon>
+                发布公告
+              </el-button>
+            </div>
+            <el-table :data="announcements" stripe v-loading="announcementLoading" style="width: 100%">
+              <el-table-column type="index" width="50" />
+              <el-table-column prop="title" label="标题" min-width="200">
+                <template #default="{ row }">
+                  <div class="title-cell">
+                    <el-tag v-if="row.is_top" type="danger" size="small" effect="dark">置顶</el-tag>
+                    <el-tag v-if="row.is_popup" type="warning" size="small" class="ml-2">弹窗</el-tag>
+                    <span class="title-text">{{ row.title }}</span>
+                  </div>
+                </template>
+              </el-table-column>
+              <el-table-column prop="is_published" label="状态" width="100">
+                <template #default="{ row }">
+                  <el-tag :type="row.is_published ? 'success' : 'info'">
+                    {{ row.is_published ? '已发布' : '已下架' }}
+                  </el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column prop="created_at" label="创建时间" width="180">
+                <template #default="{ row }">
+                  {{ formatDate(row.created_at) }}
+                </template>
+              </el-table-column>
+              <el-table-column label="操作" width="200" fixed="right">
+                <template #default="{ row }">
+                  <el-button size="small" @click="viewAnnouncement(row)">查看</el-button>
+                  <el-button size="small" type="primary" @click="editAnnouncement(row)">编辑</el-button>
+                  <el-button size="small" type="danger" @click="deleteAnnouncement(row)">删除</el-button>
+                </template>
+              </el-table-column>
+            </el-table>
+          </div>
+        </el-tab-pane>
       </el-tabs>
     </el-card>
 
@@ -288,13 +335,64 @@
         <el-button type="primary" @click="handleRoleSubmit">确定</el-button>
       </template>
     </el-dialog>
+
+    <!-- 公告管理对话框 -->
+    <el-dialog v-model="announcementDialogVisible" :title="isEditingAnnouncement ? '编辑公告' : '发布公告'" width="700px">
+      <el-form :model="announcementForm" label-position="top" :rules="announcementRules" ref="announcementFormRef">
+        <el-form-item label="公告标题" prop="title">
+          <el-input v-model="announcementForm.title" placeholder="请输入公告标题" maxlength="100" show-word-limit />
+        </el-form-item>
+        <el-form-item label="公告内容" prop="content">
+          <el-input
+            v-model="announcementForm.content"
+            type="textarea"
+            :rows="6"
+            placeholder="请输入公告内容"
+            maxlength="2000"
+            show-word-limit
+          />
+        </el-form-item>
+        <el-form-item>
+          <div class="form-options">
+            <el-checkbox v-model="announcementForm.is_popup" label="弹窗显示" border />
+            <el-checkbox v-model="announcementForm.is_top" label="置顶" border />
+            <el-checkbox v-if="isEditingAnnouncement" v-model="announcementForm.is_published" label="发布状态" border />
+          </div>
+        </el-form-item>
+        <el-form-item v-if="announcementForm.is_popup" class="tip-item">
+          <el-alert
+            title="弹窗公告说明"
+            type="info"
+            :closable="false"
+            description="开启弹窗后，用户登录后会自动弹出此公告。如有多个弹窗公告，默认只显示置顶的公告。"
+          />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="announcementDialogVisible = false">取消</el-button>
+        <el-button type="primary" @click="submitAnnouncementForm" :loading="announcementSubmitting">确定</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 查看公告对话框 -->
+    <el-dialog v-model="viewAnnouncementVisible" title="公告详情" width="600px" class="view-dialog">
+      <div class="view-content">
+        <h3 class="view-title">{{ currentAnnouncement?.title }}</h3>
+        <div class="view-meta">
+          <el-tag v-if="currentAnnouncement?.is_top" type="danger" size="small">置顶</el-tag>
+          <el-tag v-if="currentAnnouncement?.is_popup" type="warning" size="small">弹窗</el-tag>
+          <span class="view-time">{{ formatDate(currentAnnouncement?.created_at) }}</span>
+        </div>
+        <div class="view-body">{{ currentAnnouncement?.content }}</div>
+      </div>
+    </el-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, reactive, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Refresh } from '@element-plus/icons-vue'
+import { Refresh, Plus } from '@element-plus/icons-vue'
 import { type User } from '../api/auth'
 import {
   type Account,
@@ -311,6 +409,15 @@ import {
   deleteAdminAccount,
   getStatsOverview
 } from '../api/account'
+import {
+  type Announcement,
+  type CreateAnnouncementRequest,
+  type UpdateAnnouncementRequest,
+  getAllAnnouncements,
+  createAnnouncement,
+  updateAnnouncement,
+  deleteAnnouncement
+} from '../api/announcement'
 import {
   type ExchangeConfig,
   getExchangeConfig,
@@ -337,7 +444,8 @@ const exchangeConfig = reactive({
   enabled: true,
   exchange_monthly_enabled: false,
   exchange_time: '10:00',
-  monthly_prize_id: '1001'
+  monthly_prize_id: '1001',
+  immediate_exchange_enabled: false
 })
 const updateProductsLoading = ref(false)
 const monthlyExchangeLoading = ref(false)
@@ -361,12 +469,35 @@ const statsOverview = ref([
 const roleDialogVisible = ref(false)
 const roleForm = reactive({ id: 0, role: 'user' })
 
+// Announcements
+const announcementLoading = ref(false)
+const announcements = ref<Announcement[]>([])
+const announcementDialogVisible = ref(false)
+const viewAnnouncementVisible = ref(false)
+const isEditingAnnouncement = ref(false)
+const announcementSubmitting = ref(false)
+const currentAnnouncement = ref<Announcement | null>(null)
+const announcementFormRef = ref()
+const announcementForm = reactive({
+  id: 0,
+  title: '',
+  content: '',
+  is_popup: false,
+  is_top: false,
+  is_published: true
+})
+const announcementRules = {
+  title: [{ required: true, message: '请输入公告标题', trigger: 'blur' }],
+  content: [{ required: true, message: '请输入公告内容', trigger: 'blur' }]
+}
+
 const handleTabChange = (tab: string) => {
   if (tab === 'summaries') loadSummaries()
   else if (tab === 'tasks') loadTaskConfigs()
   else if (tab === 'exchange') loadExchangeConfig()
   else if (tab === 'users') loadUserList()
   else if (tab === 'stats') loadStatsOverview()
+  else if (tab === 'announcements') loadAnnouncements()
 }
 
 // Load account summaries
@@ -410,10 +541,13 @@ const loadExchangeConfig = async () => {
     exchangeConfig.exchange_monthly_enabled = data.exchange_monthly_enabled || false
     exchangeConfig.exchange_time = data.exchange_time || '10:00'
     exchangeConfig.monthly_prize_id = data.monthly_prize_id || '1001'
+    exchangeConfig.immediate_exchange_enabled = data.immediate_exchange_enabled || false
     
     // 加载所有账号用于商品更新
     const accountsData = await getAllAccounts(1, 1000)
+    console.log('获取到的账号数据:', accountsData)
     allAccounts.value = accountsData.accounts || []
+    console.log('加载账号数量:', allAccounts.value.length)
   } catch (error: any) {
     ElMessage.error('加载抢兑配置失败：' + error.message)
   }
@@ -428,7 +562,8 @@ const saveExchangeConfig = async () => {
       enabled: exchangeConfig.enabled,
       exchange_monthly_enabled: exchangeConfig.exchange_monthly_enabled,
       exchange_time: exchangeConfig.exchange_time,
-      monthly_prize_id: exchangeConfig.monthly_prize_id
+      monthly_prize_id: exchangeConfig.monthly_prize_id,
+      immediate_exchange_enabled: exchangeConfig.immediate_exchange_enabled
     })
     ElMessage.success('保存配置成功')
   } catch (error: any) {
@@ -512,9 +647,101 @@ const loadStatsOverview = async () => {
   } catch { console.error('加载统计概览失败') }
 }
 
-const formatDate = (date: string) => {
-  if (!date) return '-'
+const formatDate = (date: string | undefined) => {
+  if (!date) return ''
   return new Date(date).toLocaleString('zh-CN')
+}
+
+// Announcement methods
+const loadAnnouncements = async () => {
+  announcementLoading.value = true
+  try {
+    const res: any = await getAllAnnouncements()
+    announcements.value = res.announcements || []
+  } catch (error: any) {
+    ElMessage.error('加载公告失败：' + error.message)
+  } finally {
+    announcementLoading.value = false
+  }
+}
+
+const showAddAnnouncementDialog = () => {
+  isEditingAnnouncement.value = false
+  announcementForm.id = 0
+  announcementForm.title = ''
+  announcementForm.content = ''
+  announcementForm.is_popup = false
+  announcementForm.is_top = false
+  announcementForm.is_published = true
+  announcementDialogVisible.value = true
+}
+
+const editAnnouncement = (row: Announcement) => {
+  isEditingAnnouncement.value = true
+  announcementForm.id = row.id
+  announcementForm.title = row.title
+  announcementForm.content = row.content
+  announcementForm.is_popup = row.is_popup
+  announcementForm.is_top = row.is_top
+  announcementForm.is_published = row.is_published
+  announcementDialogVisible.value = true
+}
+
+const viewAnnouncement = (row: Announcement) => {
+  currentAnnouncement.value = row
+  viewAnnouncementVisible.value = true
+}
+
+const submitAnnouncementForm = async () => {
+  const valid = await announcementFormRef.value?.validate().catch(() => false)
+  if (!valid) return
+
+  announcementSubmitting.value = true
+  try {
+    if (isEditingAnnouncement.value) {
+      const data: UpdateAnnouncementRequest = {
+        title: announcementForm.title,
+        content: announcementForm.content,
+        is_popup: announcementForm.is_popup,
+        is_top: announcementForm.is_top,
+        is_published: announcementForm.is_published
+      }
+      await updateAnnouncement(announcementForm.id, data)
+      ElMessage.success('更新成功')
+    } else {
+      const data: CreateAnnouncementRequest = {
+        title: announcementForm.title,
+        content: announcementForm.content,
+        is_popup: announcementForm.is_popup,
+        is_top: announcementForm.is_top
+      }
+      await createAnnouncement(data)
+      ElMessage.success('发布成功')
+    }
+    announcementDialogVisible.value = false
+    loadAnnouncements()
+  } catch (error: any) {
+    ElMessage.error(isEditingAnnouncement.value ? '更新失败：' : '发布失败：' + error.message)
+  } finally {
+    announcementSubmitting.value = false
+  }
+}
+
+const deleteAnnouncement = async (row: Announcement) => {
+  try {
+    await ElMessageBox.confirm('确定要删除这条公告吗？', '确认删除', {
+      confirmButtonText: '确定',
+      cancelButtonText: '取消',
+      type: 'warning'
+    })
+    await deleteAnnouncement(row.id)
+    ElMessage.success('删除成功')
+    loadAnnouncements()
+  } catch (error: any) {
+    if (error !== 'cancel') {
+      ElMessage.error('删除失败：' + error.message)
+    }
+  }
 }
 
 onMounted(() => {
@@ -607,5 +834,171 @@ onMounted(() => {
   box-shadow: 0 4px 20px rgba(0, 0, 0, 0.05);
   border: 1px solid rgba(255, 255, 255, 0.5);
   background: rgba(255, 255, 255, 0.9);
+}
+
+/* 移动端响应式优化 */
+@media (max-width: 768px) {
+  .admin-panel-container {
+    padding: 12px;
+    min-height: calc(100vh - 100px);
+  }
+
+  .tab-content {
+    padding: 12px 0;
+  }
+
+  /* 配置卡片改为单列 */
+  :deep(.el-col-12) {
+    width: 100% !important;
+    margin-bottom: 16px;
+  }
+
+  /* 统计卡片改为2列 */
+  :deep(.el-col-6) {
+    width: 50% !important;
+    margin-bottom: 12px;
+  }
+
+  .stat-card {
+    margin-bottom: 12px;
+  }
+
+  .stat-content {
+    flex-direction: column;
+    text-align: center;
+    gap: 8px;
+  }
+
+  .stat-icon {
+    margin-right: 0;
+    width: 40px;
+    height: 40px;
+  }
+
+  .stat-icon .el-icon {
+    font-size: 22px;
+  }
+
+  .stat-info .stat-value {
+    font-size: 20px;
+  }
+
+  .stat-info .stat-label {
+    font-size: 12px;
+  }
+
+  /* 表格横向滚动 */
+  :deep(.el-table) {
+    font-size: 13px;
+  }
+
+  :deep(.el-table .cell) {
+    padding: 8px 4px;
+  }
+
+  /* 分页器优化 */
+  :deep(.el-pagination) {
+    justify-content: center;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  /* 表单项优化 */
+  :deep(.el-form-item__label) {
+    float: none;
+    display: block;
+    text-align: left;
+    margin-bottom: 4px;
+  }
+
+  :deep(.el-form-item__content) {
+    margin-left: 0 !important;
+  }
+
+  /* 按钮组优化 */
+  .product-management :deep(.el-form--inline) {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .product-management :deep(.el-form-item) {
+    margin-right: 0;
+    margin-bottom: 0;
+  }
+
+  .product-management :deep(.el-form-item__content) {
+    width: 100%;
+  }
+
+  .product-management :deep(.el-select) {
+    width: 100% !important;
+  }
+}
+
+/* 公告管理样式 */
+.announcement-header {
+  margin-bottom: 20px;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.title-cell {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.title-text {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ml-2 {
+  margin-left: 8px;
+}
+
+.form-options {
+  display: flex;
+  gap: 16px;
+}
+
+.tip-item {
+  margin-bottom: 0;
+}
+
+.view-content {
+  padding: 10px;
+}
+
+.view-title {
+  font-size: 18px;
+  font-weight: 600;
+  color: #303133;
+  margin: 0 0 16px 0;
+  line-height: 1.4;
+}
+
+.view-meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 20px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid #e4e7ed;
+}
+
+.view-time {
+  color: #909399;
+  font-size: 13px;
+}
+
+.view-body {
+  font-size: 14px;
+  line-height: 1.8;
+  color: #606266;
+  white-space: pre-wrap;
 }
 </style>

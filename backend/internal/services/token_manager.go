@@ -1,4 +1,4 @@
-﻿package services
+package services
 
 import (
 	"caiyun/internal/core/auth"
@@ -57,8 +57,8 @@ func NewTokenManager(
 func (tm *TokenManager) GetToken(accountID uint) (*TokenInfo, error) {
 	if info, ok := tm.tokenCache.Load(accountID); ok {
 		tokenInfo := info.(*TokenInfo)
-		// 提前 5 分钟视为即将过期，需要刷新。
-		if time.Now().Add(5*time.Minute).Before(tokenInfo.ExpiresAt) && tokenInfo.HealthStatus == "healthy" {
+		// 提前 2 分钟视为即将过期，需要刷新（JWT Token 有效期只有 20-30 分钟）
+		if time.Now().Add(2*time.Minute).Before(tokenInfo.ExpiresAt) && tokenInfo.HealthStatus == "healthy" {
 			return tokenInfo, nil
 		}
 	}
@@ -74,7 +74,7 @@ func (tm *TokenManager) refreshToken(accountID uint) (*TokenInfo, error) {
 	// 双重检查，避免并发重复刷新。
 	if info, ok := tm.tokenCache.Load(accountID); ok {
 		tokenInfo := info.(*TokenInfo)
-		if time.Now().Add(5 * time.Minute).Before(tokenInfo.ExpiresAt) {
+		if time.Now().Add(2 * time.Minute).Before(tokenInfo.ExpiresAt) {
 			return tokenInfo, nil
 		}
 	}
@@ -103,10 +103,11 @@ func (tm *TokenManager) refreshToken(accountID uint) (*TokenInfo, error) {
 	}
 
 	now := time.Now()
+	// JWT Token 缓存时间改为 15 分钟，因为 JWT 本身的有效期只有 20-30 分钟
 	tokenInfo := &TokenInfo{
 		JWTToken:     jwtToken,
 		Auth:         authStr,
-		ExpiresAt:    now.Add(24 * time.Hour),
+		ExpiresAt:    now.Add(15 * time.Minute),
 		LastRefresh:  now,
 		HealthStatus: "healthy",
 	}

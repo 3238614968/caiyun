@@ -1,4 +1,4 @@
-﻿package repository
+package repository
 
 import (
 	"caiyun/internal/models"
@@ -34,7 +34,7 @@ func (r *ExchangeAccountRepository) Delete(id uint) error {
 // GetByID 根据 ID 获取兑换账号
 func (r *ExchangeAccountRepository) GetByID(id uint) (*models.ExchangeAccount, error) {
 	var account models.ExchangeAccount
-	err := r.db.Preload("Tasks").First(&account, id).Error
+	err := r.db.Preload("Tasks").Preload("Tasks.Product").First(&account, id).Error
 	if err != nil {
 		return nil, err
 	}
@@ -45,7 +45,7 @@ func (r *ExchangeAccountRepository) GetByID(id uint) (*models.ExchangeAccount, e
 func (r *ExchangeAccountRepository) GetByUserID(userID uint) ([]*models.ExchangeAccount, error) {
 	var accounts []*models.ExchangeAccount
 	err := r.db.Where("user_id = ?", userID).
-		Preload("Tasks").
+		Preload("Tasks").Preload("Tasks.Product").
 		Order("created_at DESC").
 		Find(&accounts).Error
 	return accounts, err
@@ -55,7 +55,7 @@ func (r *ExchangeAccountRepository) GetByUserID(userID uint) ([]*models.Exchange
 func (r *ExchangeAccountRepository) GetActiveByUserID(userID uint) ([]*models.ExchangeAccount, error) {
 	var accounts []*models.ExchangeAccount
 	err := r.db.Where("user_id = ? AND is_active = ?", userID, true).
-		Preload("Tasks").
+		Preload("Tasks").Preload("Tasks.Product").
 		Order("created_at DESC").
 		Find(&accounts).Error
 	return accounts, err
@@ -100,7 +100,15 @@ func (r *ExchangeAccountRepository) ExistsByAccountID(accountID uint) bool {
 func (r *ExchangeAccountRepository) GetAllActive() ([]*models.ExchangeAccount, error) {
 	var accounts []*models.ExchangeAccount
 	err := r.db.Where("is_active = ?", true).
+		Preload("Tasks").Preload("Tasks.Product").
 		Order("created_at DESC").
 		Find(&accounts).Error
+	return accounts, err
+}
+
+// GetAll 获取所有兑换账号（管理员用）
+func (r *ExchangeAccountRepository) GetAll() ([]*models.ExchangeAccount, error) {
+	var accounts []*models.ExchangeAccount
+	err := r.db.Preload("Tasks").Preload("Tasks.Product").Order("created_at DESC").Find(&accounts).Error
 	return accounts, err
 }

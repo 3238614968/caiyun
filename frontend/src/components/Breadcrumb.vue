@@ -1,10 +1,10 @@
-﻿<template>
+<template>
   <el-breadcrumb separator="/">
     <el-breadcrumb-item :to="{ path: '/' }">
       <el-icon><HomeFilled /></el-icon>
       <span class="breadcrumb-text">首页</span>
     </el-breadcrumb-item>
-    <el-breadcrumb-item v-if="currentRoute.meta?.title">
+    <el-breadcrumb-item v-if="currentRoute.meta?.title && currentRoute.meta.title !== '首页'">
       <span class="breadcrumb-text current">{{ currentRoute.meta.title }}</span>
     </el-breadcrumb-item>
   </el-breadcrumb>

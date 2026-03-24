@@ -1,4 +1,4 @@
-﻿package repository
+package repository
 
 import (
 	"caiyun/internal/models"
@@ -48,6 +48,19 @@ func (r *AccountRepository) GetAllActive() ([]*models.Account, error) {
 	return accounts, err
 }
 
+// SearchAll 搜索所有账号（管理员用）
+func (r *AccountRepository) SearchAll(keyword string, limit int) ([]*models.Account, error) {
+	var accounts []*models.Account
+	query := r.db.Model(&models.Account{})
+
+	if keyword != "" {
+		query = query.Where("phone LIKE ? OR remark LIKE ?", "%"+keyword+"%", "%"+keyword+"%")
+	}
+
+	err := query.Limit(limit).Find(&accounts).Error
+	return accounts, err
+}
+
 // FindByUserID 根据用户ID查找所有账号
 func (r *AccountRepository) FindByUserID(userID uint) ([]*models.Account, error) {
 	var accounts []*models.Account
@@ -75,16 +88,19 @@ func (r *AccountRepository) Delete(id uint) error {
 	return r.db.Delete(&models.Account{}, id).Error
 }
 
-// List 列出账号
+// List 列出所有账号（管理员用）
 func (r *AccountRepository) List(offset, limit int) ([]*models.Account, int64, error) {
 	var accounts []*models.Account
 	var total int64
 
-	if err := r.db.Model(&models.Account{}).Count(&total).Error; err != nil {
+	// 只查询未删除的账号
+	query := r.db.Model(&models.Account{}).Where("deleted_at IS NULL")
+
+	if err := query.Count(&total).Error; err != nil {
 		return nil, 0, err
 	}
 
-	err := r.db.Preload("User").Offset(offset).Limit(limit).Find(&accounts).Error
+	err := query.Preload("User").Offset(offset).Limit(limit).Find(&accounts).Error
 	return accounts, total, err
 }
 
@@ -161,6 +177,16 @@ func (r *AccountRepository) ExistsByPhoneAndUserID(phone string, userID uint) (b
 	var count int64
 	err := r.db.Model(&models.Account{}).Where("phone = ? AND user_id = ?", phone, userID).Count(&count).Error
 	return count > 0, err
+}
+
+// FindByPhoneAndUserID 根据手机号和用户ID查找账号
+func (r *AccountRepository) FindByPhoneAndUserID(phone string, userID uint) (*models.Account, error) {
+	var account models.Account
+	err := r.db.Where("phone = ? AND user_id = ? AND deleted_at IS NULL", phone, userID).First(&account).Error
+	if err != nil {
+		return nil, err
+	}
+	return &account, nil
 }
 
 // SetActiveStatus 设置账号激活状态

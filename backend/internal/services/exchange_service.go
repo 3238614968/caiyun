@@ -2,13 +2,11 @@ package services
 
 import (
 	"caiyun/internal/constants"
-	"caiyun/internal/core/api"
 	"caiyun/internal/core/auth"
 	"caiyun/internal/models"
 	"caiyun/internal/repository"
 	"caiyun/internal/utils"
 	"caiyun/internal/ws"
-	"encoding/json"
 	"fmt"
 	"log"
 	"strconv"
@@ -25,6 +23,7 @@ type ExchangeService struct {
 	accountRepo         *repository.AccountRepository
 	configRepo          *repository.SystemConfigRepository
 	exchangeRecordRepo  *repository.ExchangeRecordRepository
+	taskLogRepo         *repository.TaskLogRepository
 	authMgr             *auth.Auth
 	tokenMgr            *TokenManager
 	hub                 *ws.Hub
@@ -37,6 +36,7 @@ func NewExchangeService(
 	accountRepo *repository.AccountRepository,
 	configRepo *repository.SystemConfigRepository,
 	exchangeRecordRepo *repository.ExchangeRecordRepository,
+	taskLogRepo *repository.TaskLogRepository,
 	authMgr *auth.Auth,
 	tokenMgr *TokenManager,
 ) *ExchangeService {
@@ -47,6 +47,7 @@ func NewExchangeService(
 		accountRepo:         accountRepo,
 		configRepo:          configRepo,
 		exchangeRecordRepo:  exchangeRecordRepo,
+		taskLogRepo:         taskLogRepo,
 		authMgr:             authMgr,
 		tokenMgr:            tokenMgr,
 		hub:                 ws.GetHub(),
@@ -73,7 +74,7 @@ func (s *ExchangeService) GetProductCategories() ([]string, error) {
 }
 
 // AddExchangeAccount 添加兑换账号
-func (s *ExchangeService) AddExchangeAccount(userID uint, accountID uint, remark string, exchangeTime1, exchangeTime2 string) (*models.ExchangeAccount, error) {
+func (s *ExchangeService) AddExchangeAccount(userID uint, accountID uint, remark string, exchangeTime1, exchangeTime2 string, productID *uint) (*models.ExchangeAccount, error) {
 	// 检查云盘账号是否存在
 	account, err := s.accountRepo.GetByID(accountID)
 	if err != nil {
@@ -103,22 +104,96 @@ func (s *ExchangeService) AddExchangeAccount(userID uint, accountID uint, remark
 		return nil, fmt.Errorf("创建兑换账号失败：%w", err)
 	}
 
+	if productID != nil && *productID > 0 {
+		if err := s.syncScheduledTaskForAccount(exchangeAccount, *productID); err != nil {
+			_ = s.exchangeAccountRepo.Delete(exchangeAccount.ID)
+			return nil, err
+		}
+	}
+
 	return exchangeAccount, nil
 }
 
 // GetExchangeAccounts 获取用户的兑换账号列表
-func (s *ExchangeService) GetExchangeAccounts(userID uint) ([]*models.ExchangeAccount, error) {
+func (s *ExchangeService) GetExchangeAccounts(userID uint, isAdmin bool) ([]*models.ExchangeAccount, error) {
+	if isAdmin {
+		return s.exchangeAccountRepo.GetAll()
+	}
 	return s.exchangeAccountRepo.GetByUserID(userID)
+}
+func (s *ExchangeService) syncScheduledTaskForAccount(exchangeAccount *models.ExchangeAccount, productID uint) error {
+	product, err := s.productRepo.GetByID(productID)
+	if err != nil {
+		return fmt.Errorf("商品不存在")
+	}
+
+	tasks, err := s.exchangeTaskRepo.GetByExchangeAccountID(exchangeAccount.ID)
+	if err != nil {
+		return fmt.Errorf("获取任务失败: %v", err)
+	}
+
+	if existingTask := findActiveScheduledTask(tasks); existingTask != nil {
+		existingTask.ProductID = product.ID
+		existingTask.PrizeID = product.PrizeID
+		existingTask.PrizeName = product.PrizedName
+		existingTask.TaskType = string(models.ExchangeTaskLongTerm)
+		if existingTask.MaxAttempts <= 0 {
+			existingTask.MaxAttempts = 10
+		}
+		if existingTask.Status == "" {
+			existingTask.Status = string(models.ExchangeTaskPending)
+		}
+		if err := s.exchangeTaskRepo.Update(existingTask); err != nil {
+			return fmt.Errorf("更新任务失败: %v", err)
+		}
+		return nil
+	}
+
+	task := &models.ExchangeTask{
+		UserID:            exchangeAccount.UserID,
+		ExchangeAccountID: exchangeAccount.ID,
+		ProductID:         product.ID,
+		PrizeID:           product.PrizeID,
+		PrizeName:         product.PrizedName,
+		TaskType:          string(models.ExchangeTaskLongTerm),
+		MaxAttempts:       10,
+		AttemptedCount:    0,
+		Status:            string(models.ExchangeTaskPending),
+		SuccessCount:      0,
+		FailCount:         0,
+	}
+
+	if err := s.exchangeTaskRepo.Create(task); err != nil {
+		return fmt.Errorf("创建预定任务失败: %v", err)
+	}
+
+	return nil
+}
+
+func findActiveScheduledTask(tasks []*models.ExchangeTask) *models.ExchangeTask {
+	for _, task := range tasks {
+		if task == nil {
+			continue
+		}
+		if task.TaskType != string(models.ExchangeTaskLongTerm) {
+			continue
+		}
+		if task.Status == string(models.ExchangeTaskPending) || task.Status == string(models.ExchangeTaskRunning) {
+			return task
+		}
+	}
+	return nil
 }
 
 // UpdateExchangeAccount 更新兑换账号配置
-func (s *ExchangeService) UpdateExchangeAccount(id uint, userID uint, remark string, exchangeTime1, exchangeTime2 string, isActive bool) error {
+func (s *ExchangeService) UpdateExchangeAccount(id uint, userID uint, isAdmin bool, remark string, exchangeTime1, exchangeTime2 string, isActive bool, productID *uint) error {
 	account, err := s.exchangeAccountRepo.GetByID(id)
 	if err != nil {
 		return fmt.Errorf("兑换账号不存在")
 	}
 
-	if account.UserID != userID {
+	// 检查权限：管理员可以修改所有账号，普通用户只能修改自己的账号
+	if !isAdmin && account.UserID != userID {
 		return fmt.Errorf("无权操作该账号")
 	}
 
@@ -126,6 +201,13 @@ func (s *ExchangeService) UpdateExchangeAccount(id uint, userID uint, remark str
 	account.ExchangeTime1 = exchangeTime1
 	account.ExchangeTime2 = exchangeTime2
 	account.IsActive = isActive
+
+	// 如果提供了新的商品ID，更新或创建对应的抢兑任务（预定模式，不检查库存）
+	if productID != nil && *productID > 0 {
+		if err := s.syncScheduledTaskForAccount(account, *productID); err != nil {
+			return err
+		}
+	}
 
 	return s.exchangeAccountRepo.Update(account)
 }
@@ -141,6 +223,16 @@ func (s *ExchangeService) DeleteExchangeAccount(id uint, userID uint) error {
 		return fmt.Errorf("无权操作该账号")
 	}
 
+	tasks, err := s.exchangeTaskRepo.GetByExchangeAccountID(account.ID)
+	if err != nil {
+		return fmt.Errorf("获取关联抢兑任务失败: %v", err)
+	}
+	for _, task := range tasks {
+		if err := s.exchangeTaskRepo.Delete(task.ID); err != nil {
+			return fmt.Errorf("删除关联抢兑任务失败: %v", err)
+		}
+	}
+
 	return s.exchangeAccountRepo.Delete(id)
 }
 
@@ -150,6 +242,14 @@ func (s *ExchangeService) CreateExchangeTask(userID uint, exchangeAccountID uint
 	product, err := s.productRepo.GetByID(productID)
 	if err != nil {
 		return nil, fmt.Errorf("商品不存在")
+	}
+
+	// 检查商品是否可抢兑
+	if !product.IsActive {
+		return nil, fmt.Errorf("商品已下架，无法抢兑")
+	}
+	if product.StockStatus != "available" || product.DailyRemainderCount <= 0 {
+		return nil, fmt.Errorf("商品已售罄，无法抢兑")
 	}
 
 	// 获取兑换账号信息
@@ -190,7 +290,10 @@ func (s *ExchangeService) CreateExchangeTask(userID uint, exchangeAccountID uint
 }
 
 // GetExchangeTasks 获取用户的抢兑任务列表
-func (s *ExchangeService) GetExchangeTasks(userID uint) ([]*models.ExchangeTask, error) {
+func (s *ExchangeService) GetExchangeTasks(userID uint, isAdmin bool) ([]*models.ExchangeTask, error) {
+	if isAdmin {
+		return s.exchangeTaskRepo.GetAll()
+	}
 	return s.exchangeTaskRepo.GetByUserID(userID)
 }
 
@@ -353,7 +456,7 @@ func (s *ExchangeService) executeSingleTask(task *models.ExchangeTask) {
 	if success {
 		log.Printf("【抢兑任务】任务 %d 执行成功，账号: %s", task.ID, accountName)
 		// 抢兑成功
-		if task.TaskType == string(models.ExchangeTaskFixed) {
+		if isSingleRunExchangeTask(task.TaskType) {
 			// 固定次数任务，检查是否达到最大次数
 			if task.AttemptedCount+1 >= task.MaxAttempts {
 				s.exchangeTaskRepo.UpdateStatus(task.ID, string(models.ExchangeTaskCompleted))
@@ -401,44 +504,7 @@ func (s *ExchangeService) shouldRetry(message string) bool {
 
 // doExchange 执行兑换请求
 func (s *ExchangeService) doExchange(account *models.ExchangeAccount, prizeID string) (bool, string, int) {
-	startTime := time.Now()
-
-	// 创建带认证的HTTP客户端
-	client, err := s.tokenMgr.CreateAuthenticatedClient(account.AccountID, account.Auth)
-	if err != nil {
-		return false, fmt.Sprintf("获取账号 Token 失败：%v", err), int(time.Since(startTime).Milliseconds())
-	}
-
-	// 调用兑换 API
-	url := utils.BuildExchangeURL(prizeID)
-	resp, err := client.Get(url, nil)
-	if err != nil {
-		return false, fmt.Sprintf("请求失败：%v", err), int(time.Since(startTime).Milliseconds())
-	}
-
-	body, err := client.ReadResponseBody(resp)
-	if err != nil {
-		return false, fmt.Sprintf("读取响应失败：%v", err), int(time.Since(startTime).Milliseconds())
-	}
-
-	execTime := int(time.Since(startTime).Milliseconds())
-
-	// 解析响应
-	var response map[string]interface{}
-	if err := json.Unmarshal([]byte(body), &response); err != nil {
-		return false, fmt.Sprintf("解析响应失败：%v", err), execTime
-	}
-
-	msg, ok := response["msg"].(string)
-	if !ok {
-		return false, "响应格式错误", execTime
-	}
-
-	if msg != "success" {
-		return false, msg, execTime
-	}
-
-	return true, "兑换成功", execTime
+	return performExchange(account, prizeID, s.tokenMgr)
 }
 
 // recordExchangeResult 记录抢兑结果
@@ -461,6 +527,16 @@ func (s *ExchangeService) recordExchangeResult(task *models.ExchangeTask, succes
 
 	s.exchangeRecordRepo.Create(record)
 	s.exchangeTaskRepo.UpdateAttempt(task.ID, success, message)
+	createExchangeSystemLog(
+		s.taskLogRepo,
+		task.UserID,
+		task.ExchangeAccount.AccountID,
+		task.PrizeName,
+		exchangeAccountName(&task.ExchangeAccount),
+		success,
+		message,
+		execTimeMs,
+	)
 }
 
 // GetExchangeConcurrency 获取抢兑并发数

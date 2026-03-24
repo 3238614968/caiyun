@@ -1,4 +1,4 @@
-﻿package http
+package http
 
 import (
 	"bytes"
@@ -106,13 +106,14 @@ func (c *Client) buildHeaders(reqURL string, customHeaders map[string]string) ma
 
 	// 根据域名设置 Authorization
 	// c.auth 存储的是纯 base64 字符串（不包含 "Basic " 前缀）
-	// 对于 caiyun/mrp 域名:
+	// 对于 caiyun/mrp/m 域名:
 	//   authorization = "Basic " + c.auth
 	//   jwttoken = jwtToken
 	// 对于其他域名:
 	//   authorization = "Basic " + c.auth
 	if strings.Contains(hostname, "caiyun.feixin.10086.cn") ||
-		strings.Contains(hostname, "mrp.mcloud.139.com") {
+		strings.Contains(hostname, "mrp.mcloud.139.com") ||
+		strings.Contains(hostname, "m.mcloud.139.com") {
 		if c.jwtToken != "" {
 			headers["jwttoken"] = c.jwtToken
 		}

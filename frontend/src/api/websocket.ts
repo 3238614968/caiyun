@@ -1,4 +1,4 @@
-﻿import { ref, type Ref } from 'vue'
+import { ref, type Ref } from 'vue'
 
 export interface WsMessage {
   type: string
@@ -27,9 +27,17 @@ class WebSocketClient {
 
     // 构建WebSocket URL
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-    const baseUrl = import.meta.env.VITE_API_BASE_URL || window.location.origin
-    const host = baseUrl.replace(/^https?:\/\//, '').replace(/\/$/, '')
-    this.url = `${protocol}//${host}/ws?token=${encodeURIComponent(this.token)}`
+    const wsUrl = import.meta.env.VITE_WS_URL || '/ws'
+    
+    // 如果配置了完整URL则使用，否则使用当前host
+    if (wsUrl.startsWith('ws://') || wsUrl.startsWith('wss://')) {
+      this.url = `${wsUrl}?token=${encodeURIComponent(this.token)}`
+    } else {
+      // 相对路径，使用当前host
+      const host = window.location.host
+      const path = wsUrl.startsWith('/') ? wsUrl : `/${wsUrl}`
+      this.url = `${protocol}//${host}${path}?token=${encodeURIComponent(this.token)}`
+    }
 
     this.doConnect()
   }

@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <el-popover
     placement="bottom-end"
     :width="400"
@@ -238,12 +238,11 @@ onMounted(() => {
     console.warn('[通知中心] 读取本地缓存失败', error)
   }
 
-  wsClient.on('task_complete', handleTaskComplete)
+  // 只监听任务汇总通知，不监听单个任务完成通知
   wsClient.on('task_summary', handleTaskSummary)
 })
 
 onUnmounted(() => {
-  wsClient.off('task_complete', handleTaskComplete)
   wsClient.off('task_summary', handleTaskSummary)
 })
 

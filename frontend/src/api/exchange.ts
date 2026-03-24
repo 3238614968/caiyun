@@ -1,4 +1,4 @@
-﻿import request from './axios'
+import request from './axios'
 
 // ==================== 类型定义 ====================
 
@@ -187,6 +187,7 @@ export interface ExchangeConfig {
   exchange_monthly_enabled: boolean
   exchange_time: string
   monthly_prize_id: string
+  immediate_exchange_enabled: boolean
 }
 
 // ==================== 请求参数 ====================
@@ -208,6 +209,7 @@ export interface UpdateExchangeAccountRequest {
   exchange_time_1?: string
   exchange_time_2?: string
   is_active?: boolean
+  product_id?: number
 }
 
 // 创建抢兑任务请求参数。
@@ -231,6 +233,7 @@ export interface UpdateExchangeConfigRequest {
   exchange_monthly_enabled?: boolean
   exchange_time?: string
   monthly_prize_id?: string
+  immediate_exchange_enabled?: boolean
 }
 
 // 抢兑记录查询参数。
@@ -375,6 +378,14 @@ export function getExchangeConfig(): Promise<ExchangeConfig> {
   })
 }
 
+// 获取抢兑配置（公开，普通用户可访问）。
+export function getExchangeConfigPublic(): Promise<{ enabled: boolean; immediate_exchange_enabled: boolean }> {
+  return request<{ enabled: boolean; immediate_exchange_enabled: boolean }>({
+    url: '/api/exchange/config',
+    method: 'get'
+  })
+}
+
 // 更新抢兑配置（管理员）。
 export function updateExchangeConfig(data: UpdateExchangeConfigRequest): Promise<SuccessResponse> {
   return request<SuccessResponse>({
@@ -408,5 +419,26 @@ export function exportExchangeRecords(params: ExportExchangeRecordsParams): Prom
     method: 'get',
     params,
     responseType: 'blob'
+  })
+}
+
+// 立即兑换请求参数。
+export interface ImmediateExchangeRequest {
+  exchange_account_id: number
+  product_id: number
+}
+
+// 立即兑换响应。
+export interface ImmediateExchangeResponse {
+  success: boolean
+  message: string
+}
+
+// 立即兑换（无需创建任务）。
+export function immediateExchange(data: ImmediateExchangeRequest): Promise<ImmediateExchangeResponse> {
+  return request<ImmediateExchangeResponse>({
+    url: '/api/exchange/immediate',
+    method: 'post',
+    data
   })
 }

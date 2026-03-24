@@ -1,4 +1,4 @@
-﻿package services
+package services
 
 import (
 	"caiyun/internal/cache"
@@ -51,7 +51,7 @@ type UpdateAccountRequest struct {
 	Remark string `json:"remark" binding:"omitempty"`
 }
 
-// CreateAccount 创建账号
+// CreateAccount 创建账号（如果当前用户已存在则更新）
 func (s *AccountService) CreateAccount(userID uint, req *CreateAccountRequest) (*models.Account, error) {
 	// 验证用户存在
 	_, err := s.userRepo.FindByID(userID)
@@ -60,15 +60,31 @@ func (s *AccountService) CreateAccount(userID uint, req *CreateAccountRequest) (
 	}
 
 	// 检查该用户是否已存在该手机号
-	exists, err := s.accountRepo.ExistsByPhoneAndUserID(req.Phone, userID)
-	if err != nil {
-		return nil, err
-	}
-	if exists {
-		return nil, ErrAccountExists
+	existingAccount, err := s.accountRepo.FindByPhoneAndUserID(req.Phone, userID)
+	if err == nil && existingAccount != nil {
+		// 已存在，更新账号信息
+		existingAccount.Auth = req.Auth
+		existingAccount.Remark = req.Remark
+		existingAccount.IsActive = true
+		existingAccount.JWTErrorCount = 0 // 重置JWT错误计数
+
+		// 尝试从 Auth 中解析 token/平台/过期时间
+		if info, err := auth.ParseToken(req.Auth); err == nil && info != nil {
+			existingAccount.Token = info.Token
+			existingAccount.ExpireAt = info.Expire
+			if info.Platform != "" {
+				existingAccount.Platform = info.Platform
+			}
+		}
+
+		if err := s.accountRepo.Update(existingAccount); err != nil {
+			return nil, err
+		}
+
+		return existingAccount, nil
 	}
 
-	// 创建账号
+	// 不存在，创建新账号
 	account := &models.Account{
 		UserID:   userID,
 		Phone:    req.Phone,

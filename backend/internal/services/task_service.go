@@ -111,15 +111,19 @@ func NewTaskRunner(account *models.Account, storage tasks.Storage, authMgr *auth
 	}
 	authMgrForJWT := auth.NewAuth(authClient)
 
-	// 获取 JWT token
+	// 获取 JWT token - 总是尝试获取最新的，因为传入的 account.JWTToken 可能已过期
 	jwtToken := account.JWTToken
-	if jwtToken == "" {
-		// 尝试通过 specToken → tyrzLogin 获取 JWT token
-		if token, err := authMgrForJWT.GetJWTToken(account.Phone); err == nil && token != "" {
-			jwtToken = token
-			lg.Info("成功获取 JWT token")
-		} else if err != nil {
-			lg.Error("获取 JWT token 失败:", err)
+	// 尝试通过 specToken → tyrzLogin 获取 JWT token
+	if token, err := authMgrForJWT.GetJWTToken(account.Phone); err == nil && token != "" {
+		jwtToken = token
+		lg.Info("成功获取 JWT token")
+		// 更新到 account 对象，以便后续使用
+		account.JWTToken = token
+	} else if err != nil {
+		lg.Error("获取 JWT token 失败:", err)
+		// 如果获取失败但已有旧 token，继续使用旧的
+		if jwtToken == "" {
+			lg.Error("没有可用的 JWT token，部分任务可能无法执行")
 		}
 	}
 	if jwtToken != "" {
@@ -138,59 +142,113 @@ func NewTaskRunner(account *models.Account, storage tasks.Storage, authMgr *auth
 	}
 }
 
+// NewTaskRunnerWithRetry 创建任务运行器（带JWT获取重试和自动禁用功能）
+func (s *TaskService) NewTaskRunnerWithRetry(account *models.Account, storage tasks.Storage, authMgr *auth.Auth, disabledTasks map[string]bool) *TaskRunner {
+	client := http.NewClient()
+	lg := logger.NewLogger(logger.LevelInfo)
+
+	// 检查 account.Auth 是否为空，空 auth 无法执行任何任务
+	if account.Auth == "" {
+		lg.Error("账号 Auth 为空，跳过认证设置")
+		return &TaskRunner{
+			account:       account,
+			httpClient:    client,
+			logger:        lg,
+			api:           api.NewCaiyunAPI(client),
+			startTime:     time.Now(),
+			storage:       storage,
+			authMgr:       authMgr,
+			disabledTasks: disabledTasks,
+		}
+	}
+
+	// 设置认证信息
+	authStr := sanitizeHeaderValue(account.Auth)
+	if authStr != "" {
+		client.SetAuth(authStr)
+	}
+
+	// 创建 auth 管理器的 HTTP 客户端（用于获取 JWT token）
+	authClient := http.NewClient()
+	if authStr != "" {
+		authClient.SetAuth(authStr)
+	}
+	authMgrForJWT := auth.NewAuth(authClient)
+
+	// 获取 JWT token - 带重试机制
+	jwtToken := account.JWTToken
+	var lastErr error
+	maxRetries := 3
+
+	for i := 0; i < maxRetries; i++ {
+		if token, err := authMgrForJWT.GetJWTToken(account.Phone); err == nil && token != "" {
+			jwtToken = token
+			lg.Info("成功获取 JWT token")
+			account.JWTToken = token
+			// 成功获取后重置错误计数
+			if account.JWTErrorCount > 0 {
+				account.JWTErrorCount = 0
+				s.accountRepo.Update(account)
+			}
+			break
+		} else {
+			lastErr = err
+			lg.Error(fmt.Sprintf("获取 JWT token 失败 (尝试 %d/%d):", i+1, maxRetries), err)
+			if i < maxRetries-1 {
+				time.Sleep(time.Second * time.Duration(i+1))
+			}
+		}
+	}
+
+	// 如果重试3次后仍然失败
+	if jwtToken == "" || lastErr != nil {
+		// 增加错误计数
+		account.JWTErrorCount++
+		lg.Error(fmt.Sprintf("JWT获取失败次数: %d/3", account.JWTErrorCount))
+
+		// 如果达到3次，禁用账号
+		if account.JWTErrorCount >= 3 {
+			account.IsActive = false
+			lg.Error(fmt.Sprintf("账号 %s JWT获取失败超过3次，已自动禁用", account.Phone))
+			// 发送WebSocket通知
+			if wsHub := ws.GetHub(); wsHub != nil {
+				wsHub.SendToUser(account.UserID, ws.Message{
+					Type: "account_disabled",
+					Data: map[string]interface{}{
+						"account_id": account.ID,
+						"phone":      account.Phone,
+						"reason":     "JWT获取失败超过3次",
+					},
+				})
+			}
+		}
+
+		// 更新账号状态到数据库
+		if err := s.accountRepo.Update(account); err != nil {
+			lg.Error("更新账号JWT错误计数失败:", err)
+		}
+	}
+
+	if jwtToken != "" {
+		client.SetJWTToken(jwtToken)
+	}
+
+	return &TaskRunner{
+		account:       account,
+		httpClient:    client,
+		logger:        lg,
+		api:           api.NewCaiyunAPI(client),
+		startTime:     time.Now(),
+		storage:       storage,
+		authMgr:       authMgr,
+		disabledTasks: disabledTasks,
+	}
+}
+
 // Run 执行所有任务
 func (r *TaskRunner) Run() []TaskResult {
-	var results []TaskResult
-
-	// 获取任务执行前的云朵数
-	r.initialCloudCount = r.getCurrentCloudCount()
-
-	// 定义任务列表（带类型标识，用于跳过下架任务）
-	type taskEntry struct {
-		taskType string
-		fn       func() *TaskResult
-	}
-
-	taskList := []taskEntry{
-		{"signin", r.runSignInTask},
-		{"tasklist", r.runTaskListTask},
-		{"wechat", r.runWeChatTask},
-		{"wxdraw", r.runWxDrawTask},
-		{"todaycloud", r.runTodayCloudTask},
-		{"invitefriends", r.runInviteFriendsTask},
-		{"shake", r.runShakeTask},
-		{"receive", r.runReceiveTask},
-		{"messagepush", r.runMessagePushTask},
-		{"backupgift", r.runBackupGiftTask},
-		{"garden", r.runGardenTask},
-		{"redpacket", r.runRedPacketTask},
-		{"aicloud", r.runAiCloudTask},
-		{"cloudbattle", r.runCloudBattleTask},
-		{"blindbox", r.runBlindBoxTask},
-		{"cloudphone", r.runCloudPhoneTask},
-	}
-
-	for _, entry := range taskList {
-		// 跳过被下架的任务
-		if r.disabledTasks[entry.taskType] {
-			results = append(results, TaskResult{
-				TaskType: entry.taskType,
-				Status:   "skipped",
-				Message:  "任务已下架",
-			})
-			continue
-		}
-		result := entry.fn()
-		results = append(results, *result)
-	}
-
-	// 执行收尾清理（参考 mjs afterTask 的临时文件/分享残留清理逻辑）
-	r.runAfterTaskCleanup()
-
-	// 获取任务执行后的云朵数
-	r.finalCloudCount = r.getCurrentCloudCount()
-
-	return results
+	// 兼容旧调用方：统一转发到注册表驱动路径，避免并行维护两套任务编排逻辑。
+	return r.RunSelected(defaultTaskCatalog.DefaultBatchCodes())
 }
 
 // getCurrentCloudCount 获取当前云朵总数（通过签到API）
@@ -843,7 +901,7 @@ func (s *TaskService) ExecuteTaskForAccount(account *models.Account) ([]TaskResu
 	}
 
 	taskCodes := resolveConfiguredTaskCodes(s.taskConfigRepo)
-	runner := NewTaskRunner(account, buildAccountScopedStorage(s.storage, account.ID), s.authMgr, nil)
+	runner := s.NewTaskRunnerWithRetry(account, buildAccountScopedStorage(s.storage, account.ID), s.authMgr, nil)
 	results := runner.RunSelected(taskCodes)
 
 	// 计算本次获得的云朵数

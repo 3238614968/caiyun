@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <div class="dashboard-container">
     <el-row :gutter="20">
       <!-- 统计卡片 -->
@@ -337,16 +337,25 @@ onUnmounted(() => {
 <style scoped>
 .dashboard-container {
   padding: 20px;
-  background: linear-gradient(135deg, #f0f9ff 0%, #e0f2fe 100%);
+  background: transparent;
   min-height: calc(100vh - 140px);
 }
 
 .stat-card {
   margin-bottom: 20px;
   border-radius: 16px;
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.05);
-  border: 1px solid rgba(255, 255, 255, 0.5);
-  background: rgba(255, 255, 255, 0.95);
+  box-shadow: 0 8px 32px rgba(59, 130, 246, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.6);
+  background: rgba(255, 255, 255, 0.7);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  transition: all 0.3s ease;
+}
+
+.stat-card:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 12px 40px rgba(59, 130, 246, 0.15);
+  background: rgba(255, 255, 255, 0.85);
 }
 
 .stat-content {
@@ -377,13 +386,13 @@ onUnmounted(() => {
 .stat-value {
   font-size: 28px;
   font-weight: bold;
-  color: #333;
+  color: #1e40af;
   margin-bottom: 4px;
 }
 
 .stat-label {
   font-size: 14px;
-  color: #666;
+  color: #3b82f6;
   margin-bottom: 4px;
 }
 
@@ -405,6 +414,8 @@ onUnmounted(() => {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  color: #1e40af;
+  font-weight: 600;
 }
 
 .quick-actions {
@@ -413,32 +424,38 @@ onUnmounted(() => {
 }
 
 :deep(.el-button--primary) {
-  background: linear-gradient(135deg, #3b82f6 0%, #0ea5e9 100%);
+  background: linear-gradient(135deg, #3b82f6 0%, #0ea5e9 50%, #06b6d4 100%);
   border: none;
-  box-shadow: 0 4px 15px rgba(59, 130, 246, 0.3);
+  box-shadow: 0 4px 15px rgba(59, 130, 246, 0.35);
+  border-radius: 10px;
 }
 
 :deep(.el-button--primary:hover) {
   background: linear-gradient(135deg, #2563eb 0%, #0284c7 100%);
-  box-shadow: 0 6px 20px rgba(59, 130, 246, 0.4);
+  box-shadow: 0 6px 20px rgba(59, 130, 246, 0.45);
+  transform: translateY(-2px);
 }
 
 :deep(.el-button--success) {
   background: linear-gradient(135deg, #10b981 0%, #34d399 100%);
   border: none;
-  box-shadow: 0 4px 15px rgba(16, 185, 129, 0.3);
+  box-shadow: 0 4px 15px rgba(16, 185, 129, 0.35);
+  border-radius: 10px;
 }
 
 :deep(.el-button--success:hover) {
   background: linear-gradient(135deg, #059669 0%, #10b981 100%);
-  box-shadow: 0 6px 20px rgba(16, 185, 129, 0.4);
+  box-shadow: 0 6px 20px rgba(16, 185, 129, 0.45);
+  transform: translateY(-2px);
 }
 
 :deep(.el-card) {
   border-radius: 16px;
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.05);
-  border: 1px solid rgba(255, 255, 255, 0.5);
-  background: rgba(255, 255, 255, 0.95);
+  box-shadow: 0 8px 32px rgba(59, 130, 246, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.6);
+  background: rgba(255, 255, 255, 0.7);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
 }
 
 :deep(.el-radio-button__original-radio:checked + .el-radio-button__inner) {

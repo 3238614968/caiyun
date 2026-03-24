@@ -2,10 +2,12 @@ package services
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
 	coretasks "caiyun/internal/core/tasks"
+	"caiyun/internal/models"
 	"caiyun/internal/repository"
 )
 
@@ -18,7 +20,49 @@ func resolveConfiguredTaskCodes(taskConfigRepo *repository.TaskConfigRepository)
 	if err != nil || len(configs) == 0 {
 		return defaultTaskCatalog.DefaultBatchCodes()
 	}
-	return defaultTaskCatalog.ResolveBatchCodes(configs)
+
+	codes := defaultTaskCatalog.ResolveBatchCodes(configs)
+	if len(codes) > 0 {
+		return codes
+	}
+
+	// 兼容旧版 task_configs 表（无 run_in_batch 列）场景：
+	// 此时 RunInBatch 全部为 false，回退为“按 is_enabled + sort_order 执行”。
+	legacyCodes := resolveLegacyEnabledCodes(configs)
+	if len(legacyCodes) > 0 {
+		return legacyCodes
+	}
+
+	return defaultTaskCatalog.DefaultBatchCodes()
+}
+
+func resolveLegacyEnabledCodes(configs []*models.TaskConfig) []string {
+	sorted := make([]*models.TaskConfig, 0, len(configs))
+	sorted = append(sorted, configs...)
+	sort.Slice(sorted, func(i, j int) bool {
+		if sorted[i].SortOrder == sorted[j].SortOrder {
+			return sorted[i].TaskType < sorted[j].TaskType
+		}
+		return sorted[i].SortOrder < sorted[j].SortOrder
+	})
+
+	result := make([]string, 0, len(sorted))
+	seen := make(map[string]bool, len(sorted))
+	for _, cfg := range sorted {
+		if cfg == nil || !cfg.IsEnabled {
+			continue
+		}
+		code := defaultTaskCatalog.Normalize(cfg.TaskType)
+		if code == "" || seen[code] {
+			continue
+		}
+		if _, ok := defaultTaskCatalog.Get(code); !ok {
+			continue
+		}
+		seen[code] = true
+		result = append(result, code)
+	}
+	return result
 }
 
 func buildAccountScopedStorage(base coretasks.Storage, accountID uint) coretasks.Storage {
@@ -32,15 +76,30 @@ func buildAccountScopedStorage(base coretasks.Storage, accountID uint) coretasks
 }
 
 func (r *TaskRunner) RunSelected(taskCodes []string) []TaskResult {
+	if len(taskCodes) == 0 {
+		taskCodes = defaultTaskCatalog.DefaultBatchCodes()
+	}
+
 	results := make([]TaskResult, 0, len(taskCodes))
 	r.initialCloudCount = r.getCurrentCloudCount()
 
 	for _, code := range taskCodes {
+		normalizedCode := defaultTaskCatalog.Normalize(code)
+		if normalizedCode == "" {
+			results = append(results, TaskResult{TaskType: code, Status: "failed", Message: "任务编码为空"})
+			continue
+		}
+
+		if r.disabledTasks != nil && r.disabledTasks[normalizedCode] {
+			results = append(results, TaskResult{TaskType: normalizedCode, Status: "skipped", Message: "任务已下架"})
+			continue
+		}
+
 		snapshot := r.logger.Snapshot()
-		result, err := defaultTaskCatalog.Execute(r, code)
+		result, err := defaultTaskCatalog.Execute(r, normalizedCode)
 		if err != nil {
 			if result == nil {
-				result = &TaskResult{TaskType: defaultTaskCatalog.Normalize(code), Status: "failed", Message: err.Error()}
+				result = &TaskResult{TaskType: normalizedCode, Status: "failed", Message: err.Error()}
 			} else {
 				result.Status = "failed"
 				if strings.TrimSpace(result.Message) == "" {
@@ -57,6 +116,10 @@ func (r *TaskRunner) RunSelected(taskCodes []string) []TaskResult {
 					result.Message = lastErr
 				}
 			}
+		}
+
+		if result == nil {
+			result = &TaskResult{TaskType: normalizedCode, Status: "failed", Message: "任务返回为空"}
 		}
 		results = append(results, *result)
 	}

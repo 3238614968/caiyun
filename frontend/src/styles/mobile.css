@@ -874,3 +874,211 @@
     }
   }
 }
+
+/* ==================== 平板与中等屏幕自适应 ==================== */
+@media screen and (max-width: 1280px) {
+  .main-content {
+    padding: 16px !important;
+  }
+
+  .el-dialog {
+    max-width: calc(100vw - 48px) !important;
+  }
+
+  .el-pagination {
+    flex-wrap: wrap !important;
+    row-gap: 8px !important;
+  }
+}
+
+/* ==================== 仪表盘平板适配 ==================== */
+@media screen and (max-width: 1280px) and (min-width: 769px) {
+  .dashboard-container {
+    padding: 16px !important;
+  }
+
+  .dashboard-container > .el-row:first-child .el-col {
+    width: 50% !important;
+    max-width: 50% !important;
+    flex: 0 0 50% !important;
+    margin-bottom: 16px !important;
+  }
+
+  .dashboard-container > .el-row:nth-child(2) .el-col {
+    width: 100% !important;
+    max-width: 100% !important;
+    flex: 0 0 100% !important;
+  }
+
+  .dashboard-container > .el-row:nth-child(2) .el-col + .el-col {
+    margin-top: 16px;
+  }
+
+  .dashboard-container .quick-actions {
+    flex-wrap: wrap;
+  }
+}
+
+/* ==================== 账号管理平板适配 ==================== */
+@media screen and (max-width: 1280px) and (min-width: 769px) {
+  .account-manage-container {
+    padding: 16px !important;
+  }
+
+  .account-manage-container .search-form {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+
+  .account-manage-container .search-form .el-form-item {
+    flex: 1 1 220px;
+    min-width: 220px;
+    margin-right: 0 !important;
+    margin-bottom: 0 !important;
+  }
+
+  .account-manage-container .search-form .el-form-item__content,
+  .account-manage-container .search-form .el-input {
+    width: 100% !important;
+  }
+
+  .account-manage-container .action-buttons {
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
+}
+
+/* ==================== 日志页平板适配 ==================== */
+@media screen and (max-width: 1280px) and (min-width: 769px) {
+  .task-logs-container {
+    padding: 16px !important;
+  }
+
+  .task-logs-container .search-form {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+
+  .task-logs-container .search-form .el-form-item {
+    flex: 1 1 220px;
+    min-width: 220px;
+    margin-right: 0 !important;
+    margin-bottom: 0 !important;
+  }
+}
+
+/* ==================== 兑换中心平板适配 ==================== */
+@media screen and (max-width: 1280px) and (min-width: 769px) {
+  .exchange-center {
+    padding: 16px !important;
+  }
+
+  .exchange-center .page-header {
+    padding: 18px !important;
+  }
+
+  .exchange-center .header-main {
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+
+  .exchange-center .stats-row {
+    gap: 12px !important;
+  }
+
+  .exchange-center .stat-item {
+    min-width: calc(50% - 6px) !important;
+  }
+}
+
+/* ==================== 抢兑记录适配 ==================== */
+@media screen and (max-width: 1280px) {
+  .exchange-records {
+    padding: 16px !important;
+  }
+
+  .exchange-records .content {
+    padding: 16px !important;
+  }
+
+  .exchange-records .filter-card .el-row {
+    display: flex;
+    flex-wrap: wrap;
+    row-gap: 4px;
+  }
+
+  .exchange-records .filter-card .el-row .el-col {
+    width: 50% !important;
+    max-width: 50% !important;
+    flex: 0 0 50% !important;
+  }
+
+  .exchange-records .filter-card .el-row .el-col:last-child {
+    width: 100% !important;
+    max-width: 100% !important;
+    flex: 0 0 100% !important;
+  }
+
+  .exchange-records .mt-4.mb-4 .el-col {
+    width: 50% !important;
+    max-width: 50% !important;
+    flex: 0 0 50% !important;
+    margin-bottom: 12px !important;
+  }
+}
+
+@media screen and (max-width: 768px) {
+  .exchange-records {
+    padding: 0 !important;
+  }
+
+  .exchange-records .content {
+    padding: 12px !important;
+  }
+
+  .exchange-records .filter-card .el-form-item__label {
+    width: auto !important;
+    padding-right: 8px !important;
+  }
+
+  .exchange-records .filter-card .el-row .el-col,
+  .exchange-records .mt-4.mb-4 .el-col {
+    width: 100% !important;
+    max-width: 100% !important;
+    flex: 0 0 100% !important;
+  }
+}
+
+/* ==================== 管理页平板适配 ==================== */
+@media screen and (max-width: 1280px) and (min-width: 769px) {
+  .admin-panel-container {
+    padding: 16px !important;
+  }
+
+  .admin-panel-container .config-card {
+    margin-bottom: 16px;
+  }
+
+  .admin-panel-container .el-col-12 {
+    width: 100% !important;
+    max-width: 100% !important;
+    flex: 0 0 100% !important;
+  }
+
+  .admin-panel-container .product-management .el-form--inline {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+
+  .admin-panel-container .product-management .el-form-item {
+    margin-right: 0 !important;
+  }
+
+  .admin-panel-container .form-options,
+  .admin-panel-container .view-meta {
+    flex-wrap: wrap;
+  }
+}
