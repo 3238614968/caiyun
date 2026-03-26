@@ -1,17 +1,18 @@
 <template>
   <div class="admin-panel-container">
-    <el-card shadow="hover">
+    <el-card shadow="hover" class="admin-shell">
       <template #header>
         <div class="card-header">
           <span>管理员面板</span>
         </div>
       </template>
 
-      <el-tabs v-model="activeTab" @tab-change="handleTabChange">
+      <el-tabs v-model="activeTab" @tab-change="handleTabChange" class="admin-tabs">
         <!-- 账号概况 -->
         <el-tab-pane label="账号概况" name="summaries">
           <div class="tab-content">
-            <el-table :data="summaryList" stripe v-loading="summaryLoading" style="width: 100%">
+            <div class="responsive-data-shell" v-loading="summaryLoading">
+<el-table v-if="!isMobile" :data="summaryList" stripe style="width: 100%">
               <el-table-column prop="phone" label="手机号" width="130" />
               <el-table-column prop="owner_username" label="所属用户" width="100" />
               <el-table-column prop="cloud_count" label="当前云朵" width="100">
@@ -55,6 +56,56 @@
               <el-table-column prop="created_at" label="添加时间" width="160" />
             </el-table>
 
+              <div v-else class="mobile-admin-list">
+                <el-empty v-if="summaryList.length === 0" description="暂无账号概况" />
+                <template v-else>
+                  <el-card
+                    v-for="row in summaryList"
+                    :key="`${row.phone}-${row.owner_username}-${row.created_at}`"
+                    class="mobile-admin-card mobile-summary-card"
+                    shadow="never"
+                  >
+                    <div class="mobile-admin-card-head">
+                      <div>
+                        <div class="mobile-admin-card-title">{{ row.phone }}</div>
+                        <div class="mobile-admin-card-meta">{{ row.owner_username || '-' }}</div>
+                      </div>
+                      <el-tag :type="row.is_active ? 'success' : 'info'" effect="light">{{ row.is_active ? '激活' : '停用' }}</el-tag>
+                    </div>
+                    <div class="mobile-admin-card-grid">
+                      <div class="mobile-admin-card-row">
+                        <span class="mobile-admin-card-label">当前云朵</span>
+                        <span class="mobile-admin-card-value strong">{{ row.cloud_count }}</span>
+                      </div>
+                      <div class="mobile-admin-card-row">
+                        <span class="mobile-admin-card-label">今日获得</span>
+                        <span class="mobile-admin-card-value success">{{ row.today_gained > 0 ? `+${row.today_gained}` : '0' }}</span>
+                      </div>
+                      <div class="mobile-admin-card-row">
+                        <span class="mobile-admin-card-label">昨日获得</span>
+                        <span class="mobile-admin-card-value">{{ row.yesterday_gained > 0 ? `+${row.yesterday_gained}` : '0' }}</span>
+                      </div>
+                      <div class="mobile-admin-card-row">
+                        <span class="mobile-admin-card-label">最后执行</span>
+                        <span class="mobile-admin-card-value">{{ row.last_executed_at || '-' }}</span>
+                      </div>
+                      <div class="mobile-admin-card-row">
+                        <span class="mobile-admin-card-label">备注</span>
+                        <span class="mobile-admin-card-value">{{ row.remark || '-' }}</span>
+                      </div>
+                      <div class="mobile-admin-card-row">
+                        <span class="mobile-admin-card-label">添加时间</span>
+                        <span class="mobile-admin-card-value">{{ row.created_at }}</span>
+                      </div>
+                    </div>
+                    <div class="mobile-admin-inline-tags">
+                      <el-tag type="success" size="small">成功 {{ row.success_count }}</el-tag>
+                      <el-tag v-if="row.failed_count > 0" type="danger" size="small">失败 {{ row.failed_count }}</el-tag>
+                    </div>
+                  </el-card>
+                </template>
+              </div>
+            </div>
             <el-pagination
               v-model:current-page="summaryPagination.page"
               v-model:page-size="summaryPagination.pageSize"
@@ -74,7 +125,8 @@
             <p style="color: #666; margin-bottom: 16px">
               下架的任务将不会被手动执行和定时任务执行。
             </p>
-            <el-table :data="taskConfigs" stripe v-loading="taskConfigLoading" style="width: 100%">
+            <div class="responsive-data-shell" v-loading="taskConfigLoading">
+<el-table v-if="!isMobile" :data="taskConfigs" stripe style="width: 100%">
               <el-table-column prop="sort_order" label="序号" width="70" />
               <el-table-column prop="task_name" label="任务名称" width="120" />
               <el-table-column prop="task_type" label="任务标识" width="140">
@@ -101,6 +153,43 @@
                 </template>
               </el-table-column>
             </el-table>
+
+              <div v-else class="mobile-admin-list">
+                <el-empty v-if="taskConfigs.length === 0" description="暂无任务配置" />
+                <template v-else>
+                  <el-card
+                    v-for="row in taskConfigs"
+                    :key="row.task_type"
+                    class="mobile-admin-card"
+                    shadow="never"
+                  >
+                    <div class="mobile-admin-card-head">
+                      <div>
+                        <div class="mobile-admin-card-title">{{ row.task_name }}</div>
+                        <div class="mobile-admin-card-meta">#{{ row.sort_order }}</div>
+                      </div>
+                      <el-tag size="small">{{ row.task_type }}</el-tag>
+                    </div>
+                    <div class="mobile-admin-card-grid">
+                      <div class="mobile-admin-card-row">
+                        <span class="mobile-admin-card-label">任务标识</span>
+                        <span class="mobile-admin-card-value">{{ row.task_type }}</span>
+                      </div>
+                      <div class="mobile-admin-card-row">
+                        <span class="mobile-admin-card-label">更新时间</span>
+                        <span class="mobile-admin-card-value">{{ formatDate(row.updated_at) }}</span>
+                      </div>
+                    </div>
+                    <div class="mobile-admin-card-footer">
+                      <div class="task-status-cell">
+                        <el-switch v-model="row.is_enabled" @change="handleTaskConfigChange(row)" />
+                        <span :class="row.is_enabled ? 'status-on' : 'status-off'">{{ row.is_enabled ? '已上架' : '已下架' }}</span>
+                      </div>
+                    </div>
+                  </el-card>
+                </template>
+              </div>
+            </div>
           </div>
         </el-tab-pane>
 
@@ -219,7 +308,8 @@
         <!-- 用户管理 -->
         <el-tab-pane label="用户管理" name="users">
           <div class="tab-content">
-            <el-table :data="userList" stripe v-loading="userLoading" style="width: 100%">
+            <div class="responsive-data-shell" v-loading="userLoading">
+<el-table v-if="!isMobile" :data="userList" stripe style="width: 100%">
               <el-table-column prop="username" label="用户名" width="150" />
               <el-table-column prop="email" label="邮箱" />
               <el-table-column prop="role" label="角色" width="120">
@@ -241,6 +331,41 @@
                 </template>
               </el-table-column>
             </el-table>
+
+              <div v-else class="mobile-admin-list">
+                <el-empty v-if="userList.length === 0" description="暂无用户数据" />
+                <template v-else>
+                  <el-card
+                    v-for="row in userList"
+                    :key="row.id"
+                    class="mobile-admin-card"
+                    shadow="never"
+                  >
+                    <div class="mobile-admin-card-head">
+                      <div>
+                        <div class="mobile-admin-card-title">{{ row.username }}</div>
+                        <div class="mobile-admin-card-meta">{{ row.email || '-' }}</div>
+                      </div>
+                      <el-tag :type="row.role === 'admin' ? 'danger' : 'primary'">{{ row.role === 'admin' ? '管理员' : '普通用户' }}</el-tag>
+                    </div>
+                    <div class="mobile-admin-card-grid">
+                      <div class="mobile-admin-card-row">
+                        <span class="mobile-admin-card-label">邮箱</span>
+                        <span class="mobile-admin-card-value">{{ row.email || '-' }}</span>
+                      </div>
+                      <div class="mobile-admin-card-row">
+                        <span class="mobile-admin-card-label">创建时间</span>
+                        <span class="mobile-admin-card-value">{{ formatDate(row.created_at) }}</span>
+                      </div>
+                    </div>
+                    <div class="mobile-admin-card-actions">
+                      <el-button type="primary" plain @click="handleEditUserRole(row)">修改角色</el-button>
+                      <el-button type="danger" plain @click="handleDeleteUser(row)">删除</el-button>
+                    </div>
+                  </el-card>
+                </template>
+              </div>
+            </div>
             <el-pagination
               v-model:current-page="userPagination.page"
               v-model:page-size="userPagination.pageSize"
@@ -284,7 +409,8 @@
                 发布公告
               </el-button>
             </div>
-            <el-table :data="announcements" stripe v-loading="announcementLoading" style="width: 100%">
+            <div class="responsive-data-shell" v-loading="announcementLoading">
+<el-table v-if="!isMobile" :data="announcements" stripe style="width: 100%">
               <el-table-column type="index" width="50" />
               <el-table-column prop="title" label="标题" min-width="200">
                 <template #default="{ row }">
@@ -315,6 +441,45 @@
                 </template>
               </el-table-column>
             </el-table>
+
+              <div v-else class="mobile-admin-list">
+                <el-empty v-if="announcements.length === 0" description="暂无公告" />
+                <template v-else>
+                  <el-card
+                    v-for="row in announcements"
+                    :key="row.id"
+                    class="mobile-admin-card"
+                    shadow="never"
+                  >
+                    <div class="mobile-admin-card-head">
+                      <div>
+                        <div class="mobile-admin-card-title">{{ row.title }}</div>
+                        <div class="mobile-admin-inline-tags">
+                          <el-tag v-if="row.is_top" type="danger" size="small" effect="dark">置顶</el-tag>
+                          <el-tag v-if="row.is_popup" type="warning" size="small">弹窗</el-tag>
+                        </div>
+                      </div>
+                      <el-tag :type="row.is_published ? 'success' : 'info'">{{ row.is_published ? '已发布' : '已下架' }}</el-tag>
+                    </div>
+                    <div class="mobile-admin-card-grid">
+                      <div class="mobile-admin-card-row">
+                        <span class="mobile-admin-card-label">创建时间</span>
+                        <span class="mobile-admin-card-value">{{ formatDate(row.created_at) }}</span>
+                      </div>
+                      <div class="mobile-admin-card-row full">
+                        <span class="mobile-admin-card-label">内容预览</span>
+                        <span class="mobile-admin-card-value multiline">{{ row.content || '-' }}</span>
+                      </div>
+                    </div>
+                    <div class="mobile-admin-card-actions">
+                      <el-button @click="viewAnnouncement(row)">查看</el-button>
+                      <el-button type="primary" @click="editAnnouncement(row)">编辑</el-button>
+                      <el-button type="danger" @click="deleteAnnouncement(row)">删除</el-button>
+                    </div>
+                  </el-card>
+                </template>
+              </div>
+            </div>
           </div>
         </el-tab-pane>
       </el-tabs>
@@ -390,7 +555,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Refresh, Plus } from '@element-plus/icons-vue'
 import { type User } from '../api/auth'
@@ -427,6 +592,12 @@ import {
 } from '../api/exchange'
 
 const activeTab = ref('summaries')
+const viewportWidth = ref(typeof window !== 'undefined' ? window.innerWidth : 1440)
+const isMobile = computed(() => viewportWidth.value <= 768)
+
+const syncViewport = () => {
+  viewportWidth.value = window.innerWidth
+}
 
 // Account summaries
 const summaryLoading = ref(false)
@@ -745,260 +916,92 @@ const deleteAnnouncement = async (row: Announcement) => {
 }
 
 onMounted(() => {
+  syncViewport()
+  window.addEventListener('resize', syncViewport)
   loadSummaries()
+})
+
+onUnmounted(() => {
+  window.removeEventListener('resize', syncViewport)
 })
 </script>
 
 <style scoped>
-.admin-panel-container {
-  padding: 20px;
-  background: linear-gradient(135deg, #f0f9ff 0%, #e0f2fe 100%);
-  min-height: calc(100vh - 140px);
-}
-.card-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-}
-.tab-content {
-  padding: 20px 0;
-}
-.config-card {
-  border-radius: 12px;
-}
-.config-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  font-weight: 600;
-}
-.product-management {
-  padding: 10px 0;
-}
-.stat-card {
-  margin-bottom: 20px;
-  border-radius: 16px;
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.05);
-  border: 1px solid rgba(255, 255, 255, 0.5);
-  background: rgba(255, 255, 255, 0.9);
-}
-.stat-content {
-  display: flex;
-  align-items: center;
-}
-.stat-icon {
-  width: 50px;
-  height: 50px;
-  border-radius: 10px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  margin-right: 12px;
-  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
-}
-.stat-icon .el-icon {
-  font-size: 28px;
-  color: white;
-}
-.stat-info .stat-value {
-  font-size: 24px;
-  font-weight: bold;
-  color: #333;
-  margin-bottom: 4px;
-}
-.stat-info .stat-label {
-  font-size: 14px;
-  color: #666;
-}
-:deep(.el-tabs__item.is-active) {
-  color: #3b82f6;
-}
-:deep(.el-tabs__active-bar) {
-  background: linear-gradient(135deg, #3b82f6 0%, #0ea5e9 100%);
-}
-.task-status-cell {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-.status-on {
-  color: #10b981;
-  font-size: 13px;
-}
-.status-off {
-  color: #ef4444;
-  font-size: 13px;
-}
-:deep(.el-card) {
-  border-radius: 16px;
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.05);
-  border: 1px solid rgba(255, 255, 255, 0.5);
-  background: rgba(255, 255, 255, 0.9);
-}
+.admin-panel-container { padding: clamp(12px, 2vw, 24px); max-width: 1680px; margin: 0 auto; }
+.admin-shell { overflow: hidden; }
+:deep(.el-card) { border-radius: 24px; box-shadow: 0 16px 42px rgba(37, 99, 235, 0.1); border: 1px solid rgba(255,255,255,.74); background: rgba(255,255,255,.88); backdrop-filter: blur(14px); }
+.card-header { display:flex; justify-content:space-between; align-items:center; gap:12px; font-size:clamp(20px,2.4vw,26px); font-weight:700; color:#0f172a; }
+.admin-tabs { margin-top: 6px; }
+.admin-tabs :deep(.el-tabs__header) { margin:0; padding-bottom:10px; }
+.admin-tabs :deep(.el-tabs__nav-wrap) { overflow-x:auto; scrollbar-width:none; }
+.admin-tabs :deep(.el-tabs__nav-wrap::-webkit-scrollbar) { display:none; }
+.admin-tabs :deep(.el-tabs__nav-scroll) { display:flex; }
+.admin-tabs :deep(.el-tabs__nav) { flex-wrap:nowrap; }
+.admin-tabs :deep(.el-tabs__item) { height:44px; padding:0 18px; font-size:15px; font-weight:600; white-space:nowrap; }
+.admin-tabs :deep(.el-tabs__item.is-active) { color:#2563eb; }
+.admin-tabs :deep(.el-tabs__active-bar) { background: linear-gradient(90deg, #2563eb, #0ea5e9); }
+.tab-content { padding: 22px 0 0; display:flex; flex-direction:column; gap:20px; }
+.tab-content > p { margin:0; line-height:1.6; }
+.config-card { height:100%; border-radius:22px; }
+.config-header { display:flex; justify-content:space-between; align-items:center; gap:12px; font-size:16px; font-weight:700; color:#0f172a; }
+.product-management { padding-top: 4px; }
+.product-management :deep(.el-form--inline) { display:flex; flex-wrap:wrap; gap:12px 16px; align-items:flex-end; }
+.product-management :deep(.el-form-item) { margin:0; }
+.product-management :deep(.el-form-item__content) { width:100%; }
+.product-management :deep(.el-select), .product-management :deep(.el-input) { width:min(100%, 280px)!important; }
+.stat-card { height:100%; margin-bottom:0; }
+.stat-content { display:flex; align-items:center; gap:14px; }
+.stat-icon { width:54px; height:54px; border-radius:16px; display:flex; align-items:center; justify-content:center; flex-shrink:0; box-shadow:0 10px 20px rgba(15,23,42,.12); }
+.stat-icon .el-icon { font-size:26px; color:#fff; }
+.stat-info { min-width:0; }
+.stat-info .stat-value { font-size:clamp(24px,2.4vw,30px); font-weight:800; color:#0f172a; }
+.stat-info .stat-label { margin-top:4px; font-size:13px; color:#64748b; }
+.task-status-cell { display:inline-flex; align-items:center; gap:8px; flex-wrap:wrap; }
+.status-on { color:#10b981; font-size:13px; font-weight:600; }
+.status-off { color:#ef4444; font-size:13px; font-weight:600; }
+.announcement-header { margin-bottom:18px; display:flex; justify-content:flex-end; }
+.title-cell { display:flex; align-items:center; gap:8px; min-width:0; }
+.title-text { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.ml-2 { margin-left:8px; }
+.form-options { display:flex; gap:14px; flex-wrap:wrap; }
+.tip-item { margin-bottom:0; }
+.view-content { padding:10px 4px 4px; }
+.view-title { font-size:20px; font-weight:700; color:#0f172a; margin:0 0 16px; line-height:1.45; }
+.view-meta { display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-bottom:20px; padding-bottom:14px; border-bottom:1px solid rgba(148,163,184,.2); }
+.view-time { color:#64748b; font-size:13px; }
+.view-body { font-size:14px; line-height:1.8; color:#475569; white-space:pre-wrap; }
+:deep(.el-table) { border-radius:18px; overflow:hidden; --el-table-border-color: rgba(148,163,184,.18); --el-table-header-bg-color: rgba(248,250,252,.9); --el-table-row-hover-bg-color: rgba(239,246,255,.72); }
+:deep(.el-table .cell) { line-height:1.45; }
+:deep(.el-table th.el-table__cell) { color:#475569; font-size:13px; font-weight:700; }
+:deep(.el-table td.el-table__cell) { color:#334155; }
+:deep(.el-pagination) { justify-content:flex-end; flex-wrap:wrap; gap:8px; }
+:deep(.el-dialog) { max-width: calc(100vw - 32px); border-radius:22px; }
+@media (max-width: 1280px) { .admin-panel-container { padding:14px; } .tab-content { gap:16px; padding-top:18px; } :deep(.el-col-12) { width:100%!important; max-width:100%!important; flex:0 0 100%!important; } :deep(.el-col-6) { width:50%!important; max-width:50%!important; flex:0 0 50%!important; } }
+@media (max-width: 768px) { .admin-panel-container { padding:0; } .card-header { font-size:20px; } .admin-tabs :deep(.el-tabs__item) { height:40px; padding:0 14px; font-size:13px; } .tab-content { padding-top:16px; gap:14px; } .announcement-header { justify-content:stretch; } .announcement-header :deep(.el-button) { width:100%; } .product-management :deep(.el-form--inline) { flex-direction:column; align-items:stretch; } .product-management :deep(.el-select), .product-management :deep(.el-input), .product-management :deep(.el-button) { width:100%!important; } .task-status-cell { align-items:flex-start; } .form-options { flex-direction:column; gap:10px; } .view-title { font-size:18px; } :deep(.el-col-6) { width:50%!important; max-width:50%!important; flex:0 0 50%!important; } :deep(.el-pagination) { justify-content:center; } }
+@media (max-width: 520px) { :deep(.el-col-6) { width:100%!important; max-width:100%!important; flex:0 0 100%!important; } }
 
-/* 移动端响应式优化 */
+.responsive-data-shell { min-height: 120px; }
+.mobile-admin-list { display: grid; gap: 12px; }
+.mobile-admin-card { border-radius: 18px; border: 1px solid rgba(226, 232, 240, 0.9); background: rgba(255, 255, 255, 0.94); box-shadow: 0 14px 28px rgba(37, 99, 235, 0.08); }
+.mobile-admin-card :deep(.el-card__body) { padding: 16px; }
+.mobile-admin-card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+.mobile-admin-card-title { font-size: 15px; font-weight: 700; color: #0f172a; line-height: 1.4; word-break: break-word; }
+.mobile-admin-card-meta { margin-top: 4px; font-size: 12px; color: #64748b; }
+.mobile-admin-card-grid { display: grid; gap: 10px; }
+.mobile-admin-card-row { display: grid; grid-template-columns: 84px minmax(0, 1fr); gap: 10px; align-items: start; }
+.mobile-admin-card-row.full { grid-template-columns: 1fr; }
+.mobile-admin-card-label { font-size: 12px; color: #64748b; font-weight: 600; }
+.mobile-admin-card-value { font-size: 13px; color: #334155; word-break: break-word; }
+.mobile-admin-card-value.strong { font-weight: 700; color: #2563eb; }
+.mobile-admin-card-value.success { color: #059669; font-weight: 600; }
+.mobile-admin-card-value.multiline { line-height: 1.6; }
+.mobile-admin-inline-tags { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.mobile-admin-card-footer { margin-top: 14px; padding-top: 12px; border-top: 1px solid rgba(226, 232, 240, 0.8); }
+.mobile-admin-card-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+.mobile-admin-card-actions :deep(.el-button) { flex: 1 1 120px; margin: 0; }
 @media (max-width: 768px) {
-  .admin-panel-container {
-    padding: 12px;
-    min-height: calc(100vh - 100px);
-  }
-
-  .tab-content {
-    padding: 12px 0;
-  }
-
-  /* 配置卡片改为单列 */
-  :deep(.el-col-12) {
-    width: 100% !important;
-    margin-bottom: 16px;
-  }
-
-  /* 统计卡片改为2列 */
-  :deep(.el-col-6) {
-    width: 50% !important;
-    margin-bottom: 12px;
-  }
-
-  .stat-card {
-    margin-bottom: 12px;
-  }
-
-  .stat-content {
-    flex-direction: column;
-    text-align: center;
-    gap: 8px;
-  }
-
-  .stat-icon {
-    margin-right: 0;
-    width: 40px;
-    height: 40px;
-  }
-
-  .stat-icon .el-icon {
-    font-size: 22px;
-  }
-
-  .stat-info .stat-value {
-    font-size: 20px;
-  }
-
-  .stat-info .stat-label {
-    font-size: 12px;
-  }
-
-  /* 表格横向滚动 */
-  :deep(.el-table) {
-    font-size: 13px;
-  }
-
-  :deep(.el-table .cell) {
-    padding: 8px 4px;
-  }
-
-  /* 分页器优化 */
-  :deep(.el-pagination) {
-    justify-content: center;
-    flex-wrap: wrap;
-    gap: 8px;
-  }
-
-  /* 表单项优化 */
-  :deep(.el-form-item__label) {
-    float: none;
-    display: block;
-    text-align: left;
-    margin-bottom: 4px;
-  }
-
-  :deep(.el-form-item__content) {
-    margin-left: 0 !important;
-  }
-
-  /* 按钮组优化 */
-  .product-management :deep(.el-form--inline) {
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
-  }
-
-  .product-management :deep(.el-form-item) {
-    margin-right: 0;
-    margin-bottom: 0;
-  }
-
-  .product-management :deep(.el-form-item__content) {
-    width: 100%;
-  }
-
-  .product-management :deep(.el-select) {
-    width: 100% !important;
-  }
-}
-
-/* 公告管理样式 */
-.announcement-header {
-  margin-bottom: 20px;
-  display: flex;
-  justify-content: flex-end;
-}
-
-.title-cell {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.title-text {
-  flex: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.ml-2 {
-  margin-left: 8px;
-}
-
-.form-options {
-  display: flex;
-  gap: 16px;
-}
-
-.tip-item {
-  margin-bottom: 0;
-}
-
-.view-content {
-  padding: 10px;
-}
-
-.view-title {
-  font-size: 18px;
-  font-weight: 600;
-  color: #303133;
-  margin: 0 0 16px 0;
-  line-height: 1.4;
-}
-
-.view-meta {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-bottom: 20px;
-  padding-bottom: 16px;
-  border-bottom: 1px solid #e4e7ed;
-}
-
-.view-time {
-  color: #909399;
-  font-size: 13px;
-}
-
-.view-body {
-  font-size: 14px;
-  line-height: 1.8;
-  color: #606266;
-  white-space: pre-wrap;
+  .responsive-data-shell :deep(.el-table) { display: none; }
+  .mobile-admin-card-row { grid-template-columns: 78px minmax(0, 1fr); }
 }
 </style>
+

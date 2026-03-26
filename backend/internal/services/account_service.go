@@ -61,14 +61,17 @@ func (s *AccountService) CreateAccount(userID uint, req *CreateAccountRequest) (
 
 	// 检查该用户是否已存在该手机号
 	existingAccount, err := s.accountRepo.FindByPhoneAndUserID(req.Phone, userID)
-	if err == nil && existingAccount != nil {
+	if err != nil {
+		return nil, err
+	}
+	if existingAccount != nil {
 		// 已存在，更新账号信息
 		existingAccount.Auth = req.Auth
 		existingAccount.Remark = req.Remark
 		existingAccount.IsActive = true
-		existingAccount.JWTErrorCount = 0 // 重置JWT错误计数
+		existingAccount.JWTErrorCount = 0 // 重置 JWT 错误计数
 
-		// 尝试从 Auth 中解析 token/平台/过期时间
+		// 尝试从 Auth 中解析 token、平台和过期时间
 		if info, err := auth.ParseToken(req.Auth); err == nil && info != nil {
 			existingAccount.Token = info.Token
 			existingAccount.ExpireAt = info.Expire
@@ -94,7 +97,7 @@ func (s *AccountService) CreateAccount(userID uint, req *CreateAccountRequest) (
 		IsActive: true,
 	}
 
-	// 尝试从 Auth 中解析 token/平台/过期时间，避免首次使用时 token 为空导致刷新失败
+	// 尝试从 Auth 中解析 token、平台和过期时间，避免首次使用时 token 为空导致刷新失败
 	if info, err := auth.ParseToken(req.Auth); err == nil && info != nil {
 		account.Token = info.Token
 		account.ExpireAt = info.Expire
@@ -110,7 +113,6 @@ func (s *AccountService) CreateAccount(userID uint, req *CreateAccountRequest) (
 	return account, nil
 }
 
-// GetAccount 获取账号详情（带权限检查）
 func (s *AccountService) GetAccount(userID, accountID uint) (*models.Account, error) {
 	account, err := s.accountRepo.FindByID(accountID)
 	if err != nil {

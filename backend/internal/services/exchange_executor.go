@@ -7,10 +7,11 @@ import (
 	"caiyun/internal/utils"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 )
 
-// performExchange 统一封装抢兑请求，避免 API 手动执行与定时调度走两套 HTTP 逻辑。
+// performExchange wraps the exchange HTTP request for both manual and scheduled flows.
 func performExchange(account *models.ExchangeAccount, prizeID string, tokenMgr *TokenManager) (bool, string, int) {
 	startTime := time.Now()
 
@@ -51,19 +52,107 @@ func performExchange(account *models.ExchangeAccount, prizeID string, tokenMgr *
 	}
 
 	execTime := int(time.Since(startTime).Milliseconds())
+	statusCode := 0
+	if resp != nil {
+		statusCode = resp.StatusCode
+	}
+
+	if statusCode >= 400 {
+		return false, fmt.Sprintf("请求返回异常 | http_status=%d | body=%s", statusCode, summarizeExchangeBody(body)), execTime
+	}
 
 	var response map[string]interface{}
 	if err := json.Unmarshal([]byte(body), &response); err != nil {
-		return false, fmt.Sprintf("解析响应失败：%v", err), execTime
+		return false, fmt.Sprintf("解析响应失败：%v | http_status=%d | body=%s", err, statusCode, summarizeExchangeBody(body)), execTime
 	}
 
-	msg, ok := response["msg"].(string)
-	if !ok {
-		return false, "响应格式错误", execTime
+	msg := firstResponseValue(response, "msg", "message")
+	if msg == "" {
+		return false, fmt.Sprintf("响应格式错误 | http_status=%d | body=%s", statusCode, summarizeExchangeBody(body)), execTime
 	}
 	if msg != "success" {
-		return false, msg, execTime
+		return false, buildExchangeFailureMessage(statusCode, response, body), execTime
 	}
 
 	return true, "兑换成功", execTime
+}
+
+func buildExchangeFailureMessage(statusCode int, response map[string]interface{}, body string) string {
+	msg := firstResponseValue(response, "msg", "message", "desc", "resultMsg")
+	if msg == "" {
+		msg = "兑换失败"
+	}
+
+	parts := []string{msg}
+	if statusCode > 0 {
+		parts = append(parts, fmt.Sprintf("http_status=%d", statusCode))
+	}
+
+	appendField := func(label string, keys ...string) {
+		value := firstResponseValue(response, keys...)
+		if value == "" || value == msg {
+			return
+		}
+		parts = append(parts, fmt.Sprintf("%s=%s", label, value))
+	}
+
+	appendField("code", "code")
+	appendField("result_code", "resultCode", "result_code")
+	appendField("result", "result")
+	appendField("desc", "desc")
+	appendField("sub_msg", "subMsg", "sub_msg")
+	appendField("trace_id", "traceId", "trace_id")
+
+	if compactBody := summarizeExchangeBody(body); compactBody != "" {
+		parts = append(parts, fmt.Sprintf("body=%s", compactBody))
+	}
+
+	return strings.Join(parts, " | ")
+}
+
+func firstResponseValue(response map[string]interface{}, keys ...string) string {
+	for _, key := range keys {
+		value, ok := response[key]
+		if !ok {
+			continue
+		}
+		text := stringifyExchangeValue(value)
+		if text != "" {
+			return text
+		}
+	}
+	return ""
+}
+
+func stringifyExchangeValue(value interface{}) string {
+	switch v := value.(type) {
+	case nil:
+		return ""
+	case string:
+		return strings.TrimSpace(v)
+	case float64:
+		if v == float64(int64(v)) {
+			return fmt.Sprintf("%d", int64(v))
+		}
+		return fmt.Sprintf("%v", v)
+	case bool:
+		if v {
+			return "true"
+		}
+		return "false"
+	default:
+		return strings.TrimSpace(fmt.Sprintf("%v", v))
+	}
+}
+
+func summarizeExchangeBody(body string) string {
+	compact := strings.Join(strings.Fields(body), " ")
+	if compact == "" {
+		return "-"
+	}
+	const limit = 180
+	if len(compact) <= limit {
+		return compact
+	}
+	return compact[:limit] + "..."
 }

@@ -179,12 +179,16 @@ func (r *AccountRepository) ExistsByPhoneAndUserID(phone string, userID uint) (b
 	return count > 0, err
 }
 
-// FindByPhoneAndUserID 根据手机号和用户ID查找账号
+// FindByPhoneAndUserID 根据手机号和用户 ID 查找账号
+// 未找到时返回 (nil, nil)，避免正常分支触发 record not found 日志。
 func (r *AccountRepository) FindByPhoneAndUserID(phone string, userID uint) (*models.Account, error) {
 	var account models.Account
-	err := r.db.Where("phone = ? AND user_id = ? AND deleted_at IS NULL", phone, userID).First(&account).Error
-	if err != nil {
-		return nil, err
+	tx := r.db.Where("phone = ? AND user_id = ? AND deleted_at IS NULL", phone, userID).Limit(1).Find(&account)
+	if tx.Error != nil {
+		return nil, tx.Error
+	}
+	if tx.RowsAffected == 0 {
+		return nil, nil
 	}
 	return &account, nil
 }

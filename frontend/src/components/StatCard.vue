@@ -2,7 +2,7 @@
   <el-card shadow="hover" class="stat-card">
     <div class="stat-content">
       <div class="stat-icon" :style="{ background: gradientColor }">
-        <el-icon :size="32" color="#fff">
+        <el-icon :size="30" color="#fff">
           <component :is="icon" />
         </el-icon>
       </div>
@@ -38,7 +38,7 @@ const props = withDefaults(defineProps<Props>(), {
 
 const gradientColor = computed(() => {
   const colors: Record<string, string> = {
-    blue: 'linear-gradient(135deg, #3b82f6 0%, #0ea5e9 100%)',
+    blue: 'linear-gradient(135deg, #2563eb 0%, #0ea5e9 100%)',
     green: 'linear-gradient(135deg, #10b981 0%, #34d399 100%)',
     orange: 'linear-gradient(135deg, #f59e0b 0%, #fbbf24 100%)',
     red: 'linear-gradient(135deg, #ef4444 0%, #f87171 100%)',
@@ -58,50 +58,54 @@ const formattedValue = computed(() => {
 
 <style scoped>
 .stat-card {
-  border-radius: 16px;
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.05);
-  border: 1px solid rgba(255, 255, 255, 0.5);
-  backdrop-filter: blur(10px);
+  height: 100%;
+  border-radius: 22px;
+  box-shadow: 0 14px 30px rgba(37, 99, 235, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.72);
+  backdrop-filter: blur(14px);
   background: rgba(255, 255, 255, 0.9);
 }
 
 .stat-content {
   display: flex;
   align-items: center;
+  gap: 14px;
 }
 
 .stat-icon {
-  width: 60px;
-  height: 60px;
-  border-radius: 12px;
+  width: 58px;
+  height: 58px;
+  border-radius: 16px;
   display: flex;
   align-items: center;
   justify-content: center;
-  margin-right: 16px;
-  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
+  flex-shrink: 0;
+  box-shadow: 0 12px 24px rgba(15, 23, 42, 0.12);
 }
 
 .stat-info {
-  flex: 1;
+  min-width: 0;
 }
 
 .stat-value {
-  font-size: 28px;
-  font-weight: bold;
-  color: #333;
-  margin-bottom: 4px;
+  font-size: clamp(24px, 3vw, 30px);
+  font-weight: 800;
+  color: #0f172a;
+  line-height: 1.05;
 }
 
 .stat-label {
+  margin-top: 6px;
   font-size: 14px;
-  color: #666;
-  margin-bottom: 4px;
+  color: #64748b;
 }
 
 .stat-diff {
+  margin-top: 6px;
   font-size: 12px;
-  display: flex;
+  display: inline-flex;
   align-items: center;
+  gap: 4px;
 }
 
 .stat-diff.positive {
@@ -110,5 +114,29 @@ const formattedValue = computed(() => {
 
 .stat-diff.negative {
   color: #ef4444;
+}
+
+@media (max-width: 768px) {
+  .stat-card {
+    border-radius: 18px;
+  }
+
+  .stat-content {
+    gap: 12px;
+  }
+
+  .stat-icon {
+    width: 48px;
+    height: 48px;
+    border-radius: 14px;
+  }
+
+  .stat-value {
+    font-size: 22px;
+  }
+
+  .stat-label {
+    font-size: 13px;
+  }
 }
 </style>

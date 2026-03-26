@@ -100,46 +100,49 @@ func (s *ExchangeScheduler) checkAndPrepareExchange() {
 
 // prepareQueueByTime 根据指定时间准备抢兑队列
 func (s *ExchangeScheduler) prepareQueueByTime(hour, minute int) {
-	// 获取该时间点的任务
+	slot := fmt.Sprintf("%02d:%02d", hour, minute)
+
+	// Load tasks for the target slot.
 	tasks, err := s.exchangeTaskRepo.GetTasksByTime(hour, minute)
 	if err != nil {
-		log.Printf("【抢兑调度器】获取 %02d:%02d 抢兑任务失败: %v", hour, minute, err)
+		log.Printf("【抢兑调度器】获取 %s 抢兑任务失败: %v", slot, err)
 		return
 	}
 
-	log.Printf("【抢兑调度器】查询 %02d:%02d 找到 %d 个任务", hour, minute, len(tasks))
+	log.Printf("【抢兑调度器】查询 %s 找到 %d 个任务", slot, len(tasks))
 
 	if len(tasks) == 0 {
 		return
 	}
 
+	s.logQueuedTasks(slot, tasks)
+	s.preheatAccountsForTasks(slot, tasks)
+
 	s.queueMutex.Lock()
-	// 将任务添加到队列（合并到morningQueue统一处理）
+	// Merge into the shared in-memory queue.
 	s.morningQueue = mergeExchangeTasks(s.morningQueue, tasks)
 	s.queueMutex.Unlock()
 
-	log.Printf("【抢兑调度器】%02d:%02d 抢兑队列已准备，共 %d 个任务", hour, minute, len(tasks))
+	log.Printf("【抢兑调度器】%s 抢兑队列已准备，共 %d 个任务", slot, len(tasks))
 
-	// 发送WebSocket通知
 	s.hub.Broadcast(ws.Message{
 		Type: "exchange_preparing",
 		Data: map[string]interface{}{
-			"time":    fmt.Sprintf("%02d:%02d", hour, minute),
+			"time":    slot,
 			"count":   len(tasks),
-			"message": fmt.Sprintf("%02d:%02d 抢兑即将开始，共%d个任务准备就绪", hour, minute, len(tasks)),
+			"message": fmt.Sprintf("%s 抢兑即将开始，共%d个任务准备就绪", slot, len(tasks)),
 		},
 	})
 }
 
-// executeExchangeByTime 根据指定时间执行抢兑
 func (s *ExchangeScheduler) executeExchangeByTime(hour, minute int) {
+	slot := fmt.Sprintf("%02d:%02d", hour, minute)
+
 	s.queueMutex.Lock()
-	// 从队列中筛选出当前时间需要执行的任务
 	var tasksToExecute []*models.ExchangeTask
 	var remainingTasks []*models.ExchangeTask
 
 	for _, task := range s.morningQueue {
-		// 检查任务是否匹配当前时间
 		et1 := task.ExchangeAccount.ExchangeTime1
 		et2 := task.ExchangeAccount.ExchangeTime2
 		timeStr := fmt.Sprintf("%02d:%02d:00", hour, minute)
@@ -158,7 +161,7 @@ func (s *ExchangeScheduler) executeExchangeByTime(hour, minute int) {
 		var err error
 		tasksToExecute, err = s.exchangeTaskRepo.GetTasksByTime(hour, minute)
 		if err != nil {
-			log.Printf("【抢兑调度器】补查 %02d:%02d 抢兑任务失败: %v", hour, minute, err)
+			log.Printf("【抢兑调度器】补查 %s 抢兑任务失败: %v", slot, err)
 			return
 		}
 		if len(tasksToExecute) == 0 {
@@ -166,8 +169,139 @@ func (s *ExchangeScheduler) executeExchangeByTime(hour, minute int) {
 		}
 	}
 
-	log.Printf("【抢兑调度器】开始执行 %02d:%02d 抢兑，共 %d 个任务", hour, minute, len(tasksToExecute))
-	go s.executeExchangeWithAutoSwitch(tasksToExecute, fmt.Sprintf("%02d:%02d", hour, minute))
+	log.Printf("【抢兑调度器】开始执行 %s 抢兑，共 %d 个任务", slot, len(tasksToExecute))
+	go s.executeExchangeWithAutoSwitch(tasksToExecute, slot)
+}
+
+func (s *ExchangeScheduler) logQueuedTasks(slot string, tasks []*models.ExchangeTask) {
+	for _, task := range tasks {
+		if task == nil {
+			continue
+		}
+
+		accountName := exchangeAccountName(&task.ExchangeAccount)
+		if accountName == "" {
+			accountName = fmt.Sprintf("exchange-account-%d", task.ExchangeAccountID)
+		}
+
+		log.Printf(
+			"【抢兑调度器】%s 队列任务: task=%d, 账号=%s, exchange_account=%d, account=%d, 商品=%s(%s), 抢兑时间=%s/%s",
+			slot,
+			task.ID,
+			accountName,
+			task.ExchangeAccountID,
+			task.ExchangeAccount.AccountID,
+			task.PrizeName,
+			task.PrizeID,
+			task.ExchangeAccount.ExchangeTime1,
+			task.ExchangeAccount.ExchangeTime2,
+		)
+	}
+}
+
+func (s *ExchangeScheduler) preheatAccountsForTasks(slot string, tasks []*models.ExchangeTask) {
+	if s.tokenMgr == nil || len(tasks) == 0 {
+		return
+	}
+
+	uniqueAccounts := make(map[uint]models.ExchangeAccount)
+	for _, task := range tasks {
+		if task == nil {
+			continue
+		}
+		if task.ExchangeAccount.AccountID == 0 {
+			log.Printf("【抢兑调度器】%s 预热跳过: task=%d, exchange_account=%d 缺少云盘账号 ID", slot, task.ID, task.ExchangeAccountID)
+			continue
+		}
+		if _, exists := uniqueAccounts[task.ExchangeAccount.AccountID]; exists {
+			continue
+		}
+		uniqueAccounts[task.ExchangeAccount.AccountID] = task.ExchangeAccount
+	}
+
+	if len(uniqueAccounts) == 0 {
+		return
+	}
+
+	limit := s.getConfiguredConcurrency()
+	if limit <= 0 {
+		limit = 1
+	}
+	if limit > 10 {
+		limit = 10
+	}
+
+	log.Printf("【抢兑调度器】%s 开始预热 JWT，共 %d 个云盘账号，预热并发 %d", slot, len(uniqueAccounts), limit)
+
+	limiter := make(chan struct{}, limit)
+	var wg sync.WaitGroup
+	var resultMu sync.Mutex
+	successCount := 0
+	failureCount := 0
+
+	for accountID, exchangeAccount := range uniqueAccounts {
+		accountID := accountID
+		exchangeAccount := exchangeAccount
+
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+
+			accountName := exchangeAccountName(&exchangeAccount)
+			if accountName == "" {
+				accountName = fmt.Sprintf("account-%d", accountID)
+			}
+
+			limiter <- struct{}{}
+			start := time.Now()
+			tokenInfo, err := s.tokenMgr.GetToken(accountID)
+			elapsed := time.Since(start).Milliseconds()
+			<-limiter
+
+			if err != nil {
+				log.Printf("【抢兑调度器】%s JWT 预热失败: 账号=%s, account=%d, 原因=%v, 耗时=%dms", slot, accountName, accountID, err, elapsed)
+				resultMu.Lock()
+				failureCount++
+				resultMu.Unlock()
+				return
+			}
+
+			if tokenInfo == nil || tokenInfo.JWTToken == "" {
+				reason := "JWT 为空"
+				if tokenInfo != nil && tokenInfo.ErrorMsg != "" {
+					reason = tokenInfo.ErrorMsg
+				}
+				log.Printf("【抢兑调度器】%s JWT 预热失败: 账号=%s, account=%d, 原因=%s, 耗时=%dms", slot, accountName, accountID, reason, elapsed)
+				resultMu.Lock()
+				failureCount++
+				resultMu.Unlock()
+				return
+			}
+
+			log.Printf(
+				"【抢兑调度器】%s JWT 预热完成: 账号=%s, account=%d, 状态=%s, 过期时间=%s, 耗时=%dms",
+				slot,
+				accountName,
+				accountID,
+				tokenInfo.HealthStatus,
+				formatExchangeWarmupExpiry(tokenInfo.ExpiresAt),
+				elapsed,
+			)
+			resultMu.Lock()
+			successCount++
+			resultMu.Unlock()
+		}()
+	}
+
+	wg.Wait()
+	log.Printf("【抢兑调度器】%s JWT 预热完成，成功 %d/%d 个云盘账号，失败 %d 个", slot, successCount, len(uniqueAccounts), failureCount)
+}
+
+func formatExchangeWarmupExpiry(expiresAt time.Time) string {
+	if expiresAt.IsZero() {
+		return "-"
+	}
+	return expiresAt.Format("2006-01-02 15:04:05")
 }
 
 // prepareMorningQueue 准备上午抢兑队列
@@ -323,29 +457,34 @@ func (s *ExchangeScheduler) groupTasksByProduct(tasks []*models.ExchangeTask) ma
 func (s *ExchangeScheduler) executeProductGroup(prizeID string, tasks []*models.ExchangeTask, limiter chan struct{}) {
 	log.Printf("【抢兑调度器】开始抢兑商品 %s，共 %d 个账号", prizeID, len(tasks))
 
-	// 用于控制是否停止抢兑的标记
 	var stopFlag sync.Map
 	stopFlag.Store(prizeID, false)
 
-	// 用于记录成功状态的映射
 	successMap := make(map[uint]bool)
+	failureReasons := make(map[string]int)
 	var successMutex sync.Mutex
+	var reasonMutex sync.Mutex
 	var wg sync.WaitGroup
 
 	for _, task := range tasks {
 		if task == nil {
 			continue
 		}
-		task := task // 捕获循环变量
+		task := task
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			// 检查是否需要停止
+
+			accountName := exchangeAccountName(&task.ExchangeAccount)
+			if accountName == "" {
+				accountName = fmt.Sprintf("exchange-account-%d", task.ExchangeAccountID)
+			}
+
 			if shouldStop, _ := stopFlag.Load(prizeID); shouldStop.(bool) {
+				log.Printf("【抢兑调度器】任务 %d 跳过执行，商品 %s 已收到停止信号", task.ID, prizeID)
 				return
 			}
 
-			// 检查该任务是否已经成功
 			successMutex.Lock()
 			if successMap[task.ID] {
 				successMutex.Unlock()
@@ -353,69 +492,119 @@ func (s *ExchangeScheduler) executeProductGroup(prizeID string, tasks []*models.
 			}
 			successMutex.Unlock()
 
+			if task.Product.ID > 0 {
+				log.Printf(
+					"【抢兑调度器】任务 %d 开始抢兑: 账号=%s, exchange_account=%d, account=%d, 商品=%s(%s), 本地快照 active=%t, stock=%s, remain=%d",
+					task.ID,
+					accountName,
+					task.ExchangeAccountID,
+					task.ExchangeAccount.AccountID,
+					task.PrizeName,
+					task.PrizeID,
+					task.Product.IsActive,
+					task.Product.StockStatus,
+					task.Product.DailyRemainderCount,
+				)
+			} else {
+				log.Printf(
+					"【抢兑调度器】任务 %d 开始抢兑: 账号=%s, exchange_account=%d, account=%d, 商品=%s(%s)",
+					task.ID,
+					accountName,
+					task.ExchangeAccountID,
+					task.ExchangeAccount.AccountID,
+					task.PrizeName,
+					task.PrizeID,
+				)
+			}
+
 			limiter <- struct{}{}
-			// 执行抢兑
 			success, message, execTime := s.executeTask(task)
 			<-limiter
 
 			if success {
-				// 抢兑成功，记录成功状态
 				successMutex.Lock()
 				successMap[task.ID] = true
 				successMutex.Unlock()
 
-				log.Printf("【抢兑调度器】任务 %d 抢兑成功，账号: %d，商品: %s",
-					task.ID, task.ExchangeAccountID, task.PrizeName)
-
-				// 继续执行下一个账号（自动切换）
-				// 注意：这里不停止，继续尝试其他账号
+				log.Printf(
+					"【抢兑调度器】任务 %d 抢兑成功: 账号=%s, exchange_account=%d, account=%d, 商品=%s(%s), 耗时=%dms, 结果=%s",
+					task.ID,
+					accountName,
+					task.ExchangeAccountID,
+					task.ExchangeAccount.AccountID,
+					task.PrizeName,
+					task.PrizeID,
+					execTime,
+					message,
+				)
 			} else {
-				// 检查是否需要停止抢兑
-				if s.shouldStopExchange(message) {
-					log.Printf("【抢兑调度器】商品 %s 抢兑停止，原因: %s", prizeID, message)
+				reason := message
+				if reason == "" {
+					reason = "未知错误"
+				}
+
+				reasonMutex.Lock()
+				failureReasons[reason]++
+				reasonMutex.Unlock()
+
+				log.Printf(
+					"【抢兑调度器】任务 %d 抢兑失败: 账号=%s, exchange_account=%d, account=%d, 商品=%s(%s), 原因=%s, 耗时=%dms",
+					task.ID,
+					accountName,
+					task.ExchangeAccountID,
+					task.ExchangeAccount.AccountID,
+					task.PrizeName,
+					task.PrizeID,
+					reason,
+					execTime,
+				)
+
+				if s.shouldStopExchange(reason) {
+					log.Printf("【抢兑调度器】商品 %s 抢兑停止，原因: %s", prizeID, reason)
 					stopFlag.Store(prizeID, true)
 				}
 			}
 
-			// 记录结果
 			s.finalizeTaskResult(task, success, message, execTime)
 		}()
 	}
 
 	wg.Wait()
 
-	// 统计结果
 	successCount := 0
 	for _, success := range successMap {
 		if success {
 			successCount++
 		}
 	}
+	failureCount := len(tasks) - successCount
 
-	log.Printf("【抢兑调度器】商品 %s 抢兑完成，成功 %d/%d 个账号", prizeID, successCount, len(tasks))
+	log.Printf("【抢兑调度器】商品 %s 抢兑完成，成功 %d/%d 个账号，失败 %d 个账号", prizeID, successCount, len(tasks), failureCount)
+	for reason, count := range failureReasons {
+		log.Printf("【抢兑调度器】商品 %s 失败原因统计: %s x%d", prizeID, reason, count)
+	}
 }
 
-// executeTask 执行单个抢兑任务
 func (s *ExchangeScheduler) executeTask(task *models.ExchangeTask) (bool, string, int) {
 	s.exchangeTaskRepo.UpdateStatus(task.ID, string(models.ExchangeTaskRunning))
 
-	// 检查商品是否可抢兑（通过任务预加载的商品信息）
-	if task.Product.ID > 0 {
-		if !task.Product.IsActive {
-			return false, "商品已下架，无法抢兑", 0
-		}
-		if task.Product.StockStatus != "available" || task.Product.DailyRemainderCount <= 0 {
-			return false, "商品已售罄，无法抢兑", 0
-		}
+	// Product snapshots loaded before the refresh window may be stale.
+	// Keep the snapshot for diagnostics, but always call the real exchange API.
+	if task.Product.ID > 0 && (!task.Product.IsActive || task.Product.StockStatus != "available" || task.Product.DailyRemainderCount <= 0) {
+		log.Printf(
+			"【抢兑调度器】任务 %d 本地商品快照显示可能不可抢兑: active=%t, stock=%s, remain=%d；仍继续请求，以实时接口结果为准",
+			task.ID,
+			task.Product.IsActive,
+			task.Product.StockStatus,
+			task.Product.DailyRemainderCount,
+		)
 	}
 
-	// 获取兑换账号
 	account, err := s.exchangeAccountRepo.GetByID(task.ExchangeAccountID)
 	if err != nil {
-		return false, "获取兑换账号失败", 0
+		return false, fmt.Sprintf("获取兑换账号失败: %v", err), 0
 	}
 
-	// 检查账号是否启用
 	if !account.IsActive {
 		return false, "账号已禁用", 0
 	}

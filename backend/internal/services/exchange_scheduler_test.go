@@ -1,12 +1,13 @@
 package services
 
 import (
+	"caiyun/internal/constants"
 	"testing"
 	"time"
 )
 
 func TestScheduledPrepareSlotUsesNextMinute(t *testing.T) {
-	now := time.Date(2026, 3, 17, 9, 59, 57, 0, time.Local)
+	now := time.Date(2026, 3, 17, 9, 59, 60-constants.ExchangePreInitSeconds, 0, time.Local)
 
 	hour, minute, ok := scheduledPrepareSlot(now)
 	if !ok {
@@ -18,7 +19,7 @@ func TestScheduledPrepareSlotUsesNextMinute(t *testing.T) {
 }
 
 func TestScheduledPrepareSlotSupportsCustomMinute(t *testing.T) {
-	now := time.Date(2026, 3, 17, 10, 29, 57, 0, time.Local)
+	now := time.Date(2026, 3, 17, 10, 29, 60-constants.ExchangePreInitSeconds, 0, time.Local)
 
 	hour, minute, ok := scheduledPrepareSlot(now)
 	if !ok {

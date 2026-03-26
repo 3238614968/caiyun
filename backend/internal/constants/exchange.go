@@ -1,4 +1,4 @@
-﻿package constants
+package constants
 
 // 抢兑系统常量定义
 
@@ -52,8 +52,8 @@ const (
 	// ExchangeTimeWindowMinutes 兑换时间窗口（分钟）
 	ExchangeTimeWindowMinutes = 5
 
-	// ExchangePreInitSeconds 提前初始化秒数（提前3秒准备）
-	ExchangePreInitSeconds = 3
+	// ExchangePreInitSeconds 提前初始化秒数（提前30秒准备 JWT 与队列）
+	ExchangePreInitSeconds = 30
 )
 
 // 定时任务配置

@@ -64,7 +64,8 @@
       <!-- 顶部导航 -->
       <el-header class="header glass-effect-light">
         <div class="header-left">
-          <breadcrumb />
+          <breadcrumb v-if="!isMobileViewport" />
+          <div v-else class="mobile-page-title">{{ currentTitle }}</div>
         </div>
 
         <div class="header-right">
@@ -72,18 +73,21 @@
           <NotificationCenter />
 
           <!-- 全屏 -->
-          <el-button type="text" class="header-btn" @click="toggleFullscreen">
+          <el-button type="text" class="header-btn hidden-mobile-control" @click="toggleFullscreen">
             <el-icon :size="20"><FullScreen /></el-icon>
           </el-button>
 
           <!-- 用户菜单 -->
           <el-dropdown @command="handleCommand" class="user-dropdown">
             <div class="user-info">
-              <el-avatar :size="36" class="user-avatar">
+              <el-avatar :size="isMobileViewport ? 34 : 36" class="user-avatar">
                 {{ userInitials }}
               </el-avatar>
-              <span class="username">{{ authStore.user?.username }}</span>
-              <el-icon><ArrowDown /></el-icon>
+              <div class="user-copy">
+                <span class="username">{{ authStore.user?.username }}</span>
+                <span class="user-role">{{ isAdmin ? '管理员' : '普通用户' }}</span>
+              </div>
+              <el-icon class="user-arrow"><ArrowDown /></el-icon>
             </div>
             <template #dropdown>
               <el-dropdown-menu>
@@ -104,11 +108,13 @@
 
       <!-- 内容区 -->
       <el-main class="main-content">
-        <router-view v-slot="{ Component }">
-          <transition name="fade-transform" mode="out-in">
+        <div class="page-shell">
+          <router-view v-slot="{ Component }">
+            <transition name="fade-transform" mode="out-in">
             <component :is="Component" />
-          </transition>
-        </router-view>
+            </transition>
+          </router-view>
+        </div>
       </el-main>
 
       <!-- 页脚 -->
@@ -201,9 +207,11 @@ const viewportWidth = ref(typeof window !== 'undefined' ? window.innerWidth : 14
 
 // 当前激活的菜单
 const activeMenu = computed(() => route.path)
+const currentTitle = computed(() => (route.meta?.title as string) || "移动云盘")
+const isMobileViewport = computed(() => viewportWidth.value <= 768)
 const isTabletViewport = computed(() => viewportWidth.value <= 1280 && viewportWidth.value > 768)
 const menuCollapsed = computed(() => isCollapse.value || isTabletViewport.value)
-const asideWidth = computed(() => (isTabletViewport.value ? '84px' : isCollapse.value ? '64px' : '200px'))
+const asideWidth = computed(() => (isMobileViewport.value ? '100%' : isTabletViewport.value ? '84px' : isCollapse.value ? '64px' : '200px'))
 
 // 是否为管理员
 const isAdmin = computed(() => authStore.user?.role === 'admin')
@@ -220,7 +228,7 @@ const syncViewport = () => {
 
 // 切换侧边栏折叠
 const toggleCollapse = () => {
-  if (isTabletViewport.value) return
+  if (isTabletViewport.value || isMobileViewport.value) return
   isCollapse.value = !isCollapse.value
 }
 
@@ -626,14 +634,162 @@ onUnmounted(() => {
 }
 
 @media (max-width: 1024px) {
+  .header {
+    padding: 0 14px;
+    gap: 10px;
+  }
+
   .header-left {
+    display: block;
+  }
+
+  .header-right {
+    gap: 10px;
+  }
+}
+
+
+.mobile-page-title {
+  font-size: 18px;
+  font-weight: 700;
+  color: #1d4ed8;
+  letter-spacing: 0.01em;
+}
+
+.user-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.user-role {
+  font-size: 11px;
+  color: #64748b;
+}
+
+.page-shell {
+  width: min(100%, 1680px);
+  margin: 0 auto;
+}
+
+.settings-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+@media (max-width: 1280px) {
+  .user-copy {
     display: none;
   }
 
-  .header {
-    justify-content: flex-end;
+  .page-shell {
+    width: 100%;
   }
 }
+
+@media (max-width: 768px) {
+  .layout-container {
+    height: 100dvh;
+    flex-direction: column;
+  }
+
+  .sidebar {
+    width: 100% !important;
+    height: auto;
+    order: 2;
+    border-right: none;
+    border-top: 1px solid rgba(255, 255, 255, 0.6);
+    box-shadow: 0 -10px 24px rgba(37, 99, 235, 0.12);
+  }
+
+  .logo-container,
+  .sidebar-footer,
+  .footer,
+  .hidden-mobile-control,
+  .user-arrow {
+    display: none;
+  }
+
+  .sidebar-menu {
+    display: flex;
+    align-items: stretch;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 8px 10px calc(8px + env(safe-area-inset-bottom));
+    overflow-x: auto;
+    border-top: none;
+  }
+
+  .sidebar-menu :deep(.el-menu-item) {
+    flex: 1 0 68px;
+    min-width: 68px;
+    min-height: 56px;
+    height: auto;
+    line-height: 1.15;
+    margin: 0;
+    padding: 10px 8px !important;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 6px;
+  }
+
+  .sidebar-menu :deep(.el-menu-item:hover) {
+    transform: none;
+  }
+
+  .sidebar-menu :deep(.el-menu-item.is-active::before) {
+    left: 50%;
+    top: auto;
+    bottom: 4px;
+    width: 24px;
+    height: 3px;
+    transform: translateX(-50%);
+    border-radius: 999px;
+  }
+
+  .sidebar-menu :deep(.el-menu-item span) {
+    margin: 0;
+    font-size: 12px;
+    text-align: center;
+    white-space: normal;
+  }
+
+  .sidebar-menu :deep(.el-icon) {
+    margin: 0;
+    font-size: 18px;
+  }
+
+  .main-container {
+    order: 1;
+    min-height: 0;
+  }
+
+  .main-content {
+    padding: 12px 12px calc(94px + env(safe-area-inset-bottom));
+  }
+
+  .header {
+    height: 64px;
+    padding: 0 12px;
+  }
+
+  .header-right {
+    gap: 8px;
+  }
+
+  .user-info {
+    padding: 6px 10px;
+  }
+
+  .mobile-page-title {
+    font-size: 17px;
+  }
+}
+
 </style>
 
 

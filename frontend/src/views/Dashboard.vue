@@ -189,7 +189,27 @@ const maskPhone = (phone: string) => {
   return phone.slice(0, 3) + '****' + phone.slice(-4)
 }
 
-// 加载仪表盘数据
+const formatTrendDate = (value: string, short = false) => {
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) {
+    return value
+  }
+
+  const year = date.getFullYear()
+  const month = `${date.getMonth() + 1}`.padStart(2, '0')
+  const day = `${date.getDate()}`.padStart(2, '0')
+
+  return short ? `${month}-${day}` : `${year}-${month}-${day}`
+}
+
+const formatCloudCount = (value: number | string) => {
+  const count = Number(value)
+  if (Number.isNaN(count)) {
+    return String(value)
+  }
+  return count.toLocaleString('zh-CN')
+}
+
 const loadDashboardData = async () => {
   try {
     const data = await getDashboard()
@@ -247,16 +267,86 @@ const renderTrendChart = () => {
   }
 
   const option = {
+    grid: {
+      top: 32,
+      right: 20,
+      bottom: 32,
+      left: 72,
+      containLabel: false
+    },
     tooltip: {
-      trigger: 'axis'
+      trigger: 'axis',
+      triggerOn: 'mousemove|click',
+      confine: true,
+      backgroundColor: 'rgba(255, 255, 255, 0.96)',
+      borderColor: 'rgba(219, 234, 254, 0.95)',
+      borderWidth: 1,
+      padding: 0,
+      textStyle: {
+        color: '#0f172a'
+      },
+      extraCssText: 'box-shadow: 0 14px 36px rgba(15, 23, 42, 0.14); border-radius: 16px;',
+      axisPointer: {
+        type: 'line',
+        snap: true,
+        lineStyle: {
+          color: 'rgba(148, 163, 184, 0.85)',
+          type: 'dashed',
+          width: 1
+        }
+      },
+      formatter: (params: any) => {
+        const point = Array.isArray(params) ? params[0] : params
+        const dateLabel = formatTrendDate(String(point?.axisValue ?? ''), false)
+        const countLabel = formatCloudCount(point?.data ?? 0)
+
+        return `
+          <div style="padding: 12px 14px; min-width: 132px;">
+            <div style="font-size: 14px; font-weight: 600; color: #475569; margin-bottom: 10px;">${dateLabel}</div>
+            <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px; font-size: 14px; color: #1e293b;">
+              <span style="display: inline-flex; align-items: center; gap: 8px; color: #475569;">
+                <span style="width: 12px; height: 12px; border-radius: 999px; background: #3b82f6; box-shadow: 0 0 0 4px rgba(59, 130, 246, 0.14);"></span>
+                云朵数
+              </span>
+              <strong style="font-size: 24px; color: #0f172a;">${countLabel}</strong>
+            </div>
+          </div>
+        `
+      }
     },
     xAxis: {
       type: 'category',
-      data: dashboardData.trend_data.map(item => item.date)
+      boundaryGap: false,
+      data: dashboardData.trend_data.map(item => item.date),
+      axisLine: {
+        lineStyle: {
+          color: 'rgba(148, 163, 184, 0.55)'
+        }
+      },
+      axisTick: {
+        show: false
+      },
+      axisLabel: {
+        color: '#64748b',
+        formatter: (value: string) => formatTrendDate(String(value), true)
+      }
     },
     yAxis: {
       type: 'value',
-      name: '云朵数'
+      name: '云朵数',
+      nameTextStyle: {
+        color: '#64748b',
+        padding: [0, 0, 6, 0]
+      },
+      axisLabel: {
+        color: '#64748b',
+        formatter: (value: number) => formatCloudCount(value)
+      },
+      splitLine: {
+        lineStyle: {
+          color: 'rgba(148, 163, 184, 0.18)'
+        }
+      }
     },
     series: [
       {
@@ -264,11 +354,34 @@ const renderTrendChart = () => {
         type: 'line',
         data: dashboardData.trend_data.map(item => item.cloud_count),
         smooth: true,
+        showSymbol: true,
+        symbol: 'circle',
+        symbolSize: 8,
+        lineStyle: {
+          width: 4,
+          color: '#3b82f6'
+        },
         areaStyle: {
-          opacity: 0.3
+          color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+            { offset: 0, color: 'rgba(59, 130, 246, 0.36)' },
+            { offset: 1, color: 'rgba(59, 130, 246, 0.08)' }
+          ])
         },
         itemStyle: {
-          color: '#3b82f6'
+          color: '#ffffff',
+          borderColor: '#3b82f6',
+          borderWidth: 3
+        },
+        emphasis: {
+          focus: 'series',
+          scale: true,
+          itemStyle: {
+            color: '#3b82f6',
+            borderColor: '#ffffff',
+            borderWidth: 4,
+            shadowBlur: 16,
+            shadowColor: 'rgba(59, 130, 246, 0.28)'
+          }
         }
       }
     ]
@@ -277,7 +390,6 @@ const renderTrendChart = () => {
   trendChart.value.setOption(option)
 }
 
-// 执行所有任务
 const handleTriggerAll = async () => {
   loading.value = true
   try {

@@ -38,7 +38,8 @@
       </el-form>
 
       <!-- 日志列表 -->
-      <el-table :data="logList" stripe v-loading="loading" style="width: 100%">
+            <div class="logs-shell" v-loading="loading">
+<el-table v-if="!isMobile" :data="logList" stripe style="width: 100%">
         <el-table-column prop="account.phone" label="手机号" width="150" />
         <el-table-column prop="task_type" label="任务类型" width="120">
           <template #default="{ row }">
@@ -72,6 +73,48 @@
       </el-table>
 
       <!-- 分页 -->
+
+        <div v-else class="mobile-log-list">
+          <el-empty v-if="logList.length === 0" description="暂无日志" />
+          <template v-else>
+            <el-card
+              v-for="row in logList"
+              :key="row.id"
+              class="mobile-log-card"
+              shadow="never"
+            >
+              <div class="mobile-log-head">
+                <div>
+                  <div class="mobile-log-title">{{ row.account?.phone || '-' }}</div>
+                  <div class="mobile-log-meta">{{ getTaskTypeName(row.task_type) }}</div>
+                </div>
+                <el-tag :type="getStatusType(row.status)">{{ getStatusName(row.status) }}</el-tag>
+              </div>
+              <div class="mobile-log-grid">
+                <div class="mobile-log-row">
+                  <span class="mobile-log-label">任务类型</span>
+                  <span class="mobile-log-value">{{ getTaskTypeName(row.task_type) }}</span>
+                </div>
+                <div class="mobile-log-row">
+                  <span class="mobile-log-label">获得云朵</span>
+                  <span class="mobile-log-value" :class="{ 'positive': row.cloud_gained > 0 }">{{ row.cloud_gained > 0 ? `+${row.cloud_gained}` : '-' }}</span>
+                </div>
+                <div class="mobile-log-row">
+                  <span class="mobile-log-label">执行时间</span>
+                  <span class="mobile-log-value">{{ formatDate(row.created_at) }}</span>
+                </div>
+                <div class="mobile-log-row full">
+                  <span class="mobile-log-label">执行结果</span>
+                  <span class="mobile-log-value multiline">{{ row.message || '-' }}</span>
+                </div>
+              </div>
+              <div class="mobile-log-actions">
+                <el-button type="primary" plain @click="handleViewDetail(row)">查看详情</el-button>
+              </div>
+            </el-card>
+          </template>
+        </div>
+            </div>
       <el-pagination
         v-model:current-page="pagination.page"
         v-model:page-size="pagination.pageSize"
@@ -111,7 +154,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { getTaskLogs, type TaskLog } from '../api/task'
 
@@ -119,6 +162,12 @@ const loading = ref(false)
 const detailVisible = ref(false)
 const logList = ref<TaskLog[]>([])
 const currentLog = ref<TaskLog>({} as TaskLog)
+const viewportWidth = ref(typeof window !== 'undefined' ? window.innerWidth : 1440)
+const isMobile = computed(() => viewportWidth.value <= 768)
+
+const syncViewport = () => {
+  viewportWidth.value = window.innerWidth
+}
 
 const searchForm = reactive({
   taskType: '',
@@ -237,7 +286,13 @@ const formatDate = (date: string) => {
 }
 
 onMounted(() => {
+  syncViewport()
+  window.addEventListener('resize', syncViewport)
   loadLogs()
+})
+
+onUnmounted(() => {
+  window.removeEventListener('resize', syncViewport)
 })
 </script>
 
@@ -286,5 +341,25 @@ onMounted(() => {
   border: 1px solid rgba(255, 255, 255, 0.5);
   backdrop-filter: blur(10px);
   background: rgba(255, 255, 255, 0.9);
+}
+
+.logs-shell { min-height: 140px; }
+.mobile-log-list { display: grid; gap: 12px; }
+.mobile-log-card { border-radius: 18px; border: 1px solid rgba(226, 232, 240, 0.9); background: rgba(255, 255, 255, 0.94); box-shadow: 0 14px 28px rgba(37, 99, 235, 0.08); }
+.mobile-log-card :deep(.el-card__body) { padding: 16px; }
+.mobile-log-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+.mobile-log-title { font-size: 15px; font-weight: 700; color: #0f172a; }
+.mobile-log-meta { margin-top: 4px; font-size: 12px; color: #64748b; }
+.mobile-log-grid { display: grid; gap: 10px; }
+.mobile-log-row { display: grid; grid-template-columns: 76px minmax(0, 1fr); gap: 10px; align-items: start; }
+.mobile-log-row.full { grid-template-columns: 1fr; }
+.mobile-log-label { font-size: 12px; color: #64748b; font-weight: 600; }
+.mobile-log-value { font-size: 13px; color: #334155; word-break: break-word; }
+.mobile-log-value.positive { color: #059669; font-weight: 700; }
+.mobile-log-value.multiline { line-height: 1.6; }
+.mobile-log-actions { margin-top: 14px; display: flex; }
+.mobile-log-actions :deep(.el-button) { width: 100%; margin: 0; }
+@media (max-width: 768px) {
+  .logs-shell :deep(.el-table) { display: none; }
 }
 </style>

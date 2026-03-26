@@ -1082,3 +1082,232 @@
     flex-wrap: wrap;
   }
 }
+
+
+/* ==================== 2026 Responsive Refresh ==================== */
+:root {
+  --app-shell-max: 1680px;
+}
+
+html,
+body,
+#app {
+  min-height: 100%;
+}
+
+body {
+  overflow-x: hidden;
+  background:
+    radial-gradient(circle at top left, rgba(125, 211, 252, 0.18), transparent 24%),
+    linear-gradient(140deg, #e0f2fe 0%, #f8fbff 42%, #dbeafe 100%);
+}
+
+.dashboard-container,
+.account-manage-container,
+.task-logs-container,
+.exchange-records,
+.admin-panel-container,
+.exchange-center {
+  width: 100%;
+  max-width: var(--app-shell-max);
+  margin: 0 auto;
+}
+
+.account-manage-container > .el-card,
+.task-logs-container > .el-card,
+.dashboard-container .el-card,
+.exchange-records .el-card {
+  border-radius: 22px;
+  border: 1px solid rgba(255, 255, 255, 0.74);
+  box-shadow: 0 16px 36px rgba(37, 99, 235, 0.08);
+  background: rgba(255, 255, 255, 0.88);
+  backdrop-filter: blur(14px);
+}
+
+.account-manage-container .card-header,
+.task-logs-container .card-header,
+.dashboard-container .card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.account-manage-container .search-form,
+.task-logs-container .search-form {
+  padding: 16px 18px;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.66);
+  border: 1px solid rgba(255, 255, 255, 0.78);
+}
+
+.exchange-records .content {
+  border-radius: 22px;
+}
+
+.exchange-records .filter-card,
+.exchange-records .content > .el-card:last-of-type {
+  border-radius: 20px;
+}
+
+@media screen and (max-width: 1280px) {
+  .dashboard-container,
+  .account-manage-container,
+  .task-logs-container,
+  .exchange-records {
+    padding: 14px !important;
+  }
+
+  .account-manage-container .search-form,
+  .task-logs-container .search-form,
+  .exchange-records .filter-card .el-form {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+
+  .account-manage-container .search-form .el-form-item,
+  .task-logs-container .search-form .el-form-item,
+  .exchange-records .filter-card .el-form-item {
+    margin-right: 0 !important;
+    margin-bottom: 0 !important;
+    flex: 1 1 220px;
+    min-width: 220px;
+  }
+
+  .exchange-records .filter-card .el-form-item:last-child {
+    flex-basis: 100%;
+  }
+}
+
+@media screen and (max-width: 768px) {
+  .main-content {
+    padding-bottom: 18px !important;
+  }
+
+  .dashboard-container,
+  .account-manage-container,
+  .task-logs-container,
+  .exchange-records,
+  .admin-panel-container,
+  .exchange-center {
+    padding: 0 !important;
+  }
+
+  .account-manage-container .card-header,
+  .task-logs-container .card-header,
+  .dashboard-container .card-header {
+    flex-wrap: wrap;
+  }
+
+  .account-manage-container .card-header .el-button,
+  .task-logs-container .card-header .el-button {
+    width: 100%;
+  }
+
+  .account-manage-container .search-form,
+  .task-logs-container .search-form,
+  .exchange-records .filter-card .el-form {
+    display: flex !important;
+    flex-direction: column !important;
+    gap: 10px;
+  }
+
+  .account-manage-container .search-form .el-form-item,
+  .task-logs-container .search-form .el-form-item,
+  .exchange-records .filter-card .el-form-item {
+    width: 100% !important;
+    min-width: 0 !important;
+    flex: 1 1 auto !important;
+  }
+
+  .account-manage-container .search-form .el-form-item__content,
+  .task-logs-container .search-form .el-form-item__content,
+  .exchange-records .filter-card .el-form-item__content {
+    width: 100% !important;
+  }
+
+  .account-manage-container .search-form .el-button,
+  .task-logs-container .search-form .el-button,
+  .exchange-records .filter-card .el-button {
+    width: 100% !important;
+    margin-left: 0 !important;
+  }
+
+  .dashboard-container .quick-actions {
+    display: grid !important;
+    grid-template-columns: 1fr;
+    gap: 10px;
+  }
+
+  .dashboard-container .quick-actions .el-button {
+    width: 100%;
+    margin: 0 !important;
+  }
+
+  .exchange-records .filter-card .el-form-item__label {
+    width: auto !important;
+  }
+}
+
+
+/* ==================== 2026 Mobile Finish Pass ==================== */
+@media screen and (max-width: 1024px) {
+  .dashboard-container .card-header {
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+
+  .dashboard-container .card-header .el-radio-group {
+    width: 100%;
+    overflow-x: auto;
+  }
+
+  .dashboard-container .chart-card,
+  .dashboard-container .ranking-wrapper,
+  .admin-panel-container .tab-content,
+  .account-manage-container .el-card,
+  .task-logs-container .el-card,
+  .exchange-records .content {
+    min-width: 0;
+  }
+}
+
+@media screen and (max-width: 768px) {
+  .dashboard-container .chart-card .card-header,
+  .admin-panel-container .card-header,
+  .account-manage-container .card-header,
+  .task-logs-container .card-header {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .dashboard-container .chart-card .el-radio-group {
+    width: 100%;
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .dashboard-container .chart-card .el-radio-button,
+  .dashboard-container .chart-card .el-radio-button__inner {
+    width: 100%;
+  }
+
+  .dashboard-container .ranking-wrapper,
+  .admin-panel-container .tab-content,
+  .account-manage-container .el-card,
+  .task-logs-container .el-card,
+  .exchange-records .content {
+    overflow: hidden;
+  }
+
+  .el-dialog {
+    width: calc(100vw - 20px) !important;
+    max-width: calc(100vw - 20px) !important;
+    margin-top: 6vh !important;
+  }
+
+  .el-pagination {
+    justify-content: center !important;
+  }
+}

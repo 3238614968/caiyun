@@ -32,7 +32,7 @@ func createExchangeSystemLog(taskLogRepo *repository.TaskLogRepository, userID, 
 		status = "success"
 	}
 
-	parts := make([]string, 0, 3)
+	parts := make([]string, 0, 4)
 	if prizeName != "" {
 		parts = append(parts, fmt.Sprintf("商品: %s", prizeName))
 	}
