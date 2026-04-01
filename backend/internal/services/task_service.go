@@ -702,6 +702,32 @@ func (r *TaskRunner) runMessagePushTask() *TaskResult {
 }
 
 // runBackupGiftTask 执行备份礼包任务
+// runRevivalRewardTask executes the revival reward task.
+func (r *TaskRunner) runRevivalRewardTask() *TaskResult {
+	startTime := time.Now()
+	task := tasks.NewRevivalRewardTask(r.httpClient, r.logger)
+	err := task.Run()
+	duration := time.Since(startTime).Milliseconds()
+
+	result := &TaskResult{
+		TaskType:      "revivalreward",
+		ExecutionTime: int(duration),
+	}
+
+	if err != nil {
+		result.Status = "failed"
+		result.Message = err.Error()
+	} else {
+		result.Status = "success"
+		result.Message = task.Message()
+		if strings.TrimSpace(result.Message) == "" {
+			result.Message = "\u590d\u6d3b\u5361\u5956\u52b1\u6267\u884c\u6210\u529f"
+		}
+	}
+
+	return result
+}
+
 func (r *TaskRunner) runBackupGiftTask() *TaskResult {
 	startTime := time.Now()
 	task := tasks.NewBackupGiftTask(r.httpClient, r.logger)

@@ -1,4 +1,4 @@
-﻿package api
+package api
 
 import (
 	"encoding/json"
@@ -11,15 +11,16 @@ import (
 )
 
 const (
-	BaseURL       = "https://caiyun.feixin.10086.cn"
-	MarketURL     = "https://caiyun.feixin.10086.cn/market"
-	MrpMarketURL  = "https://mrp.mcloud.139.com/market"
-	PortalURL     = "https://caiyun.feixin.10086.cn/portal"
-	NoteURL       = "https://note.mcloud.139.com"
-	PersonalURL   = "https://personal-kd-njs.yun.139.com"
-	YunURL        = "https://yun.139.com"
-	AICloudURL    = "https://yun.139.com/mrpInfo/ycloud/aixt"
-	CloudPhoneURL = "https://cpactiv.buy.139.com/cloudphone-market"
+	BaseURL         = "https://caiyun.feixin.10086.cn"
+	MarketURL       = "https://caiyun.feixin.10086.cn/market"
+	MrpMarketURL    = "https://mrp.mcloud.139.com/market"
+	MobileMarketURL = "https://m.mcloud.139.com/market"
+	PortalURL       = "https://caiyun.feixin.10086.cn/portal"
+	NoteURL         = "https://note.mcloud.139.com"
+	PersonalURL     = "https://personal-kd-njs.yun.139.com"
+	YunURL          = "https://yun.139.com"
+	AICloudURL      = "https://yun.139.com/mrpInfo/ycloud/aixt"
+	CloudPhoneURL   = "https://cpactiv.buy.139.com/cloudphone-market"
 )
 
 // CaiyunAPI 彩云 API 客户端
@@ -396,6 +397,30 @@ func (api *CaiyunAPI) ReceiveBackupGift() (*CaiyunResponse, error) {
 }
 
 // GetCloudRecord 获取云朵记录
+// ReceiveRevivalReward claims the monthly revival reward.
+func (api *CaiyunAPI) ReceiveRevivalReward() (*CaiyunResponse, error) {
+	resp, err := api.client.Post(
+		fmt.Sprintf("%s/signin/page/receiveRevivalReward", MobileMarketURL),
+		map[string]string{"showloading": "true"},
+		map[string]interface{}{},
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	body, err := api.client.ReadResponseBody(resp)
+	if err != nil {
+		return nil, err
+	}
+
+	var result CaiyunResponse
+	if err := json.Unmarshal([]byte(body), &result); err != nil {
+		return nil, err
+	}
+
+	return &result, nil
+}
+
 func (api *CaiyunAPI) GetCloudRecord(pageNumber, pageSize, recordType int) (*CaiyunResponse, error) {
 	resp, err := api.client.Get(
 		fmt.Sprintf("%s/signin/public/cloudRecord?type=%d&pageNumber=%d&pageSize=%d",

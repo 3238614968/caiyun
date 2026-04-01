@@ -61,6 +61,7 @@ import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { Refresh } from '@element-plus/icons-vue'
 import { getQueueStatus, getTaskStatus, type QueueStatus, type TaskStatus } from '../api/task'
 import { wsClient, type WsMessage } from '../api/websocket'
+import { getTaskTypeName } from '../utils/task-types'
 
 const queueStatus = ref<QueueStatus>({
   queue_length: 0,
@@ -88,30 +89,6 @@ const successRate = computed(() => {
   return ((queueStatus.value.successful_tasks / total) * 100).toFixed(1)
 })
 
-// 任务类型名称映射
-const taskTypeNames: Record<string, string> = {
-  signin: '签到',
-  wechat: '微信',
-  shake: '摇一摇',
-  todaycloud: '今日云朵',
-  aicloud: 'AI云朵',
-  blindbox: '盲盒',
-  redpacket: '红包',
-  store: '商店',
-  garden: '花园',
-  cloudphone: '云朵手机',
-  cloudbattle: '云朵大战',
-  invitefriends: '邀请好友',
-  messagepush: '消息推送',
-  backupgift: '备份礼包',
-  exchange: '兑换',
-  tasklist: '任务列表',
-  all: '全部任务'
-}
-
-const getTaskTypeName = (type: string) => {
-  return taskTypeNames[type] || type
-}
 
 const getProgressStatus = (status: string) => {
   if (status === 'success') return 'success'

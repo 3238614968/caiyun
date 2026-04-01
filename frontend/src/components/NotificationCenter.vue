@@ -1,4 +1,4 @@
-<template>
+﻿<template>
   <el-popover
     placement="bottom-end"
     :width="400"
@@ -90,6 +90,7 @@ import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { Bell, CircleCheck, Warning, InfoFilled, Close } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { wsClient, type WsMessage } from '../api/websocket'
+import { getTaskTypeName } from '../utils/task-types'
 
 interface Notification {
   id: string
@@ -162,30 +163,10 @@ const viewAllNotifications = () => {
   historyVisible.value = true
 }
 
-const taskTypeNames: Record<string, string> = {
-  signin: '签到',
-  wechat: '微信',
-  shake: '摇一摇',
-  todaycloud: '今日云朵',
-  aicloud: 'AI云朵',
-  blindbox: '盲盒',
-  redpacket: '红包',
-  store: '商店',
-  garden: '花园',
-  cloudphone: '云手机',
-  cloudbattle: '云朵大战',
-  invitefriends: '邀请好友',
-  messagepush: '消息推送',
-  backupgift: '备份礼包',
-  exchange: '兑换',
-  tasklist: '任务列表'
-}
-
-// WebSocket推送处理
 const handleTaskComplete = (msg: WsMessage) => {
   const data = msg.data
   const level = data.status === 'success' ? 'success' : data.status === 'failed' ? 'error' : 'info'
-  const taskName = taskTypeNames[data.task_type] || data.task_type
+  const taskName = getTaskTypeName(data.task_type)
   const phone = data.phone ? ` [${data.phone}]` : ''
 
   const notification: Notification = {

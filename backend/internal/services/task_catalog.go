@@ -138,6 +138,19 @@ func NewTaskCatalog() *TaskCatalog {
 			},
 		},
 		{
+			Code:           "revivalreward",
+			Name:           "复活卡奖励",
+			Description:    "检查并领取复活卡奖励",
+			SortOrder:      95,
+			DefaultEnabled: true,
+			RunInBatch:     true,
+			Aliases:        []string{"revival_reward", "receive_revival_reward"},
+			execute: func(r *TaskRunner) *TaskResult {
+				return r.runRevivalRewardTask()
+			},
+		},
+
+		{
 			Code:           "backupgift",
 			Name:           "备份礼包",
 			Description:    "执行备份礼包奖励领取流程",

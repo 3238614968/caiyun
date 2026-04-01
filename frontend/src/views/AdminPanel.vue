@@ -129,9 +129,9 @@
 <el-table v-if="!isMobile" :data="taskConfigs" stripe style="width: 100%">
               <el-table-column prop="sort_order" label="序号" width="70" />
               <el-table-column prop="task_name" label="任务名称" width="120" />
-              <el-table-column prop="task_type" label="任务标识" width="140">
+              <el-table-column prop="task_type" label="任务类型" width="140">
                 <template #default="{ row }">
-                  <el-tag size="small">{{ row.task_type }}</el-tag>
+                  <el-tag size="small">{{ getTaskTypeName(row.task_type, row.task_name) }}</el-tag>
                 </template>
               </el-table-column>
               <el-table-column label="状态" width="160">
@@ -168,12 +168,12 @@
                         <div class="mobile-admin-card-title">{{ row.task_name }}</div>
                         <div class="mobile-admin-card-meta">#{{ row.sort_order }}</div>
                       </div>
-                      <el-tag size="small">{{ row.task_type }}</el-tag>
+                      <el-tag size="small">{{ getTaskTypeName(row.task_type, row.task_name) }}</el-tag>
                     </div>
                     <div class="mobile-admin-card-grid">
                       <div class="mobile-admin-card-row">
-                        <span class="mobile-admin-card-label">任务标识</span>
-                        <span class="mobile-admin-card-value">{{ row.task_type }}</span>
+                        <span class="mobile-admin-card-label">任务类型</span>
+                        <span class="mobile-admin-card-value">{{ getTaskTypeName(row.task_type, row.task_name) }}</span>
                       </div>
                       <div class="mobile-admin-card-row">
                         <span class="mobile-admin-card-label">更新时间</span>
@@ -284,9 +284,14 @@
                 </p>
                 <el-form :inline="true">
                   <el-form-item label="选择账号">
-                    <el-select v-model="selectedAccountId" placeholder="请选择云盘账号" style="width: 250px;">
+                    <el-select
+                      v-model="selectedAccountId"
+                      placeholder="请选择云盘账号"
+                      style="width: 250px;"
+                      :disabled="availableProductSourceAccounts.length === 0"
+                    >
                       <el-option
-                        v-for="acc in allAccounts"
+                        v-for="acc in availableProductSourceAccounts"
                         :key="acc.id"
                         :label="acc.remark ? `${acc.remark} (${acc.phone})` : acc.phone"
                         :value="acc.id"
@@ -590,6 +595,7 @@ import {
   updateProducts as apiUpdateProducts,
   executeMonthlyExchange as apiExecuteMonthlyExchange
 } from '../api/exchange'
+import { getTaskTypeName } from '../utils/task-types'
 
 const activeTab = ref('summaries')
 const viewportWidth = ref(typeof window !== 'undefined' ? window.innerWidth : 1440)
@@ -622,6 +628,9 @@ const updateProductsLoading = ref(false)
 const monthlyExchangeLoading = ref(false)
 const selectedAccountId = ref<number | null>(null)
 const allAccounts = ref<Account[]>([])
+const availableProductSourceAccounts = computed(() =>
+  allAccounts.value.filter(account => account.is_active)
+)
 
 // User management
 const userLoading = ref(false)
@@ -719,6 +728,13 @@ const loadExchangeConfig = async () => {
     console.log('获取到的账号数据:', accountsData)
     allAccounts.value = accountsData.accounts || []
     console.log('加载账号数量:', allAccounts.value.length)
+
+    const hasSelectedAvailableAccount = availableProductSourceAccounts.value.some(
+      account => account.id === selectedAccountId.value
+    )
+    if (!hasSelectedAvailableAccount) {
+      selectedAccountId.value = availableProductSourceAccounts.value[0]?.id ?? null
+    }
   } catch (error: any) {
     ElMessage.error('加载抢兑配置失败：' + error.message)
   }

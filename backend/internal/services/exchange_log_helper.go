@@ -22,6 +22,41 @@ func isSingleRunExchangeTask(taskType string) bool {
 	return taskType == string(models.ExchangeTaskFixed) || taskType == "immediate"
 }
 
+func sanitizeExchangeMessageForDisplay(message string) string {
+	cleaned := strings.TrimSpace(message)
+	if cleaned == "" {
+		return ""
+	}
+
+	segments := strings.Split(cleaned, " | ")
+	visible := make([]string, 0, len(segments))
+	hiddenPrefixes := []string{"http_status=", "code=", "result_code=", "result=", "desc=", "sub_msg=", "trace_id=", "body="}
+
+	for _, segment := range segments {
+		segment = strings.TrimSpace(segment)
+		if segment == "" {
+			continue
+		}
+		lower := strings.ToLower(segment)
+		hidden := false
+		for _, prefix := range hiddenPrefixes {
+			if strings.HasPrefix(lower, prefix) {
+				hidden = true
+				break
+			}
+		}
+		if hidden {
+			continue
+		}
+		visible = append(visible, segment)
+	}
+
+	if len(visible) == 0 {
+		return segments[0]
+	}
+	return visible[0]
+}
+
 func createExchangeSystemLog(taskLogRepo *repository.TaskLogRepository, userID, accountID uint, prizeName, accountName string, success bool, message string, execTimeMs int) {
 	if taskLogRepo == nil || accountID == 0 {
 		return
@@ -32,7 +67,7 @@ func createExchangeSystemLog(taskLogRepo *repository.TaskLogRepository, userID, 
 		status = "success"
 	}
 
-	parts := make([]string, 0, 4)
+	parts := make([]string, 0, 3)
 	if prizeName != "" {
 		parts = append(parts, fmt.Sprintf("商品: %s", prizeName))
 	}
@@ -40,7 +75,7 @@ func createExchangeSystemLog(taskLogRepo *repository.TaskLogRepository, userID, 
 		parts = append(parts, fmt.Sprintf("兑换账号: %s", accountName))
 	}
 	if message != "" {
-		parts = append(parts, fmt.Sprintf("结果: %s", message))
+		parts = append(parts, fmt.Sprintf("结果: %s", sanitizeExchangeMessageForDisplay(message)))
 	}
 
 	entry := &models.TaskLog{
