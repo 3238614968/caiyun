@@ -253,14 +253,14 @@ func (r *TaskRunner) Run() []TaskResult {
 
 // getCurrentCloudCount 获取当前云朵总数（通过签到API）
 func (r *TaskRunner) getCurrentCloudCount() int {
-	signInInfo, err := r.api.SignIn()
+	cloudInfo, err := r.api.GetCloudInfo()
 	if err != nil {
 		return 0
 	}
-	if signInInfo.Code != 0 {
+	if !cloudInfo.IsSuccess() {
 		return 0
 	}
-	return signInInfo.Result.Total
+	return cloudInfo.Result.Total
 }
 
 // GetCloudGained 获取本次执行获得的云朵数
@@ -669,10 +669,25 @@ func (r *TaskRunner) runReceiveTask() *TaskResult {
 	if err != nil {
 		result.Status = "failed"
 		result.Message = err.Error()
+	} else if resp == nil || !resp.IsSuccess() {
+		result.Status = "failed"
+		if resp != nil && resp.MessageText() != "" {
+			result.Message = resp.MessageText()
+		} else {
+			result.Message = "领取云朵失败"
+		}
 	} else {
 		result.Status = "success"
-		_ = resp
-		result.Message = "领取云朵执行成功"
+		messageParts := []string{"领取云朵执行成功"}
+		if payload, ok := resp.Result.(map[string]interface{}); ok {
+			if total, ok := payload["total"]; ok {
+				messageParts = append(messageParts, fmt.Sprintf("当前云朵%v", total))
+			}
+			if pendingPrizeCount, ok := payload["pendingPrizeCount"]; ok {
+				messageParts = append(messageParts, fmt.Sprintf("待领奖品%v项", pendingPrizeCount))
+			}
+		}
+		result.Message = strings.Join(messageParts, "，")
 	}
 
 	return result

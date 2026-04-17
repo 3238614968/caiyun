@@ -44,22 +44,135 @@ type CaiyunResponse struct {
 }
 
 // SignInResponse 签到响应
+type SignInResult struct {
+	TodaySignIn              bool `json:"todaySignIn"`
+	SignInPoints             int  `json:"signInPoints"`
+	Total                    int  `json:"total"`
+	ToReceive                int  `json:"toReceive"`
+	CurMonthBackup           bool `json:"curMonthBackup"`
+	CurMonthBackupTaskAccept bool `json:"curMonthBackupTaskAccept"`
+	CurMonthBackupSignAccept bool `json:"curMonthBackupSignAccept"`
+	NextMonthGet             int  `json:"nextMonthGet"`
+}
+
 type SignInResponse struct {
-	Code    int    `json:"code"`
-	Message string `json:"message"`
-	Msg     string `json:"msg"`
-	Result  struct {
-		TodaySignIn              bool `json:"todaySignIn"`
-		Total                    int  `json:"total"`
-		ToReceive                int  `json:"toReceive"`
-		CurMonthBackup           bool `json:"curMonthBackup"`
-		CurMonthBackupSignAccept bool `json:"curMonthBackupSignAccept"`
-		NextMonthGet             int  `json:"nextMonthGet"`
-	} `json:"result"`
+	Code    int          `json:"code"`
+	Message string       `json:"message"`
+	Msg     string       `json:"msg"`
+	Success bool         `json:"success"`
+	Result  SignInResult `json:"result"`
+}
+
+func normalizeMessageText(msg, message string) string {
+	if strings.TrimSpace(msg) != "" {
+		return strings.TrimSpace(msg)
+	}
+	return strings.TrimSpace(message)
+}
+
+func isSuccessCode(code interface{}) bool {
+	switch v := code.(type) {
+	case nil:
+		return false
+	case int:
+		return v == 0
+	case int64:
+		return v == 0
+	case float64:
+		return int(v) == 0
+	case string:
+		return v == "" || v == "0"
+	default:
+		return false
+	}
+}
+
+func (r *CaiyunResponse) MessageText() string {
+	if r == nil {
+		return ""
+	}
+	return normalizeMessageText(r.Msg, r.Message)
+}
+
+func (r *CaiyunResponse) IsSuccess() bool {
+	if r == nil {
+		return false
+	}
+	msg := r.MessageText()
+	return isSuccessCode(r.Code) || r.Success || strings.EqualFold(msg, "success")
+}
+
+func (r *SignInResponse) MessageText() string {
+	if r == nil {
+		return ""
+	}
+	return normalizeMessageText(r.Msg, r.Message)
+}
+
+func (r *SignInResponse) IsSuccess() bool {
+	if r == nil {
+		return false
+	}
+	msg := r.MessageText()
+	return r.Code == 0 || r.Success || strings.EqualFold(msg, "success")
 }
 
 // CloudInfoResponse 云朵信息响应（与 SignInResponse 相同）
 type CloudInfoResponse = SignInResponse
+
+type PrizeLogPageResponse struct {
+	Code    int                `json:"code"`
+	Message string             `json:"message"`
+	Msg     string             `json:"msg"`
+	Success bool               `json:"success"`
+	Result  PrizeLogPageResult `json:"result"`
+}
+
+type PrizeLogPageResult struct {
+	Result  []PrizeLog `json:"result"`
+	Records []PrizeLog `json:"records"`
+}
+
+type PrizeLog struct {
+	PrizeName string `json:"prizeName"`
+	Flag      int    `json:"flag"`
+}
+
+func (r *PrizeLogPageResponse) MessageText() string {
+	if r == nil {
+		return ""
+	}
+	return normalizeMessageText(r.Msg, r.Message)
+}
+
+func (r *PrizeLogPageResponse) IsSuccess() bool {
+	if r == nil {
+		return false
+	}
+	msg := r.MessageText()
+	return r.Code == 0 || r.Success || strings.EqualFold(msg, "success")
+}
+
+func (r *PrizeLogPageResponse) PrizeLogs() []PrizeLog {
+	if r == nil {
+		return nil
+	}
+	if len(r.Result.Result) > 0 {
+		return r.Result.Result
+	}
+	return r.Result.Records
+}
+
+func (r *PrizeLogPageResponse) PendingPrizeNames() []string {
+	items := r.PrizeLogs()
+	pending := make([]string, 0, len(items))
+	for _, item := range items {
+		if item.Flag == 1 && strings.TrimSpace(item.PrizeName) != "" {
+			pending = append(pending, strings.TrimSpace(item.PrizeName))
+		}
+	}
+	return pending
+}
 
 // TaskListResponse 任务列表响应
 type TaskListResponse struct {
@@ -99,34 +212,87 @@ type ShakeResponse struct {
 // SignIn 网盘签到（获取签到信息）
 func (api *CaiyunAPI) SignIn() (*SignInResponse, error) {
 	resp, err := api.client.Get(
-		fmt.Sprintf("%s/signin/page/info?client=app", MarketURL),
-		nil,
+		fmt.Sprintf("%s/signin/page/startSignIn?client=app", MobileMarketURL),
+		map[string]string{"origin": "https://m.mcloud.139.com"},
 	)
 	if err != nil {
-		return nil, fmt.Errorf("请求失败：%w", err)
+		return nil, fmt.Errorf("request sign in failed: %w", err)
 	}
 
 	body, err := api.client.ReadResponseBody(resp)
 	if err != nil {
-		return nil, fmt.Errorf("读取响应失败：%w", err)
+		return nil, fmt.Errorf("read sign in response failed: %w", err)
 	}
 
-	// 检查响应状态码
 	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("HTTP 状态码：%d, 响应：%s", resp.StatusCode, body)
+		return nil, fmt.Errorf("sign in http status=%d, body=%s", resp.StatusCode, body)
 	}
 
 	var result SignInResponse
 	if err := json.Unmarshal([]byte(body), &result); err != nil {
-		return nil, fmt.Errorf("解析响应失败：%w, 响应内容：%s", err, body)
+		return nil, fmt.Errorf("decode sign in response failed: %w, body=%s", err, body)
 	}
 
 	return &result, nil
 }
 
-// GetCloudInfo 获取云朵信息（与 SignIn 相同）
 func (api *CaiyunAPI) GetCloudInfo() (*CloudInfoResponse, error) {
-	return api.SignIn()
+	resp, err := api.client.Get(
+		fmt.Sprintf("%s/signin/page/infoV3?client=app", MobileMarketURL),
+		map[string]string{"origin": "https://m.mcloud.139.com"},
+	)
+	if err != nil {
+		return nil, fmt.Errorf("request cloud info failed: %w", err)
+	}
+
+	body, err := api.client.ReadResponseBody(resp)
+	if err != nil {
+		return nil, fmt.Errorf("read cloud info response failed: %w", err)
+	}
+
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("cloud info http status=%d, body=%s", resp.StatusCode, body)
+	}
+
+	var result CloudInfoResponse
+	if err := json.Unmarshal([]byte(body), &result); err != nil {
+		return nil, fmt.Errorf("decode cloud info response failed: %w, body=%s", err, body)
+	}
+
+	return &result, nil
+}
+
+func (api *CaiyunAPI) GetPrizeLogPage(pageNumber, pageSize int) (*PrizeLogPageResponse, error) {
+	if pageNumber <= 0 {
+		pageNumber = 1
+	}
+	if pageSize <= 0 {
+		pageSize = 15
+	}
+
+	resp, err := api.client.Get(
+		fmt.Sprintf("https://m.mcloud.139.com/ycloud/prizeApi/checkPrize/getUserPrizeLogPageV2?currPage=%d&pageSize=%d", pageNumber, pageSize),
+		map[string]string{"origin": "https://m.mcloud.139.com"},
+	)
+	if err != nil {
+		return nil, fmt.Errorf("request prize log failed: %w", err)
+	}
+
+	body, err := api.client.ReadResponseBody(resp)
+	if err != nil {
+		return nil, fmt.Errorf("read prize log response failed: %w", err)
+	}
+
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("prize log http status=%d, body=%s", resp.StatusCode, body)
+	}
+
+	var result PrizeLogPageResponse
+	if err := json.Unmarshal([]byte(body), &result); err != nil {
+		return nil, fmt.Errorf("decode prize log response failed: %w, body=%s", err, body)
+	}
+
+	return &result, nil
 }
 
 // GetTaskList 获取任务列表
@@ -176,8 +342,8 @@ func (api *CaiyunAPI) DoTask(key, taskID string) error {
 		return err
 	}
 
-	if result.Code != 0 && result.Code != "0" {
-		return fmt.Errorf("执行任务失败：%v - %s", result.Code, result.Message)
+	if !result.IsSuccess() {
+		return fmt.Errorf("执行任务失败：%v - %s", result.Code, result.MessageText())
 	}
 
 	return nil
@@ -203,8 +369,8 @@ func (api *CaiyunAPI) ReceiveTaskReward(taskID string) error {
 		return err
 	}
 
-	if result.Code != 0 && result.Code != "0" {
-		return fmt.Errorf("领取奖励失败：%v - %s", result.Code, result.Message)
+	if !result.IsSuccess() {
+		return fmt.Errorf("领取奖励失败：%v - %s", result.Code, result.MessageText())
 	}
 
 	return nil
@@ -444,10 +610,60 @@ func (api *CaiyunAPI) GetCloudRecord(pageNumber, pageSize, recordType int) (*Cai
 	return &result, nil
 }
 
-// Receive 领取云朵
+// Receive 领取云朵摘要（不触发签到，仅查询当前云朵与待领奖品）
 func (api *CaiyunAPI) Receive() (*CaiyunResponse, error) {
+	cloudInfo, cloudErr := api.GetCloudInfo()
+	prizeResp, prizeErr := api.GetPrizeLogPage(1, 15)
+
+	result := map[string]interface{}{}
+	messageParts := make([]string, 0, 2)
+
+	if cloudInfo != nil {
+		if cloudInfo.IsSuccess() {
+			result["todaySignIn"] = cloudInfo.Result.TodaySignIn
+			result["total"] = cloudInfo.Result.Total
+			result["toReceive"] = cloudInfo.Result.ToReceive
+			result["nextMonthGet"] = cloudInfo.Result.NextMonthGet
+			messageParts = append(messageParts, fmt.Sprintf("当前云朵%d", cloudInfo.Result.Total))
+		} else if msg := cloudInfo.MessageText(); msg != "" {
+			messageParts = append(messageParts, msg)
+		}
+	}
+
+	if prizeResp != nil {
+		if prizeResp.IsSuccess() {
+			pendingPrizeNames := prizeResp.PendingPrizeNames()
+			result["pendingPrizeNames"] = pendingPrizeNames
+			result["pendingPrizeCount"] = len(pendingPrizeNames)
+			if len(pendingPrizeNames) > 0 {
+				messageParts = append(messageParts, fmt.Sprintf("待领奖品%d项", len(pendingPrizeNames)))
+			}
+		} else if msg := prizeResp.MessageText(); msg != "" {
+			messageParts = append(messageParts, msg)
+		}
+	}
+
+	if cloudErr != nil && prizeErr != nil {
+		return nil, fmt.Errorf("receive summary failed: cloud=%w, prize=%v", cloudErr, prizeErr)
+	}
+
+	msg := "success"
+	if len(messageParts) > 0 {
+		msg = strings.Join(messageParts, "，")
+	}
+
+	return &CaiyunResponse{
+		Code:    0,
+		Msg:     msg,
+		Success: true,
+		Result:  result,
+	}, nil
+}
+
+// ReceivePendingCloudRewards 领取待领取的云朵奖励
+func (api *CaiyunAPI) ReceivePendingCloudRewards() (*CaiyunResponse, error) {
 	resp, err := api.client.Get(
-		fmt.Sprintf("%s/signin/page/receive", MrpMarketURL),
+		fmt.Sprintf("%s/signin/page/receive", MarketURL),
 		nil,
 	)
 	if err != nil {
@@ -784,16 +1000,4 @@ func (api *CaiyunAPI) DelOutLink(phone string, linkIDs []string) (*CaiyunRespons
 		return nil, err
 	}
 	return &result, nil
-}
-
-// IsSuccess 判断通用响应是否成功（兼容 code 类型差异）
-func (r *CaiyunResponse) IsSuccess() bool {
-	if r == nil {
-		return false
-	}
-	if r.Success {
-		return true
-	}
-	code := strings.TrimSpace(fmt.Sprint(r.Code))
-	return code == "0" || code == ""
 }

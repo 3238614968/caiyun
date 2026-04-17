@@ -7,6 +7,7 @@ import (
 	"math/rand"
 	"time"
 
+	"caiyun/internal/core/api"
 	"caiyun/internal/core/http"
 	"caiyun/internal/core/logger"
 	"caiyun/internal/core/utils"
@@ -243,17 +244,16 @@ func (t *InviteFriendsTask) buildShareEventData() string {
 
 // receiveCloud 领取云朵
 func (t *InviteFriendsTask) receiveCloud() {
-	url := "https://caiyun.feixin.10086.cn/market/signin/page/receive"
-	headers := map[string]string{
-		"Content-Type": "application/json",
-	}
-
-	resp, err := t.client.Get(url, headers)
+	resp, err := api.NewCaiyunAPI(t.client).ReceivePendingCloudRewards()
 	if err != nil {
 		t.logger.Error("领取云朵失败", err)
 		return
 	}
-	if resp != nil {
-		resp.Body.Close()
+	if resp != nil && !resp.IsSuccess() {
+		msg := resp.MessageText()
+		if msg == "" {
+			msg = "领取云朵失败"
+		}
+		t.logger.Error("领取云朵失败", fmt.Errorf(msg))
 	}
 }

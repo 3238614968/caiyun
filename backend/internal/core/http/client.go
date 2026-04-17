@@ -55,6 +55,14 @@ func (c *Client) SetAuth(auth string) {
 // SetJWTToken 设置 JWT Token
 func (c *Client) SetJWTToken(token string) {
 	c.jwtToken = token
+	if token == "" {
+		return
+	}
+
+	for _, domain := range []string{"m.mcloud.139.com", "mrp.mcloud.139.com", "caiyun.feixin.10086.cn"} {
+		c.SetCookie("jwtToken", token, domain)
+	}
+	c.SetCookie("sensors_stay_time", fmt.Sprintf("%d", time.Now().UnixMilli()), "m.mcloud.139.com")
 }
 
 // SetUserAgent 设置 User-Agent

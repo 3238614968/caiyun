@@ -1,4 +1,4 @@
-﻿package tasks
+package tasks
 
 import (
 	"fmt"
@@ -27,51 +27,60 @@ func NewSignInTask(client *http.Client, logger *logger.Logger) *SignInTask {
 
 // Run 执行签到任务
 func (t *SignInTask) Run() error {
-	// 获取签到信息
-	signInInfo, err := t.api.SignIn()
+	cloudInfoBefore, err := t.api.GetCloudInfo()
 	if err != nil {
-		t.logger.Error("获取签到信息失败:", err)
+		t.logger.Warn("获取签到前云朵信息失败:", err)
+	} else if cloudInfoBefore.IsSuccess() {
+		t.logger.Info(fmt.Sprintf("当前云朵%d", cloudInfoBefore.Result.Total))
+		if cloudInfoBefore.Result.ToReceive > 0 {
+			t.logger.Info(fmt.Sprintf("待领取%d", cloudInfoBefore.Result.ToReceive))
+		}
+	}
+
+	time.Sleep(1 * time.Second)
+	signInResp, err := t.api.SignIn()
+	if err != nil {
+		t.logger.Error("执行签到失败:", err)
 		t.logger.Debug("详细错误:", err.Error())
 		return err
 	}
-
-	if signInInfo.Code != 0 {
-		msg := signInInfo.Msg
+	if !signInResp.IsSuccess() {
+		msg := signInResp.MessageText()
 		if msg == "" {
-			msg = signInInfo.Message
+			msg = "unknown error"
 		}
-		if msg == "" {
-			msg = "未知错误"
-		}
-		t.logger.Fail(fmt.Sprintf("获取签到信息失败: code=%d, msg=%s", signInInfo.Code, msg))
-		return fmt.Errorf("获取签到信息失败: code=%d, msg=%s", signInInfo.Code, msg)
+		t.logger.Fail(fmt.Sprintf("签到失败: code=%d, msg=%s", signInResp.Code, msg))
+		return fmt.Errorf("签到失败: code=%d, msg=%s", signInResp.Code, msg)
 	}
 
-	// 显示云朵信息
-	t.logger.Info(fmt.Sprintf("当前云朵%d", signInInfo.Result.Total))
-	if signInInfo.Result.ToReceive > 0 {
-		t.logger.Info(fmt.Sprintf("待领取%d", signInInfo.Result.ToReceive))
-	}
-
-	// 检查是否已经签到
-	if signInInfo.Result.TodaySignIn {
+	if signInResp.Result.TodaySignIn {
 		t.logger.Info("网盘今日已签到")
+	} else if signInResp.Result.SignInPoints > 0 {
+		t.logger.Success(fmt.Sprintf("网盘签到成功，获得%d云朵", signInResp.Result.SignInPoints))
 	} else {
-		// 再次调用签到接口触发签到
-		time.Sleep(1 * time.Second)
-		newInfo, err := t.api.SignIn()
-		if err == nil && newInfo.Code == 0 {
-			if newInfo.Result.TodaySignIn {
-				t.logger.Success("网盘签到成功")
-			} else {
-				t.logger.Fail("网盘签到失败")
-			}
-		}
+		t.logger.Success("网盘签到成功")
 	}
 
-	// 显示下月可领取云朵
-	if signInInfo.Result.NextMonthGet > 0 {
-		t.logger.Info(fmt.Sprintf("下月可领取%d个云朵", signInInfo.Result.NextMonthGet))
+	cloudInfoAfter, err := t.api.GetCloudInfo()
+	if err != nil {
+		t.logger.Warn("获取签到后云朵信息失败:", err)
+		return nil
+	}
+	if !cloudInfoAfter.IsSuccess() {
+		msg := cloudInfoAfter.MessageText()
+		if msg == "" {
+			msg = "unknown error"
+		}
+		t.logger.Warn(fmt.Sprintf("获取签到后云朵信息失败: code=%d, msg=%s", cloudInfoAfter.Code, msg))
+		return nil
+	}
+
+	t.logger.Info(fmt.Sprintf("当前云朵%d", cloudInfoAfter.Result.Total))
+	if cloudInfoAfter.Result.ToReceive > 0 {
+		t.logger.Info(fmt.Sprintf("待领取%d", cloudInfoAfter.Result.ToReceive))
+	}
+	if cloudInfoAfter.Result.NextMonthGet > 0 {
+		t.logger.Info(fmt.Sprintf("下月可领取%d个云朵", cloudInfoAfter.Result.NextMonthGet))
 	}
 
 	return nil
