@@ -547,6 +547,7 @@ type SendSmsCodeRequest struct {
 type SmsLoginRequest struct {
 	Phone   string `json:"phone" binding:"required"`
 	SmsCode string `json:"sms_code" binding:"required"`
+	TaskID  string `json:"task_id" binding:"required"`
 	Remark  string `json:"remark"`
 }
 
@@ -640,7 +641,7 @@ func (h *AccountHandler) GetSmsStatus(c *gin.Context) {
 	}
 
 	// 调用SMS API查询状态
-	status, err := sms.GetCodeStatus(phone)
+	statusInfo, err := sms.GetCodeStatus(phone)
 	if err != nil {
 		log.Printf("[GetSmsStatus] 查询状态失败 phone=%s: %v", phone, err)
 		errMsg, retryable := normalizeSMSStatusError(err.Error())
@@ -653,6 +654,7 @@ func (h *AccountHandler) GetSmsStatus(c *gin.Context) {
 			"data": map[string]interface{}{
 				"phone":     phone,
 				"status":    "failed",
+				"task_id":   "",
 				"retryable": retryable,
 				"message":   errMsg,
 			},
@@ -662,7 +664,7 @@ func (h *AccountHandler) GetSmsStatus(c *gin.Context) {
 
 	retryable := false
 	statusMessage := ""
-	switch status {
+	switch statusInfo.Status {
 	case "failed":
 		retryable = true
 		statusMessage = "验证码发送失败，请重新发送"
@@ -681,7 +683,8 @@ func (h *AccountHandler) GetSmsStatus(c *gin.Context) {
 		"message": "success",
 		"data": map[string]interface{}{
 			"phone":     phone,
-			"status":    status,
+			"task_id":   statusInfo.TaskID,
+			"status":    statusInfo.Status,
 			"retryable": retryable,
 			"message":   statusMessage,
 		},
@@ -707,7 +710,7 @@ func (h *AccountHandler) SmsLogin(c *gin.Context) {
 
 	var req SmsLoginRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, ErrorResponse{Message: "请输入手机号和验证码"})
+		c.JSON(http.StatusBadRequest, ErrorResponse{Message: "请输入手机号、验证码，并先发送验证码获取会话"})
 		return
 	}
 
@@ -719,7 +722,7 @@ func (h *AccountHandler) SmsLogin(c *gin.Context) {
 	}
 
 	// 调用SMS API验证验证码，获取authorization
-	authorization, err := sms.VerifyCode(req.Phone, req.SmsCode)
+	authorization, err := sms.VerifyCode(req.Phone, req.SmsCode, req.TaskID)
 	if err != nil {
 		log.Printf("[SmsLogin] 验证失败 phone=%s: %v", req.Phone, err)
 		// 提供更友好的错误提示

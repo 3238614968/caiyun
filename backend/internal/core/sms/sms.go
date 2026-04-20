@@ -1,4 +1,4 @@
-﻿package sms
+package sms
 
 import (
 	"crypto/tls"
@@ -14,7 +14,7 @@ import (
 )
 
 const (
-	defaultSMSAPIBaseURL = "https://smscaiyun.779776.xyz"
+	defaultSMSAPIBaseURL = "https://ydyp.apisky.cn"
 	smsAPITimeout        = 30 * time.Second
 )
 
@@ -23,6 +23,14 @@ type SmsApiResponse struct {
 	Code    int                    `json:"code"`
 	Message string                 `json:"message"`
 	Data    map[string]interface{} `json:"data"`
+}
+
+// CodeStatus 表示验证码任务状态。
+type CodeStatus struct {
+	Phone     string
+	TaskID    string
+	Status    string
+	CreatedAt string
 }
 
 // newHTTPClient 创建短信接口客户端。
@@ -62,11 +70,16 @@ func SendCode(phone string) (string, error) {
 }
 
 // VerifyCode 校验短信验证码，返回 authorization。
-func VerifyCode(phone, smsCode string) (string, error) {
-	apiResp, err := postJSON("/api/sms/verify", map[string]string{
-		"phone":    phone,
-		"sms_code": smsCode,
-	}, phone)
+func VerifyCode(phone, smsCode, taskID string) (string, error) {
+	payload := map[string]string{
+		"phone": phone,
+		"code":  smsCode,
+	}
+	if strings.TrimSpace(taskID) != "" {
+		payload["task_id"] = taskID
+	}
+
+	apiResp, err := postJSON("/api/sms/verify", payload, phone)
 	if err != nil {
 		return "", err
 	}
@@ -84,45 +97,62 @@ func VerifyCode(phone, smsCode string) (string, error) {
 }
 
 // GetCodeStatus 查询验证码发送状态。
-func GetCodeStatus(phone string) (string, error) {
+func GetCodeStatus(phone string) (*CodeStatus, error) {
 	client := newHTTPClient()
 	requestURL := buildSMSAPIURL("/api/sms/status/" + url.PathEscape(phone))
 
-	resp, err := client.Get(requestURL)
+	req, err := http.NewRequest(http.MethodGet, requestURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("创建请求失败: %s", err.Error())
+	}
+	applyCommonHeaders(req)
+
+	resp, err := client.Do(req)
 	if err != nil {
 		log.Printf("[SMS] 查询状态请求失败 phone=%s url=%s err=%v", phone, requestURL, err)
-		return "", fmt.Errorf("请求失败: %s", err.Error())
+		return nil, fmt.Errorf("请求失败: %s", err.Error())
 	}
 	defer resp.Body.Close()
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return "", fmt.Errorf("读取响应失败: %s", err.Error())
+		return nil, fmt.Errorf("读取响应失败: %s", err.Error())
 	}
 
 	log.Printf("[SMS] 查询状态响应 phone=%s status=%d body=%s", phone, resp.StatusCode, string(respBody))
 
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("HTTP 状态码异常: %d", resp.StatusCode)
+		return nil, fmt.Errorf("HTTP 状态码异常: %d", resp.StatusCode)
 	}
 
 	var apiResp SmsApiResponse
 	if err := json.Unmarshal(respBody, &apiResp); err != nil {
-		return "", fmt.Errorf("解析响应失败: %s", err.Error())
+		return nil, fmt.Errorf("解析响应失败: %s", err.Error())
 	}
 	if apiResp.Code != 0 {
-		return "", fmt.Errorf("%s", apiResp.Message)
+		return nil, fmt.Errorf("%s", apiResp.Message)
 	}
 	if apiResp.Data == nil {
-		return "", fmt.Errorf("响应数据为空")
+		return nil, fmt.Errorf("响应数据为空")
 	}
 
 	status, ok := apiResp.Data["status"].(string)
 	if !ok || status == "" {
-		return "", fmt.Errorf("未获取到状态")
+		return nil, fmt.Errorf("未获取到状态")
 	}
 
-	return status, nil
+	result := &CodeStatus{
+		Phone:  phone,
+		Status: status,
+	}
+	if taskID, ok := apiResp.Data["task_id"].(string); ok {
+		result.TaskID = taskID
+	}
+	if createdAt, ok := apiResp.Data["created_at"].(string); ok {
+		result.CreatedAt = createdAt
+	}
+
+	return result, nil
 }
 
 // postJSON 调用短信服务 JSON POST 接口。
@@ -134,7 +164,14 @@ func postJSON(path string, payload map[string]string, phone string) (*SmsApiResp
 	}
 
 	client := newHTTPClient()
-	resp, err := client.Post(requestURL, "application/json", strings.NewReader(string(body)))
+	req, err := http.NewRequest(http.MethodPost, requestURL, strings.NewReader(string(body)))
+	if err != nil {
+		return nil, fmt.Errorf("创建请求失败: %s", err.Error())
+	}
+	applyCommonHeaders(req)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := client.Do(req)
 	if err != nil {
 		log.Printf("[SMS] 请求失败 phone=%s url=%s err=%v", phone, requestURL, err)
 		return nil, fmt.Errorf("请求失败: %s", err.Error())
@@ -175,6 +212,23 @@ func getSMSAPIBaseURL() string {
 		return value
 	}
 	return defaultSMSAPIBaseURL
+}
+
+func getSMSAPIToken() string {
+	if value := strings.TrimSpace(os.Getenv("CAIYUN_SMS_API_TOKEN")); value != "" {
+		return value
+	}
+	if value := strings.TrimSpace(os.Getenv("DEFAULT_API_TOKEN")); value != "" {
+		return value
+	}
+	return ""
+}
+
+func applyCommonHeaders(req *http.Request) {
+	req.Header.Set("Accept", "application/json")
+	if token := getSMSAPIToken(); token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
 }
 
 // isSMSTLSSkipVerifyEnabled 判断是否允许跳过 TLS 证书校验。

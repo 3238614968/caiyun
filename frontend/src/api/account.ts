@@ -129,6 +129,7 @@ export interface SmsStatusResponse {
   message: string
   data: {
     phone: string
+    task_id?: string
     status: string
     message?: string
     retryable?: boolean
@@ -146,6 +147,7 @@ export function getSmsStatus(phone: string): Promise<SmsStatusResponse> {
 export interface SmsLoginRequest {
   phone: string
   sms_code: string
+  task_id: string
   remark?: string
 }
 

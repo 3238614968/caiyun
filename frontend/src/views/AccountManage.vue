@@ -181,7 +181,6 @@ import {
   setAccountStatus,
   triggerAccountTask,
   sendSmsCode,
-  getSmsStatus,
   smsLogin,
   type Account,
   type CreateAccountRequest,
@@ -202,13 +201,11 @@ const isEditMode = ref(false)
 const smsSending = ref(false)
 const smsCountdown = ref(0)
 let smsTimer: ReturnType<typeof setInterval> | null = null
-let smsPollTimer: ReturnType<typeof setTimeout> | null = null
-const SMS_POLL_INTERVAL = 2000
-const SMS_MAX_ATTEMPTS = 30
 
 const smsForm = reactive({
   phone: '',
   smsCode: '',
+  taskId: '',
   remark: '',
   smsStatus: 'idle' as 'idle' | 'processing' | 'completed' | 'failed' | 'timeout'
 })
@@ -231,13 +228,6 @@ const clearSmsCountdown = () => {
   smsCountdown.value = 0
 }
 
-const clearSmsPolling = () => {
-  if (smsPollTimer) {
-    clearTimeout(smsPollTimer)
-    smsPollTimer = null
-  }
-}
-
 const startSmsCountdown = (seconds = 60) => {
   clearSmsCountdown()
   smsCountdown.value = seconds
@@ -251,52 +241,10 @@ const startSmsCountdown = (seconds = 60) => {
 }
 
 const resetSmsFlow = (status: 'idle' | 'processing' | 'completed' | 'failed' | 'timeout' = 'idle') => {
-  clearSmsPolling()
   clearSmsCountdown()
   smsSending.value = false
+  smsForm.taskId = ''
   smsForm.smsStatus = status
-}
-
-const pollSmsStatus = async (attempt = 0) => {
-  try {
-    const statusRes = await getSmsStatus(smsForm.phone)
-    const status = statusRes.data?.status
-    const message = statusRes.data?.message || statusRes.message
-    const retryable = Boolean(statusRes.data?.retryable)
-
-    if (status === 'completed') {
-      clearSmsPolling()
-      smsForm.smsStatus = 'completed'
-      ElMessage.success(message || '验证码发送成功，请输入验证码')
-      return
-    }
-
-    if (status === 'failed') {
-      clearSmsPolling()
-      smsForm.smsStatus = 'failed'
-      if (retryable) {
-        clearSmsCountdown()
-      }
-      ElMessage.error(message || '验证码发送失败，请重试')
-      return
-    }
-
-    if (attempt + 1 >= SMS_MAX_ATTEMPTS) {
-      clearSmsPolling()
-      clearSmsCountdown()
-      smsForm.smsStatus = 'timeout'
-      ElMessage.warning('验证码识别超时，请重新发送')
-      return
-    }
-
-    smsPollTimer = setTimeout(() => {
-      void pollSmsStatus(attempt + 1)
-    }, SMS_POLL_INTERVAL)
-  } catch (error) {
-    clearSmsPolling()
-    clearSmsCountdown()
-    smsForm.smsStatus = 'failed'
-  }
 }
 
 const accountList = ref<Account[]>([])
@@ -380,6 +328,7 @@ const showAddDialog = () => {
   form.remark = ''
   smsForm.phone = ''
   smsForm.smsCode = ''
+  smsForm.taskId = ''
   smsForm.remark = ''
   dialogVisible.value = true
 }
@@ -461,12 +410,14 @@ const handleSendSms = async () => {
 
   try {
     smsSending.value = true
-    await sendSmsCode(smsForm.phone)
-    ElMessage.success('验证码已发送，正在识别中...')
+    const res = await sendSmsCode(smsForm.phone)
+    smsForm.taskId = res.data?.task_id || ''
+    if (!smsForm.taskId) {
+      throw new Error('未获取到验证码会话ID')
+    }
+    smsForm.smsStatus = 'completed'
+    ElMessage.success('验证码已发送，请输入验证码')
     startSmsCountdown(60)
-    smsPollTimer = setTimeout(() => {
-      void pollSmsStatus()
-    }, SMS_POLL_INTERVAL)
   } catch (error) {
     resetSmsFlow('failed')
   } finally {
@@ -508,11 +459,11 @@ const handleSubmit = async () => {
         // 检查验证码是否发送成功
         if (smsForm.smsStatus !== 'completed') {
           if (smsForm.smsStatus === 'processing') {
-            ElMessage.warning('验证码正在识别中，请稍候')
+            ElMessage.warning('验证码发送中，请稍候')
           } else if (smsForm.smsStatus === 'failed') {
             ElMessage.error('验证码发送失败，请重新发送')
           } else if (smsForm.smsStatus === 'timeout') {
-            ElMessage.warning('验证码识别超时，请重新发送')
+            ElMessage.warning('验证码会话已超时，请重新发送')
           } else {
             ElMessage.warning('请先发送验证码')
           }
@@ -521,9 +472,14 @@ const handleSubmit = async () => {
         
         submitting.value = true
         try {
+          if (!smsForm.taskId) {
+            ElMessage.warning('验证码会话不存在，请重新发送验证码')
+            return
+          }
           await smsLogin({
             phone: smsForm.phone,
             sms_code: smsForm.smsCode,
+            task_id: smsForm.taskId,
             remark: smsForm.remark
           })
           ElMessage.success('账号创建成功')
