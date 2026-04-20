@@ -1,4 +1,4 @@
-﻿package api
+package api
 
 import (
 	"bytes"
@@ -53,8 +53,8 @@ func (f *FileAPI) GetFileList(parentFileID string) (*FileListResp, error) {
 	headers := map[string]string{
 		"Content-Type":      "application/json",
 		"x-yun-api-version": "v1",
-		"x-yun-app-channel": "10000034",
-		"x-yun-client-info": "||9|7.13.6|edge||||linux unknow||zh-CN|||ZWRnZQ==||",
+		"x-yun-app-channel": "10000023",
+		"x-yun-client-info": "6|127.0.0.1|1|12.5.4|realme|RMX5060|BCFF2BBA6881DD8E4971803C63DDB5E4|02-00-00-00-00-00|android 15|1264X2592|zh||||032|0|",
 	}
 
 	body := map[string]interface{}{
@@ -139,14 +139,14 @@ func (f *FileAPI) UploadRandomFile(req *UploadRandomFileRequest) (*UploadRandomF
 	if name == "" {
 		ext := req.Ext
 		if ext == "" {
-			ext = ".png"
+			ext = ".txt"
 		}
-		name = "asign-" + randomHex(8) + ext
+		name = "auto_upload_" + randomHex(8) + ext
 	}
 
 	channelSrc := req.ChannelSrc
 	if channelSrc == "" {
-		channelSrc = "10000023" // 与 mjs 默认一致（android）
+		channelSrc = "10000023"
 	}
 
 	contentHash := sha256Hex(content)
@@ -269,7 +269,7 @@ func (f *FileAPI) DeleteFiles(fileIDs []string) (*DeleteFilesResp, error) {
 	headers := map[string]string{
 		"Content-Type": "application/json",
 	}
-	for k, v := range buildUploadHeaders("10000034", "") {
+	for k, v := range buildUploadHeaders("10000023", "") {
 		headers[k] = v
 	}
 
@@ -327,13 +327,15 @@ func buildUploadHeaders(channelSrc, opType string) map[string]string {
 			subOp = "200"
 		}
 		headers["x-huawei-channelSrc"] = channelSrc
-		headers["x-yun-client-info"] = "1|127.0.0.1|1|12.0.1|Xiaomi|22041216C||02-00-00-00-00-00|android 14|1080X2360|zh||||032|0|"
+		headers["x-yun-client-info"] = "6|127.0.0.1|1|12.5.4|realme|RMX5060|BCFF2BBA6881DD8E4971803C63DDB5E4|02-00-00-00-00-00|android 15|1264X2592|zh||||032|0|"
 		headers["x-yun-op-type"] = op
 		headers["x-yun-sub-op-type"] = subOp
+		headers["User-Agent"] = "okhttp/4.12.0"
+		headers["Connection"] = "Keep-Alive"
 	default: // Web
 		headers["x-huawei-channelSrc"] = channelSrc
-		headers["x-yun-client-info"] = "||9|7.15.3|firefox|139.0|||linux unknow||zh-CN|||"
-		headers["x-yun-device-id"] = "||9|7.15.3|firefox|139.0|||linux unknow||zh-CN|||"
+		headers["x-yun-client-info"] = "||9|12.5.4|Chrome|143.0.7499.146|codextestshare||Windows 10||zh-CN|||Q2hyb21l||"
+		headers["x-yun-device-id"] = "||9|12.5.4|Chrome|143.0.7499.146|codextestshare||Windows 10||zh-CN|||Q2hyb21l||"
 	}
 
 	return headers

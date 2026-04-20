@@ -113,9 +113,11 @@ func NewTaskRunner(account *models.Account, storage tasks.Storage, authMgr *auth
 
 	// 获取 JWT token - 总是尝试获取最新的，因为传入的 account.JWTToken 可能已过期
 	jwtToken := account.JWTToken
+	ssoToken := ""
 	// 尝试通过 specToken → tyrzLogin 获取 JWT token
-	if token, err := authMgrForJWT.GetJWTToken(account.Phone); err == nil && token != "" {
+	if token, matchedSSOToken, err := authMgrForJWT.GetJWTTokenWithSSOToken(account.Phone); err == nil && token != "" {
 		jwtToken = token
+		ssoToken = matchedSSOToken
 		lg.Info("成功获取 JWT token")
 		// 更新到 account 对象，以便后续使用
 		account.JWTToken = token
@@ -128,6 +130,9 @@ func NewTaskRunner(account *models.Account, storage tasks.Storage, authMgr *auth
 	}
 	if jwtToken != "" {
 		client.SetJWTToken(jwtToken)
+	}
+	if ssoToken != "" {
+		client.SetSSOToken(ssoToken)
 	}
 
 	return &TaskRunner{
@@ -177,12 +182,14 @@ func (s *TaskService) NewTaskRunnerWithRetry(account *models.Account, storage ta
 
 	// 获取 JWT token - 带重试机制
 	jwtToken := account.JWTToken
+	ssoToken := ""
 	var lastErr error
 	maxRetries := 3
 
 	for i := 0; i < maxRetries; i++ {
-		if token, err := authMgrForJWT.GetJWTToken(account.Phone); err == nil && token != "" {
+		if token, matchedSSOToken, err := authMgrForJWT.GetJWTTokenWithSSOToken(account.Phone); err == nil && token != "" {
 			jwtToken = token
+			ssoToken = matchedSSOToken
 			lg.Info("成功获取 JWT token")
 			account.JWTToken = token
 			// 成功获取后重置错误计数
@@ -231,6 +238,9 @@ func (s *TaskService) NewTaskRunnerWithRetry(account *models.Account, storage ta
 
 	if jwtToken != "" {
 		client.SetJWTToken(jwtToken)
+	}
+	if ssoToken != "" {
+		client.SetSSOToken(ssoToken)
 	}
 
 	return &TaskRunner{

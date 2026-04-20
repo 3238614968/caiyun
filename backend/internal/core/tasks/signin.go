@@ -35,6 +35,13 @@ func (t *SignInTask) Run() error {
 		if cloudInfoBefore.Result.ToReceive > 0 {
 			t.logger.Info(fmt.Sprintf("待领取%d", cloudInfoBefore.Result.ToReceive))
 		}
+		if cloudInfoBefore.Result.TodaySigned() {
+			t.logger.Info("网盘今日已签到")
+			if cloudInfoBefore.Result.NextMonthGet > 0 {
+				t.logger.Info(fmt.Sprintf("下月可领取%d个云朵", cloudInfoBefore.Result.NextMonthGet))
+			}
+			return nil
+		}
 	}
 
 	time.Sleep(1 * time.Second)
@@ -49,16 +56,28 @@ func (t *SignInTask) Run() error {
 		if msg == "" {
 			msg = "unknown error"
 		}
-		t.logger.Fail(fmt.Sprintf("签到失败: code=%d, msg=%s", signInResp.Code, msg))
-		return fmt.Errorf("签到失败: code=%d, msg=%s", signInResp.Code, msg)
+		t.logger.Fail(fmt.Sprintf("签到失败: code=%s, msg=%s", signInResp.CodeText(), msg))
+		return fmt.Errorf("签到失败: code=%s, msg=%s", signInResp.CodeText(), msg)
 	}
 
-	if signInResp.Result.TodaySignIn {
-		t.logger.Info("网盘今日已签到")
-	} else if signInResp.Result.SignInPoints > 0 {
+	if signInResp.Result.TodaySigned() && signInResp.Result.SignInPoints > 0 {
 		t.logger.Success(fmt.Sprintf("网盘签到成功，获得%d云朵", signInResp.Result.SignInPoints))
-	} else {
+	} else if signInResp.Result.TodaySigned() {
 		t.logger.Success("网盘签到成功")
+	} else {
+		latestInfo, latestErr := t.api.GetCloudInfo()
+		if latestErr != nil {
+			t.logger.Warn("签到后复查状态失败:", latestErr)
+		} else if latestInfo != nil && latestInfo.IsSuccess() && latestInfo.Result.TodaySigned() {
+			t.logger.Success("网盘签到成功")
+		} else {
+			msg := signInResp.MessageText()
+			if msg == "" {
+				msg = "unknown error"
+			}
+			t.logger.Fail(fmt.Sprintf("签到失败: code=%s, msg=%s", signInResp.CodeText(), msg))
+			return fmt.Errorf("签到失败: code=%s, msg=%s", signInResp.CodeText(), msg)
+		}
 	}
 
 	cloudInfoAfter, err := t.api.GetCloudInfo()
@@ -71,7 +90,7 @@ func (t *SignInTask) Run() error {
 		if msg == "" {
 			msg = "unknown error"
 		}
-		t.logger.Warn(fmt.Sprintf("获取签到后云朵信息失败: code=%d, msg=%s", cloudInfoAfter.Code, msg))
+		t.logger.Warn(fmt.Sprintf("获取签到后云朵信息失败: code=%s, msg=%s", cloudInfoAfter.CodeText(), msg))
 		return nil
 	}
 

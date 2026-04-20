@@ -32,8 +32,9 @@ func performExchange(account *models.ExchangeAccount, prizeID string, tokenMgr *
 		authClient := corehttp.NewClient()
 		authClient.SetAuth(authStr)
 		authForJWT := auth.NewAuth(authClient)
-		if token, err := authForJWT.GetJWTToken(account.Phone); err == nil && token != "" {
+		if token, ssoToken, err := authForJWT.GetJWTTokenWithSSOToken(account.Phone); err == nil && token != "" {
 			jwtToken = token
+			client.SetSSOToken(ssoToken)
 		}
 	}
 	if jwtToken != "" {

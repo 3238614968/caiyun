@@ -25,6 +25,7 @@ type TokenManager struct {
 // TokenInfo 描述账号当前 Token 状态。
 type TokenInfo struct {
 	JWTToken     string
+	SSOToken     string
 	Auth         string
 	ExpiresAt    time.Time
 	LastRefresh  time.Time
@@ -98,14 +99,17 @@ func (tm *TokenManager) refreshToken(accountID uint) (*TokenInfo, error) {
 		authClient.SetAuth(authStr)
 	}
 	authForJWT := auth.NewAuth(authClient)
-	if token, err := authForJWT.GetJWTToken(account.Phone); err == nil && token != "" {
+	ssoToken := ""
+	if token, matchedSSOToken, err := authForJWT.GetJWTTokenWithSSOToken(account.Phone); err == nil && token != "" {
 		jwtToken = token
+		ssoToken = matchedSSOToken
 	}
 
 	now := time.Now()
 	// JWT Token 缓存时间改为 15 分钟，因为 JWT 本身的有效期只有 20-30 分钟
 	tokenInfo := &TokenInfo{
 		JWTToken:     jwtToken,
+		SSOToken:     ssoToken,
 		Auth:         authStr,
 		ExpiresAt:    now.Add(15 * time.Minute),
 		LastRefresh:  now,
@@ -263,6 +267,9 @@ func (tm *TokenManager) CreateAuthenticatedClient(accountID uint, auth string) (
 
 	if tokenInfo.JWTToken != "" {
 		client.SetJWTToken(tokenInfo.JWTToken)
+	}
+	if tokenInfo.SSOToken != "" {
+		client.SetSSOToken(tokenInfo.SSOToken)
 	}
 
 	return client, nil

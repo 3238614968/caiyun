@@ -378,23 +378,32 @@ func (a *Auth) TyrzLogin(ssoToken string) (string, error) {
 	return result.Result.Token, nil
 }
 
-// GetJWTToken 获取 JWT Token（完整流程）
-func (a *Auth) GetJWTToken(phone string) (string, error) {
+// GetJWTTokenWithSSOToken 获取 JWT Token 和对应的 ssoToken（单次 sso 查询）
+func (a *Auth) GetJWTTokenWithSSOToken(phone string) (string, string, error) {
 	// 1. 获取 ssoToken
 	ssoToken, err := a.QuerySpecTokenForJWT(phone)
 	if err != nil {
-		return "", fmt.Errorf("获取 ssoToken 失败: %w", err)
+		return "", "", fmt.Errorf("获取 ssoToken 失败: %w", err)
 	}
 
 	if ssoToken == "" {
-		return "", fmt.Errorf("ssoToken 为空")
+		return "", "", fmt.Errorf("ssoToken 为空")
 	}
 
 	// 2. 使用 ssoToken 获取 JWT token
 	jwtToken, err := a.TyrzLogin(ssoToken)
 	if err != nil {
-		return "", fmt.Errorf("获取 JWT token 失败: %w", err)
+		return "", ssoToken, fmt.Errorf("获取 JWT token 失败: %w", err)
 	}
 
+	return jwtToken, ssoToken, nil
+}
+
+// GetJWTToken 获取 JWT Token（完整流程）
+func (a *Auth) GetJWTToken(phone string) (string, error) {
+	jwtToken, _, err := a.GetJWTTokenWithSSOToken(phone)
+	if err != nil {
+		return "", err
+	}
 	return jwtToken, nil
 }

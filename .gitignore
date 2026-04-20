@@ -47,6 +47,16 @@ logs/
 tmp/
 temp/
 *.tmp
+*.go.[0-9]*
+*.ts.[0-9]*
+*.js.[0-9]*
+*.vue.[0-9]*
+*.py.[0-9]*
+*.md.[0-9]*
+*.json.[0-9]*
+*.yaml.[0-9]*
+*.yml.[0-9]*
+*.sql.[0-9]*
 
 # Node modules (frontend)
 node_modules/

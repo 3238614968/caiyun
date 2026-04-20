@@ -65,7 +65,7 @@ func syncProductsFromCloud(productRepo *repository.ProductRepository, accountRep
 
 	authClient := corehttp.NewClient()
 	authClient.SetAuth(authStr)
-	jwtToken, err := auth.NewAuth(authClient).GetJWTToken(account.Phone)
+	jwtToken, ssoToken, err := auth.NewAuth(authClient).GetJWTTokenWithSSOToken(account.Phone)
 	if err != nil {
 		return 0, fmt.Errorf("获取账号 JWT 失败: %w", err)
 	}
@@ -75,6 +75,9 @@ func syncProductsFromCloud(productRepo *repository.ProductRepository, accountRep
 
 	client := corehttp.NewClient()
 	client.SetAuth(authStr)
+	if ssoToken != "" {
+		client.SetSSOToken(ssoToken)
+	}
 	client.SetJWTToken(jwtToken)
 
 	resp, err := api.NewCaiyunAPI(client).GetProductList()

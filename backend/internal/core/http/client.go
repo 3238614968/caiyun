@@ -2,6 +2,7 @@ package http
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -18,8 +19,11 @@ type Client struct {
 	userAgent  string
 	auth       string // Basic Auth
 	jwtToken   string
+	ssoToken   string
+	userDomain string
 	clientInfo string
 	deviceInfo string
+	deviceID   string
 	netType    string
 	channelSrc string
 	cookieJar  *cookiejar.Jar
@@ -29,19 +33,21 @@ type Client struct {
 func NewClient() *Client {
 	jar, _ := cookiejar.New(nil)
 
-	// 使用 Android 客户端信息（与 mjs 源码一致）
-	androidClientInfo := "1|127.0.0.1|1|12.0.1|Xiaomi|22041216C||02-00-00-00-00-00|android 14|1080X2360|zh||||032|0|"
+	// 使用新版 Android 客户端信息（与最新版移动云盘脚本一致）
+	androidClientInfo := "6|127.0.0.1|1|12.5.4|realme|RMX5060|BCFF2BBA6881DD8E4971803C63DDB5E4|02-00-00-00-00-00|android 15|1264X2592|zh||||032|0|"
+	deviceID := "BCFF2BBA6881DD8E4971803C63DDB5E4"
 
 	return &Client{
 		client: &http.Client{
 			Timeout: 30 * time.Second,
 			Jar:     jar,
 		},
-		userAgent:  "Mozilla/5.0 (Linux; Android 14; 22041216C Build/TP1A.220624.014; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/128.0.6613.88 Mobile Safari/537.36",
+		userAgent:  "Mozilla/5.0 (Linux; Android 10; MI 8 Build/QKQ1.190828.002; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/143.0.7499.146 Mobile Safari/537.36 MCloudApp/12.5.4 AppLanguage/zh-CN",
 		clientInfo: androidClientInfo,
 		deviceInfo: androidClientInfo,
+		deviceID:   deviceID,
 		netType:    "1",
-		channelSrc: "10000034",
+		channelSrc: "10000023",
 		cookieJar:  jar,
 	}
 }
@@ -58,11 +64,20 @@ func (c *Client) SetJWTToken(token string) {
 	if token == "" {
 		return
 	}
+	c.userDomain = extractUserDomainIDFromJWT(token)
 
 	for _, domain := range []string{"m.mcloud.139.com", "mrp.mcloud.139.com", "caiyun.feixin.10086.cn"} {
 		c.SetCookie("jwtToken", token, domain)
 	}
 	c.SetCookie("sensors_stay_time", fmt.Sprintf("%d", time.Now().UnixMilli()), "m.mcloud.139.com")
+	if c.userDomain != "" {
+		c.SetCookie("userDomainId", c.userDomain, "m.mcloud.139.com")
+	}
+}
+
+// SetSSOToken 设置当前 SSO Token
+func (c *Client) SetSSOToken(token string) {
+	c.ssoToken = strings.TrimSpace(token)
 }
 
 // SetUserAgent 设置 User-Agent
@@ -74,6 +89,26 @@ func (c *Client) SetUserAgent(ua string) {
 func (c *Client) SetClientInfo(info string) {
 	c.clientInfo = info
 	c.deviceInfo = info
+}
+
+// GetJWTToken 获取当前 JWT Token
+func (c *Client) GetJWTToken() string {
+	return c.jwtToken
+}
+
+// GetSSOToken 获取当前 SSO Token
+func (c *Client) GetSSOToken() string {
+	return c.ssoToken
+}
+
+// GetUserDomainID 获取当前 userDomainId
+func (c *Client) GetUserDomainID() string {
+	return c.userDomain
+}
+
+// GetDeviceID 获取当前设备标识
+func (c *Client) GetDeviceID() string {
+	return c.deviceID
 }
 
 // SetCookie 设置 Cookie
@@ -107,6 +142,9 @@ func (c *Client) buildHeaders(reqURL string, customHeaders map[string]string) ma
 	headers["x-NetType"] = c.netType
 	headers["x-requested-with"] = "com.chinamobile.mcloud"
 	headers["charset"] = "utf-8"
+	if c.deviceID != "" {
+		headers["deviceId"] = c.deviceID
+	}
 
 	// 解析 URL
 	u, _ := url.Parse(reqURL)
@@ -124,6 +162,7 @@ func (c *Client) buildHeaders(reqURL string, customHeaders map[string]string) ma
 		strings.Contains(hostname, "m.mcloud.139.com") {
 		if c.jwtToken != "" {
 			headers["jwttoken"] = c.jwtToken
+			headers["jwtToken"] = c.jwtToken
 		}
 		if c.auth != "" {
 			headers["Authorization"] = "Basic " + c.auth
@@ -282,4 +321,40 @@ func (c *Client) ReadResponseBody(resp *http.Response) (string, error) {
 // Sleep 休眠（毫秒）
 func (c *Client) Sleep(ms int) {
 	time.Sleep(time.Duration(ms) * time.Millisecond)
+}
+
+func extractUserDomainIDFromJWT(token string) string {
+	parts := strings.Split(token, ".")
+	if len(parts) < 2 {
+		return ""
+	}
+
+	payload := parts[1]
+	data, err := base64.RawURLEncoding.DecodeString(payload)
+	if err != nil {
+		return ""
+	}
+
+	var body struct {
+		Sub interface{} `json:"sub"`
+	}
+	if err := json.Unmarshal(data, &body); err != nil {
+		return ""
+	}
+
+	switch sub := body.Sub.(type) {
+	case map[string]interface{}:
+		if value, ok := sub["userDomainId"].(string); ok {
+			return strings.TrimSpace(value)
+		}
+	case string:
+		var nested map[string]interface{}
+		if err := json.Unmarshal([]byte(sub), &nested); err == nil {
+			if value, ok := nested["userDomainId"].(string); ok {
+				return strings.TrimSpace(value)
+			}
+		}
+	}
+
+	return ""
 }
