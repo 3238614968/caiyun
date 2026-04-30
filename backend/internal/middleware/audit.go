@@ -1,10 +1,12 @@
-﻿package middleware
+package middleware
 
 import (
 	"bytes"
 	"caiyun/internal/models"
 	"caiyun/internal/repository"
+	"encoding/json"
 	"io"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -51,15 +53,15 @@ func AuditMiddleware(auditRepo *repository.AuditLogRepository) gin.HandlerFunc {
 			Path:         c.Request.URL.Path,
 			IP:           c.ClientIP(),
 			UserAgent:    c.Request.UserAgent(),
-			RequestData:  truncateString(string(requestBody), 2000),
-			ResponseData: truncateString(blw.body.String(), 2000),
+			RequestData:  truncateString(redactAuditPayload(requestBody), 2000),
+			ResponseData: truncateString(redactAuditPayload(blw.body.Bytes()), 2000),
 			StatusCode:   c.Writer.Status(),
 			ExecTimeMs:   int(execTime),
 		}
 
 		// 如果有错误，记录错误信息
 		if len(c.Errors) > 0 {
-			auditLog.ErrorMsg = c.Errors.String()
+			auditLog.ErrorMsg = redactPlainAuditPayload(c.Errors.String())
 		}
 
 		// 异步保存审计日志
@@ -91,58 +93,58 @@ func determineActionAndResource(method, path string) (models.AuditAction, models
 
 	// 根据路径判断资源
 	switch {
-		case contains(path, "/accounts"):
-			resource = models.AuditResourceAccount
-		case contains(path, "/tasks"):
-			resource = models.AuditResourceTask
-		case contains(path, "/products"):
-			resource = models.AuditResourceProduct
-		case contains(path, "/exchange"):
-			resource = models.AuditResourceExchange
-		case contains(path, "/auth"):
-			resource = models.AuditResourceUser
-		case contains(path, "/config"):
-			resource = models.AuditResourceConfig
+	case contains(path, "/accounts"):
+		resource = models.AuditResourceAccount
+	case contains(path, "/tasks"):
+		resource = models.AuditResourceTask
+	case contains(path, "/products"):
+		resource = models.AuditResourceProduct
+	case contains(path, "/exchange"):
+		resource = models.AuditResourceExchange
+	case contains(path, "/auth"):
+		resource = models.AuditResourceUser
+	case contains(path, "/config"):
+		resource = models.AuditResourceConfig
 	}
 
 	// 根据方法和路径判断操作
 	switch method {
-		case "POST":
-			if contains(path, "/login") {
-				action = models.AuditActionLogin
-			} else if contains(path, "/register") {
-				action = models.AuditActionRegister
-			} else if contains(path, "/accounts") {
-				action = models.AuditActionCreateAccount
-			} else if contains(path, "/tasks") {
-				if contains(path, "/execute") {
-					action = models.AuditActionExecuteTask
-				} else {
-					action = models.AuditActionCreateTask
-				}
-			} else if contains(path, "/exchange") {
-				action = models.AuditActionExchange
+	case "POST":
+		if contains(path, "/login") {
+			action = models.AuditActionLogin
+		} else if contains(path, "/register") {
+			action = models.AuditActionRegister
+		} else if contains(path, "/accounts") {
+			action = models.AuditActionCreateAccount
+		} else if contains(path, "/tasks") {
+			if contains(path, "/execute") {
+				action = models.AuditActionExecuteTask
+			} else {
+				action = models.AuditActionCreateTask
 			}
-		case "PUT":
-			if contains(path, "/accounts") {
-				action = models.AuditActionUpdateAccount
-			} else if contains(path, "/tasks") {
-				action = models.AuditActionUpdateTask
-			} else if contains(path, "/config") {
-				action = models.AuditActionUpdateConfig
-			} else if contains(path, "/profile") {
-				action = models.AuditActionUpdateProfile
-			}
-		case "DELETE":
-			if contains(path, "/accounts") {
-				action = models.AuditActionDeleteAccount
-			} else if contains(path, "/tasks") {
-				action = models.AuditActionDeleteTask
-			}
-		case "GET":
-			if contains(path, "/products") {
-				action = models.AuditActionSearchProducts
-			}
+		} else if contains(path, "/exchange") {
+			action = models.AuditActionExchange
+		}
+	case "PUT":
+		if contains(path, "/accounts") {
+			action = models.AuditActionUpdateAccount
+		} else if contains(path, "/tasks") {
+			action = models.AuditActionUpdateTask
+		} else if contains(path, "/config") {
+			action = models.AuditActionUpdateConfig
+		} else if contains(path, "/profile") {
+			action = models.AuditActionUpdateProfile
+		}
+	case "DELETE":
+		if contains(path, "/accounts") {
+			action = models.AuditActionDeleteAccount
+		} else if contains(path, "/tasks") {
+			action = models.AuditActionDeleteTask
+		}
+	case "GET":
+		if contains(path, "/products") {
+			action = models.AuditActionSearchProducts
+		}
 	}
 
 	return action, resource
@@ -190,6 +192,83 @@ func truncateString(s string, maxLen int) string {
 		return s
 	}
 	return s[:maxLen] + "..."
+}
+
+// redactAuditPayload 脱敏审计日志中的请求/响应载荷，避免凭据二次落库。
+func redactAuditPayload(payload []byte) string {
+	payload = bytes.TrimSpace(payload)
+	if len(payload) == 0 {
+		return ""
+	}
+
+	var data interface{}
+	if err := json.Unmarshal(payload, &data); err == nil {
+		redacted := redactAuditValue(data)
+		if encoded, err := json.Marshal(redacted); err == nil {
+			return string(encoded)
+		}
+	}
+
+	return redactPlainAuditPayload(string(payload))
+}
+
+func redactAuditValue(value interface{}) interface{} {
+	switch v := value.(type) {
+	case map[string]interface{}:
+		for key, item := range v {
+			if isSensitiveAuditKey(key) {
+				v[key] = "[REDACTED]"
+				continue
+			}
+			v[key] = redactAuditValue(item)
+		}
+		return v
+	case []interface{}:
+		for i, item := range v {
+			v[i] = redactAuditValue(item)
+		}
+		return v
+	default:
+		return value
+	}
+}
+
+func redactPlainAuditPayload(payload string) string {
+	if payload == "" {
+		return ""
+	}
+	lower := strings.ToLower(payload)
+	for _, key := range sensitiveAuditKeys {
+		if strings.Contains(lower, key) {
+			return "[REDACTED_SENSITIVE_PAYLOAD]"
+		}
+	}
+	return payload
+}
+
+func isSensitiveAuditKey(key string) bool {
+	normalized := strings.ToLower(strings.ReplaceAll(strings.ReplaceAll(key, "_", ""), "-", ""))
+	for _, sensitiveKey := range sensitiveAuditKeys {
+		if strings.Contains(normalized, strings.ReplaceAll(sensitiveKey, "_", "")) {
+			return true
+		}
+	}
+	return false
+}
+
+var sensitiveAuditKeys = []string{
+	"password",
+	"auth",
+	"authorization",
+	"token",
+	"jwttoken",
+	"jwt_token",
+	"cookie",
+	"smscode",
+	"sms_code",
+	"api_key",
+	"apikey",
+	"secret",
 }
 
 // AuditLogFilter 审计日志过滤器（用于排除某些路径）

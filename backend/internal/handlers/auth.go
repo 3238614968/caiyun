@@ -1,11 +1,20 @@
-﻿package handlers
+package handlers
 
 import (
+	"crypto/rand"
+	"encoding/base64"
+	"errors"
 	"net/http"
+	"time"
 
 	"caiyun/internal/services"
 	"caiyun/pkg/jwt"
 	"github.com/gin-gonic/gin"
+)
+
+const (
+	authCookieName = "auth_token"
+	csrfCookieName = "csrf_token"
 )
 
 // AuthHandler 认证处理器
@@ -24,7 +33,7 @@ func NewAuthHandler(authService *services.AuthService, jwtManager *jwt.Manager) 
 
 type RegisterRequest struct {
 	Username string `json:"username" binding:"required,min=3,max=50"`
-	Password string `json:"password" binding:"required,min=6"`
+	Password string `json:"password" binding:"required,min=12"`
 	Email    string `json:"email"`
 }
 
@@ -33,8 +42,13 @@ type LoginRequest struct {
 	Password string `json:"password" binding:"required"`
 }
 
+type ResetPasswordRequest struct {
+	Username    string `json:"username" binding:"required,min=3,max=50"`
+	Email       string `json:"email" binding:"required,email"`
+	NewPassword string `json:"new_password" binding:"required,min=12"`
+}
+
 type AuthResponse struct {
-	Token     string       `json:"token"`
 	ExpiresAt int64        `json:"expires_at"`
 	User      UserResponse `json:"user"`
 }
@@ -52,7 +66,7 @@ type UserResponse struct {
 // @Accept json
 // @Produce json
 // @Param request body services.RegisterRequest true "注册请求"
-// @Success 201 {object} services.AuthResponse
+// @Success 201 {object} AuthResponse
 // @Failure 400 {object} ErrorResponse
 // @Failure 409 {object} ErrorResponse
 // @Router /api/auth/register [post]
@@ -65,19 +79,21 @@ func (h *AuthHandler) Register(c *gin.Context) {
 
 	resp, err := h.authService.Register(&req)
 	if err != nil {
-		switch err {
-		case services.ErrUserExists:
+		switch {
+		case errors.Is(err, services.ErrUserExists):
 			c.JSON(http.StatusConflict, ErrorResponse{Message: "用户名已存在"})
-		case services.ErrEmailExists:
+		case errors.Is(err, services.ErrEmailExists):
 			c.JSON(http.StatusConflict, ErrorResponse{Message: "邮箱已被注册"})
+		case errors.Is(err, services.ErrWeakPassword):
+			c.JSON(http.StatusBadRequest, ErrorResponse{Message: err.Error()})
 		default:
 			c.JSON(http.StatusInternalServerError, ErrorResponse{Message: err.Error()})
 		}
 		return
 	}
 
+	setAuthCookies(c, resp.Token, time.Until(time.Unix(resp.ExpiresAt, 0)))
 	c.JSON(http.StatusCreated, AuthResponse{
-		Token:     resp.Token,
 		ExpiresAt: resp.ExpiresAt,
 		User: UserResponse{
 			ID:       resp.User.ID,
@@ -94,7 +110,7 @@ func (h *AuthHandler) Register(c *gin.Context) {
 // @Accept json
 // @Produce json
 // @Param request body services.LoginRequest true "登录请求"
-// @Success 200 {object} services.AuthResponse
+// @Success 200 {object} AuthResponse
 // @Failure 400 {object} ErrorResponse
 // @Failure 401 {object} ErrorResponse
 // @Router /api/auth/login [post]
@@ -116,8 +132,8 @@ func (h *AuthHandler) Login(c *gin.Context) {
 		return
 	}
 
+	setAuthCookies(c, resp.Token, time.Until(time.Unix(resp.ExpiresAt, 0)))
 	c.JSON(http.StatusOK, AuthResponse{
-		Token:     resp.Token,
 		ExpiresAt: resp.ExpiresAt,
 		User: UserResponse{
 			ID:       resp.User.ID,
@@ -126,6 +142,31 @@ func (h *AuthHandler) Login(c *gin.Context) {
 			Role:     resp.User.Role,
 		},
 	})
+}
+
+// ResetPassword 通过用户名和注册邮箱重置密码。
+func (h *AuthHandler) ResetPassword(c *gin.Context) {
+	var req ResetPasswordRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, ErrorResponse{Message: err.Error()})
+		return
+	}
+
+	err := h.authService.ResetPasswordByEmail(req.Username, req.Email, req.NewPassword)
+	if err != nil {
+		switch {
+		case errors.Is(err, services.ErrInvalidRecoveryInfo):
+			c.JSON(http.StatusBadRequest, ErrorResponse{Message: "用户名或邮箱不匹配"})
+		case errors.Is(err, services.ErrWeakPassword):
+			c.JSON(http.StatusBadRequest, ErrorResponse{Message: err.Error()})
+		default:
+			c.JSON(http.StatusInternalServerError, ErrorResponse{Message: "密码重置失败"})
+		}
+		return
+	}
+
+	clearAuthCookie(c)
+	c.JSON(http.StatusOK, SuccessResponse{Message: "密码已重置，请使用新密码登录"})
 }
 
 // RefreshToken 刷新Token
@@ -145,10 +186,16 @@ func (h *AuthHandler) RefreshToken(c *gin.Context) {
 		return
 	}
 
+	setAuthCookies(c, resp.Token, time.Until(time.Unix(resp.ExpiresAt, 0)))
 	c.JSON(http.StatusOK, TokenResponse{
-		Token:     resp.Token,
 		ExpiresAt: resp.ExpiresAt,
 	})
+}
+
+// Logout 清除认证 Cookie。
+func (h *AuthHandler) Logout(c *gin.Context) {
+	clearAuthCookie(c)
+	c.JSON(http.StatusOK, SuccessResponse{Message: "退出成功"})
 }
 
 // GetCurrentUser 获取当前用户信息
@@ -178,6 +225,32 @@ func (h *AuthHandler) GetCurrentUser(c *gin.Context) {
 
 // TokenResponse Token响应
 type TokenResponse struct {
-	Token     string `json:"token"`
-	ExpiresAt int64  `json:"expires_at"`
+	ExpiresAt int64 `json:"expires_at"`
+}
+
+func setAuthCookies(c *gin.Context, token string, maxAge time.Duration) {
+	if maxAge <= 0 {
+		maxAge = 7 * 24 * time.Hour
+	}
+	c.SetSameSite(http.SameSiteLaxMode)
+	c.SetCookie(authCookieName, token, int(maxAge.Seconds()), "/", "", isSecureRequest(c), true)
+	c.SetCookie(csrfCookieName, generateCSRFToken(), int(maxAge.Seconds()), "/", "", isSecureRequest(c), false)
+}
+
+func clearAuthCookie(c *gin.Context) {
+	c.SetSameSite(http.SameSiteLaxMode)
+	c.SetCookie(authCookieName, "", -1, "/", "", isSecureRequest(c), true)
+	c.SetCookie(csrfCookieName, "", -1, "/", "", isSecureRequest(c), false)
+}
+
+func isSecureRequest(c *gin.Context) bool {
+	return c.Request.TLS != nil || c.GetHeader("X-Forwarded-Proto") == "https"
+}
+
+func generateCSRFToken() string {
+	var buf [32]byte
+	if _, err := rand.Read(buf[:]); err != nil {
+		return base64.RawURLEncoding.EncodeToString([]byte(time.Now().Format(time.RFC3339Nano)))
+	}
+	return base64.RawURLEncoding.EncodeToString(buf[:])
 }

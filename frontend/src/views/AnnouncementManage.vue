@@ -101,7 +101,7 @@
             title="弹窗公告说明"
             type="info"
             :closable="false"
-            description="开启弹窗后，用户登录后会自动弹出此公告。如有多个弹窗公告，默认只显示置顶的公告。"
+            description="开启弹窗后，仅置顶且未读的弹窗公告会自动弹出一次；其他已发布公告会展示在首页公告列表中。"
           />
         </el-form-item>
       </el-form>

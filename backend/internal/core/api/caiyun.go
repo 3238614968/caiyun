@@ -11,17 +11,9 @@ import (
 )
 
 const (
-	BaseURL              = "https://caiyun.feixin.10086.cn"
 	MarketURL            = "https://caiyun.feixin.10086.cn/market"
-	MrpMarketURL         = "https://mrp.mcloud.139.com/market"
 	MobileMarketURL      = "https://m.mcloud.139.com/market"
-	PortalURL            = "https://caiyun.feixin.10086.cn/portal"
-	NoteURL              = "https://note.mcloud.139.com"
-	PersonalURL          = "https://personal-kd-njs.yun.139.com"
-	YunURL               = "https://yun.139.com"
-	AICloudURL           = "https://yun.139.com/mrpInfo/ycloud/aixt"
 	AIYunURL             = "https://ai.yun.139.com"
-	CloudPhoneURL        = "https://cpactiv.buy.139.com/cloudphone-market"
 	MarketClientVersion  = "12.5.4"
 	MarketSourceID       = "1097"
 	MarketUserAgent      = "Mozilla/5.0 (Linux; Android 10; MI 8 Build/QKQ1.190828.002; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/143.0.7499.146 Mobile Safari/537.36 MCloudApp/12.5.4 AppLanguage/zh-CN"

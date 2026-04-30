@@ -23,6 +23,55 @@
     </el-row>
 
     <el-row :gutter="20" style="margin-top: 20px">
+      <!-- 首页公告列表 -->
+      <el-col :span="24">
+        <el-card shadow="hover" class="announcement-card">
+          <template #header>
+            <div class="card-header">
+              <div class="announcement-title">
+                <el-icon><Bell /></el-icon>
+                <span>公告</span>
+                <el-tag v-if="unreadAnnouncementCount > 0" type="danger" size="small">
+                  {{ unreadAnnouncementCount }} 条未读
+                </el-tag>
+              </div>
+              <el-button
+                v-if="announcements.length > 0"
+                type="primary"
+                link
+                @click="markAllAnnouncementsRead"
+              >
+                全部标为已读
+              </el-button>
+            </div>
+          </template>
+
+          <div v-loading="announcementLoading" class="announcement-list">
+            <el-empty v-if="!announcementLoading && announcements.length === 0" description="暂无公告" :image-size="80" />
+            <div
+              v-for="item in announcements"
+              :key="item.id"
+              class="announcement-item"
+              :class="{ unread: !isAnnouncementRead(item.id), top: item.is_top }"
+              @click="openAnnouncement(item)"
+            >
+              <div class="announcement-main">
+                <div class="announcement-line">
+                  <el-tag v-if="item.is_top" type="danger" size="small">置顶</el-tag>
+                  <el-tag v-if="item.is_popup" type="warning" size="small">弹窗</el-tag>
+                  <el-tag v-if="!isAnnouncementRead(item.id)" type="success" size="small">未读</el-tag>
+                  <span class="announcement-name">{{ item.title }}</span>
+                </div>
+                <div class="announcement-preview">{{ item.content }}</div>
+              </div>
+              <div class="announcement-date">{{ formatDateTime(item.created_at) }}</div>
+            </div>
+          </div>
+        </el-card>
+      </el-col>
+    </el-row>
+
+    <el-row :gutter="20" style="margin-top: 20px">
       <!-- 趋势图 -->
       <el-col :span="16">
         <el-card shadow="hover" class="chart-card">
@@ -99,6 +148,25 @@
         </el-card>
       </el-col>
     </el-row>
+
+    <el-dialog
+      v-model="announcementDetailVisible"
+      title="公告详情"
+      width="560px"
+      class="announcement-detail-dialog"
+    >
+      <div v-if="currentAnnouncement" class="announcement-detail">
+        <div class="announcement-detail-title">
+          {{ currentAnnouncement.title }}
+          <el-tag v-if="currentAnnouncement.is_top" type="danger" size="small">置顶</el-tag>
+          <el-tag v-if="currentAnnouncement.is_popup" type="warning" size="small">弹窗</el-tag>
+        </div>
+        <div class="announcement-detail-time">
+          发布时间：{{ formatDateTime(currentAnnouncement.created_at) }}
+        </div>
+        <div class="announcement-detail-content">{{ currentAnnouncement.content }}</div>
+      </div>
+    </el-dialog>
   </div>
 </template>
 
@@ -110,6 +178,7 @@ import TaskStatusMonitor from '../components/TaskStatusMonitor.vue'
 import { wsClient, type WsMessage } from '../api/websocket'
 import { getAdminDashboard, type AdminDashboardData } from '../api/account'
 import { useAuthStore } from '../store/auth'
+import { getAnnouncements, type Announcement } from '../api/announcement'
 import * as echarts from 'echarts'
 
 const authStore = useAuthStore()
@@ -120,6 +189,11 @@ const trendChart = ref<echarts.ECharts>()
 const loading = ref(false)
 const calculating = ref(false)
 const trendDays = ref(7)
+const announcements = ref<Announcement[]>([])
+const announcementLoading = ref(false)
+const announcementDetailVisible = ref(false)
+const currentAnnouncement = ref<Announcement | null>(null)
+const readAnnouncementIDs = ref<number[]>([])
 
 // Admin dashboard data
 const adminData = reactive<AdminDashboardData>({
@@ -146,7 +220,7 @@ const dashboardData = reactive<DashboardData>({
 const stats = ref([
   {
     key: 'total_cloud',
-    label: '总云朵数',
+    label: '当前云朵数',
     value: 0,
     diff: 0,
     icon: 'Cloudy',
@@ -162,7 +236,7 @@ const stats = ref([
   },
   {
     key: 'today_gained',
-    label: '今日获得',
+    label: '今日变化',
     value: 0,
     diff: 0,
     icon: 'TrendCharts',
@@ -170,7 +244,7 @@ const stats = ref([
   },
   {
     key: 'success_rate',
-    label: '任务成功率',
+    label: '今日成功率',
     value: '0%',
     diff: 0,
     icon: 'CircleCheck',
@@ -182,6 +256,10 @@ const accountRanking = ref<any[]>([])
 
 // 只显示前10名
 const topRanking = computed(() => accountRanking.value.slice(0, 10))
+const readAnnouncementStorageKey = computed(() => `readAnnouncements:${authStore.user?.id || 'guest'}`)
+const unreadAnnouncementCount = computed(() => {
+  return announcements.value.filter(item => !isAnnouncementRead(item.id)).length
+})
 
 // 手机号脱敏：前三后四
 const maskPhone = (phone: string) => {
@@ -210,6 +288,62 @@ const formatCloudCount = (value: number | string) => {
   return count.toLocaleString('zh-CN')
 }
 
+const formatDateTime = (value: string) => {
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return value
+  return date.toLocaleString('zh-CN', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit'
+  })
+}
+
+const loadReadAnnouncementIDs = () => {
+  const legacyDismissed = JSON.parse(localStorage.getItem('dismissedAnnouncements') || '[]')
+  const userRead = JSON.parse(localStorage.getItem(readAnnouncementStorageKey.value) || '[]')
+  readAnnouncementIDs.value = Array.from(new Set([...legacyDismissed, ...userRead]))
+}
+
+const persistReadAnnouncementIDs = () => {
+  localStorage.setItem(readAnnouncementStorageKey.value, JSON.stringify(readAnnouncementIDs.value))
+}
+
+const isAnnouncementRead = (id: number) => readAnnouncementIDs.value.includes(id)
+
+const markAnnouncementRead = (id: number) => {
+  if (!readAnnouncementIDs.value.includes(id)) {
+    readAnnouncementIDs.value.push(id)
+    persistReadAnnouncementIDs()
+  }
+}
+
+const markAllAnnouncementsRead = () => {
+  const allIDs = announcements.value.map(item => item.id)
+  readAnnouncementIDs.value = Array.from(new Set([...readAnnouncementIDs.value, ...allIDs]))
+  persistReadAnnouncementIDs()
+  ElMessage.success('已全部标为已读')
+}
+
+const openAnnouncement = (announcement: Announcement) => {
+  currentAnnouncement.value = announcement
+  announcementDetailVisible.value = true
+  markAnnouncementRead(announcement.id)
+}
+
+const loadAnnouncements = async () => {
+  announcementLoading.value = true
+  try {
+    const res: any = await getAnnouncements()
+    announcements.value = res.announcements || []
+  } catch (error) {
+    ElMessage.error('加载公告失败')
+  } finally {
+    announcementLoading.value = false
+  }
+}
+
 const loadDashboardData = async () => {
   try {
     const data = await getDashboard()
@@ -223,7 +357,7 @@ const loadDashboardData = async () => {
       stats.value[0].diff = ad.today_gained - ad.yesterday_gained
       stats.value[1].value = ad.account_count
       stats.value[2].value = ad.today_gained
-      stats.value[2].diff = ad.today_gained - ad.yesterday_gained
+      stats.value[2].diff = 0
       stats.value[3].value = ad.success_rate.toFixed(1) + '%'
       // Use admin ranking
       accountRanking.value = ad.account_ranking.map(r => ({
@@ -238,7 +372,7 @@ const loadDashboardData = async () => {
       stats.value[0].diff = data.yesterday_diff
       stats.value[1].value = data.account_count
       stats.value[2].value = data.today_gained
-      stats.value[2].diff = data.week_diff
+      stats.value[2].diff = 0
       stats.value[3].value = data.success_rate.toFixed(1) + '%'
       accountRanking.value = data.account_ranking
     }
@@ -412,6 +546,7 @@ const handleCalculateStats = async () => {
     await calculateStats()
     ElMessage.success('统计数据计算完成')
     loadDashboardData()
+    loadTrendData()
   } catch (error) {
     ElMessage.error('统计数据计算失败')
   } finally {
@@ -429,12 +564,15 @@ const handleSummaryRefresh = (msg: WsMessage) => {
   // 延迟1秒刷新，等数据库写入完成
   setTimeout(() => {
     loadDashboardData()
+    loadTrendData()
   }, 1000)
 }
 
 onMounted(() => {
+  loadReadAnnouncementIDs()
   loadDashboardData()
   loadTrendData()
+  loadAnnouncements()
   window.addEventListener('resize', handleResize)
   wsClient.on('task_summary', handleSummaryRefresh)
 })
@@ -598,5 +736,106 @@ onUnmounted(() => {
 .ranking-wrapper {
   height: 350px;
   overflow-y: auto;
+}
+
+.announcement-card :deep(.el-card__body) {
+  padding: 0;
+}
+
+.announcement-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.announcement-list {
+  min-height: 96px;
+  max-height: 280px;
+  overflow-y: auto;
+}
+
+.announcement-item {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 18px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.16);
+  cursor: pointer;
+  transition: background 0.2s ease, transform 0.2s ease;
+}
+
+.announcement-item:last-child {
+  border-bottom: none;
+}
+
+.announcement-item:hover {
+  background: rgba(239, 246, 255, 0.72);
+}
+
+.announcement-item.unread {
+  background: rgba(236, 253, 245, 0.52);
+}
+
+.announcement-item.top {
+  border-left: 3px solid #ef4444;
+}
+
+.announcement-main {
+  min-width: 0;
+  flex: 1;
+}
+
+.announcement-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.announcement-name {
+  font-weight: 600;
+  color: #1e3a8a;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.announcement-preview {
+  margin-top: 6px;
+  color: #64748b;
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.announcement-date {
+  flex-shrink: 0;
+  color: #94a3b8;
+  font-size: 12px;
+  white-space: nowrap;
+  padding-top: 2px;
+}
+
+.announcement-detail-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 20px;
+  font-weight: 700;
+  color: #1e3a8a;
+  margin-bottom: 10px;
+}
+
+.announcement-detail-time {
+  color: #94a3b8;
+  font-size: 13px;
+  margin-bottom: 18px;
+}
+
+.announcement-detail-content {
+  white-space: pre-wrap;
+  line-height: 1.8;
+  color: #334155;
 }
 </style>

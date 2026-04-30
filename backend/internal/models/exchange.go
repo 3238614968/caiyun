@@ -30,17 +30,17 @@ type Product struct {
 // ExchangeAccount 用户兑换账号模型
 type ExchangeAccount struct {
 	ID             uint           `gorm:"primarykey" json:"id"`
-	UserID         uint           `gorm:"not null;index" json:"user_id"`                       // 用户 ID
-	AccountID      uint           `gorm:"not null;index" json:"account_id"`                    // 云盘账号 ID
-	Phone          string         `gorm:"size:20;not null" json:"phone"`                       // 手机号
-	Auth           string         `gorm:"type:text;not null" json:"auth"`                      // Basic Auth 字符串
-	Token          string         `gorm:"type:text" json:"token"`                              // Token
-	JWTToken       string         `gorm:"type:text" column:"jwt_token" json:"jwt_token"`       // JWT Token
-	Remark         string         `gorm:"size:200" json:"remark"`                              // 备注
+	UserID         uint           `gorm:"not null;index" json:"user_id"`                                              // 用户 ID
+	AccountID      uint           `gorm:"not null;index" json:"account_id"`                                           // 云盘账号 ID
+	Phone          string         `gorm:"size:20;not null" json:"phone"`                                              // 手机号
+	Auth           string         `gorm:"type:text;not null" json:"-"`                                                // Basic Auth 字符串
+	Token          string         `gorm:"type:text" json:"-"`                                                         // Token
+	JWTToken       string         `gorm:"type:text" column:"jwt_token" json:"-"`                                      // JWT Token
+	Remark         string         `gorm:"size:200" json:"remark"`                                                     // 备注
 	ExchangeTime1  string         `gorm:"column:exchange_time_1;type:time;default:'10:00:00'" json:"exchange_time_1"` // 第一次抢兑时间
 	ExchangeTime2  string         `gorm:"column:exchange_time_2;type:time;default:'16:00:00'" json:"exchange_time_2"` // 第二次抢兑时间
-	IsActive       bool           `gorm:"default:true" json:"is_active"`                       // 是否启用
-	LastExchangeAt *time.Time     `json:"last_exchange_at,omitempty"`                          // 最后抢兑时间
+	IsActive       bool           `gorm:"default:true" json:"is_active"`                                              // 是否启用
+	LastExchangeAt *time.Time     `json:"last_exchange_at,omitempty"`                                                 // 最后抢兑时间
 	UpdatedAt      time.Time      `json:"updated_at"`
 	CreatedAt      time.Time      `json:"created_at"`
 	DeletedAt      gorm.DeletedAt `gorm:"index" json:"-"`
@@ -103,7 +103,6 @@ const (
 	ExchangeTaskPending   ExchangeTaskStatus = "pending"
 	ExchangeTaskRunning   ExchangeTaskStatus = "running"
 	ExchangeTaskCompleted ExchangeTaskStatus = "completed"
-	ExchangeTaskCancelled ExchangeTaskStatus = "cancelled"
 	ExchangeTaskFailed    ExchangeTaskStatus = "failed"
 )
 

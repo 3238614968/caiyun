@@ -6,7 +6,7 @@
 ![MySQL](https://img.shields.io/badge/MySQL-8.0+-4479A1?logo=mysql&logoColor=white)
 ![License](https://img.shields.io/badge/License-MIT-green.svg)
 
-基于 **Go 后端 + Vue 3 前端** 的移动云盘自动化平台，提供账号管理、日常任务执行、兑换调度、商品同步、日志审计与管理后台能力。项目同时支持可选的 Python 滑块识别服务，用于高频兑换场景中的验证码辅助处理。
+基于 **Go 后端 + Vue 3 前端** 的移动云盘自动化平台，提供账号管理、日常任务执行、兑换调度、商品同步、日志审计与管理后台能力。
 
 ---
 
@@ -48,34 +48,43 @@
 
 ## 核心能力
 
-### 1) 账号管理
+### 1) 用户认证
+
+- 登录、注册、HttpOnly Cookie 会话
+- 用户可通过“用户名 + 注册邮箱”自助重置密码
+- 管理员可在后台为用户重置密码，用于未绑定邮箱账号的兜底恢复
+
+### 2) 账号管理
 
 - 多账号管理，支持同一手机号被不同用户分别绑定
 - Auth / JWT 自动刷新
 - JWT 获取失败自动重试，连续失败可自动禁用账号
 - 账号健康检查、状态监控、过期账号隔离
 
-### 2) 自动任务
+### 3) 自动任务
 
 - 每日签到
+- 备份翻倍奖励
 - 微信签到 / 微信抽奖
 - 摇一摇
-- 任务中心任务
+- 任务中心巡检
 - 备份礼包 / 膨胀奖励
 - 邀请好友
 - 消息推送奖励
-- 今日云朵、盲盒、云朵大作战等扩展任务
+- 领取云朵 / 今日云朵统计
+- 云朵大作战 / 云手机红包
 - 复活卡奖励任务
+- 收尾清理任务
+- 果园 / 盲盒 / AI 红包 / AI 云朵等历史任务保留在注册表中，但默认不参与批量执行
 
-### 3) 兑换中心
+### 4) 兑换中心
 
 - 商品自动更新 / 手动同步
 - 自定义兑换时间
 - 多账号并发兑换
-- 滑块验证码辅助识别
 - 兑换日志与执行结果记录
 
-### 4) 管理后台
+### 5) 管理后台
 
 - 用户管理、账号管理、任务配置、公告管理
 - 商品中心、兑换账号、抢兑任务、领奖专区
@@ -119,6 +128,15 @@
 - **修复兑换与账号相关流程细节**
   - 同手机号跨用户添加场景下的账号查重与创建逻辑更稳定
   - 失效账号在商品更新选择列表中不再参与展示
+- **统一初始化材料与运行时定义**
+  - 已同步 `README`、`backend/migrations/init.sql`、`backend/scripts/init_caiyun_database.sql`
+  - 默认任务清单、启用状态、排序顺序与代码注册表保持一致
+- **统一默认调度配置**
+  - `backend/configs/.env.example` 中的 `TASK_SCHEDULE` 已调整为 `0 8 * * *`
+  - 与 Worker 内部默认回退值保持一致，避免环境配置漂移
+- **清理历史遗留调度逻辑**
+  - 已移除 Worker 中未使用的 `RunScheduledTask()` ticker 调度实现
+  - 清理 `Stop()` 中重复 `cancel()` 的历史遗留代码
 
 ---
 
@@ -150,12 +168,6 @@
 │                        MySQL / Redis                       │
 │           账号、任务、商品、兑换记录、配置、缓存等           │
 └─────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────┐
-│                Python 滑块识别服务（可选）                  │
-│                   Flask + OpenCV + NumPy                   │
-└─────────────────────────────────────────────────────────────┘
 ```
 
 ---
@@ -170,7 +182,6 @@
 | 后端 Worker | Go | 任务调度、自动执行、抢兑执行 |
 | 数据库 | MySQL 8.0+ | 持久化存储 |
 | 缓存 | Redis | 队列、缓存、状态管理 |
-| 可选组件 | Python + OpenCV + Flask | 滑块验证码辅助识别 |
 
 ---
 
@@ -199,7 +210,6 @@
 │   └── dist/                      # 前端生产构建产物
 ├── nginx-server.conf              # Nginx 配置示例
 ├── docker-compose.yml             # Docker Compose 示例
-├── solver_service.py              # 可选滑块识别服务
 └── README.md
 ```
 
@@ -213,7 +223,6 @@
 - Node.js 18+
 - MySQL 8.0+
 - Redis 6.0+
-- Python 3.11+（可选，仅滑块识别需要）
 
 ### 1. 初始化数据库
 
@@ -252,15 +261,6 @@ npm install
 npm run dev
 ```
 
-### 6. 启动滑块识别服务（可选）
-
-```bash
-pip install flask opencv-python-headless numpy
-python solver_service.py
-```
-
----
-
 ## 构建与部署
 
 ### 本地前端构建
@@ -295,6 +295,19 @@ backend/worker-linux
 ```
 
 ### Docker 部署
+
+首次启动前建议在项目根目录创建 `.env`，至少填写以下变量：
+
+```bash
+MYSQL_ROOT_PASSWORD=replace_with_strong_root_password
+MYSQL_PASSWORD=replace_with_strong_app_password
+JWT_SECRET=replace_with_32_chars_random_secret
+WORKER_MONITOR_TOKEN=replace_with_random_monitor_token
+# 逗号分隔。必须包含浏览器实际访问前端的 Origin，例如域名、局域网 IP 或非 80 端口。
+ALLOWED_ORIGINS=http://localhost,http://127.0.0.1,http://your-domain.com
+```
+
+Compose 模式下前端 Nginx 会统一代理 `/api` 与 `/ws` 到 `backend-api:8080`，后端端口仅绑定到宿主机 `127.0.0.1`。如果通过 `http://192.168.x.x`、`https://example.com` 或 `http://localhost:8088` 访问前端，请同步把这些完整 Origin 加入 `ALLOWED_ORIGINS`，否则跨域 API 或 WebSocket Origin 校验会拒绝连接。
 
 ```bash
 docker-compose build
@@ -353,9 +366,8 @@ scp -r dist root@server:/www/wwwroot/caiyun/frontend/
 1. 到达设定兑换时间
 2. 预加载待执行抢兑队列
 3. 多账号并发执行抢兑
-4. 如有需要调用滑块识别
-5. 提交兑换请求并记录结果
-6. 同步日志、状态与统计数据
+4. 提交兑换请求并记录结果
+5. 同步日志、状态与统计数据
 ```
 
 ### Token 处理机制
@@ -365,6 +377,35 @@ scp -r dist root@server:/www/wwwroot/caiyun/frontend/
 - 连续失败可自动禁用账号
 - 签到中心请求使用与 JWT 对应的同一 `ssoToken` 预热上下文
 
+### 任务注册表约定
+
+- **代码注册表是任务定义的唯一真源**
+- 任务定义位于：`backend/internal/services/task_catalog.go`
+- 数据库初始化脚本中的 `task_configs` 仅负责提供首批种子数据
+- API / Worker 启动时会通过 `SyncDefinitions` 自动对数据库中的任务定义做同步兜底
+
+当前默认任务种子已与注册表保持一致，包括：
+
+- `signin`
+- `task_expansion_reward`
+- `wechat`
+- `wxdraw`
+- `tasklist`
+- `invitefriends`
+- `shake`
+- `receive`
+- `messagepush`
+- `revivalreward`
+- `backupgift`
+- `garden`（默认禁用）
+- `redpacket`（默认禁用）
+- `aicloud`（默认禁用）
+- `cloudbattle`
+- `blindbox`（默认禁用）
+- `cloudphone`
+- `todaycloud`
+- `after_task`
+
 ---
 
 ## 仓库说明
@@ -372,7 +413,6 @@ scp -r dist root@server:/www/wwwroot/caiyun/frontend/
 以下内容属于辅助组件或运维脚本，不属于主系统核心部署链路：
 
 - 根目录调试脚本 / 实验脚本
-- 可选 Python 辅助识别脚本
 - 兑换相关独立样例或抓图脚本
 
 生产部署建议只发布：
@@ -380,7 +420,6 @@ scp -r dist root@server:/www/wwwroot/caiyun/frontend/
 - `backend/cmd/api`
 - `backend/cmd/worker`
 - `frontend`
-- 可选 `solver_service.py`
 
 ---
 

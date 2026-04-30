@@ -5,9 +5,9 @@ export interface Account {
   id: number
   user_id: number
   phone: string
-  auth: string
-  token: string
-  jwt_token: string
+  auth?: string
+  token?: string
+  jwt_token?: string
   platform: string
   expire_at: number
   cloud_count: number
@@ -30,7 +30,7 @@ export interface CreateAccountRequest {
 // 更新账号请求
 export interface UpdateAccountRequest {
   phone: string
-  auth: string
+  auth?: string
   remark?: string
 }
 
@@ -224,6 +224,15 @@ export function updateUserRole(id: number, role: string): Promise<{ message: str
     url: `/api/admin/users/${id}/role`,
     method: 'put',
     data: { role }
+  })
+}
+
+// 管理员重置用户密码
+export function resetUserPassword(id: number, password: string): Promise<{ message: string }> {
+  return request({
+    url: `/api/admin/users/${id}/password`,
+    method: 'put',
+    data: { password }
   })
 }
 

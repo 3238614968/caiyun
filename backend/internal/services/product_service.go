@@ -44,7 +44,15 @@ func (s *ProductService) GetCategories() ([]string, error) {
 }
 
 // UpdateProducts 从云盘接口拉取商品并写入本地。
-func (s *ProductService) UpdateProducts(accountID uint) (int64, error) {
+func (s *ProductService) UpdateProducts(accountID uint, userID uint, isAdmin bool) (int64, error) {
+	account, err := s.accountRepo.GetByID(accountID)
+	if err != nil {
+		return 0, fmt.Errorf("获取账号失败: %w", err)
+	}
+	if !isAdmin && account.UserID != userID {
+		return 0, fmt.Errorf("账号不存在")
+	}
+
 	return syncProductsFromCloud(s.productRepo, s.accountRepo, accountID)
 }
 

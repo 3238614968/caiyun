@@ -130,7 +130,7 @@
             v-model="form.auth"
             type="textarea"
             :rows="4"
-            placeholder="请输入Auth"
+            placeholder="留空表示不修改Auth"
           />
         </el-form-item>
         <el-form-item label="备注" prop="remark">
@@ -271,7 +271,16 @@ const rules = reactive<FormRules>({
     { required: true, message: '请输入手机号', trigger: 'blur' }
   ],
   auth: [
-    { required: true, message: '请输入Auth', trigger: 'blur' }
+    {
+      validator: (_rule, value, callback) => {
+        if (!isEditMode.value && !value) {
+          callback(new Error('请输入Auth'))
+          return
+        }
+        callback()
+      },
+      trigger: 'blur'
+    }
   ]
 })
 
@@ -345,7 +354,7 @@ const handleEdit = (row: Account) => {
   dialogTitle.value = '编辑账号'
   isEditMode.value = true
   form.phone = row.phone
-  form.auth = row.auth
+  form.auth = ''
   form.remark = row.remark
   ;(form as any).id = row.id
   dialogVisible.value = true
@@ -436,7 +445,14 @@ const handleSubmit = async () => {
         try {
           const id = (form as any).id
           if (id) {
-            await updateAccount(id, form as UpdateAccountRequest)
+            const payload: UpdateAccountRequest = {
+              phone: form.phone,
+              remark: form.remark
+            }
+            if (form.auth) {
+              payload.auth = form.auth
+            }
+            await updateAccount(id, payload)
             ElMessage.success('更新成功')
           } else {
             await createAccount(form as CreateAccountRequest)

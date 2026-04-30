@@ -21,23 +21,23 @@ type User struct {
 
 // Account 云盘账号模型
 type Account struct {
-	ID             uint           `gorm:"primarykey" json:"id"`
-	UserID         uint           `gorm:"not null;index" json:"user_id"`
-	Phone          string         `gorm:"size:20;not null" json:"phone"`
-	Auth           string         `gorm:"type:text;not null" json:"auth"`
-	Token          string         `gorm:"type:text" json:"token"`
-	JWTToken       string         `gorm:"type:text" column:"jwt_token" json:"jwt_token"`
-	Platform       string         `gorm:"default:'pc';size:20" json:"platform"`
-	ExpireAt       int64          `gorm:"index" json:"expire_at"`
-	CloudCount     int            `gorm:"default:0" json:"cloud_count"`
-	Remark         string         `gorm:"size:200" json:"remark"`
-	IsActive       bool           `gorm:"default:true" json:"is_active"`
-	JWTErrorCount  int            `gorm:"default:0" column:"jwt_error_count" json:"jwt_error_count"` // JWT获取失败次数
-	CreatedAt      time.Time      `json:"created_at"`
-	UpdatedAt      time.Time      `json:"updated_at"`
-	DeletedAt      gorm.DeletedAt `gorm:"index" json:"-"`
-	User           User           `gorm:"foreignKey:UserID" json:"user,omitempty"`
-	TaskLogs       []TaskLog      `gorm:"foreignKey:AccountID" json:"task_logs,omitempty"`
+	ID            uint           `gorm:"primarykey" json:"id"`
+	UserID        uint           `gorm:"not null;index" json:"user_id"`
+	Phone         string         `gorm:"size:20;not null" json:"phone"`
+	Auth          string         `gorm:"type:text;not null" json:"-"`
+	Token         string         `gorm:"type:text" json:"-"`
+	JWTToken      string         `gorm:"type:text" column:"jwt_token" json:"-"`
+	Platform      string         `gorm:"default:'pc';size:20" json:"platform"`
+	ExpireAt      int64          `gorm:"index" json:"expire_at"`
+	CloudCount    int            `gorm:"default:0" json:"cloud_count"`
+	Remark        string         `gorm:"size:200" json:"remark"`
+	IsActive      bool           `gorm:"default:true" json:"is_active"`
+	JWTErrorCount int            `gorm:"default:0" column:"jwt_error_count" json:"jwt_error_count"` // JWT获取失败次数
+	CreatedAt     time.Time      `json:"created_at"`
+	UpdatedAt     time.Time      `json:"updated_at"`
+	DeletedAt     gorm.DeletedAt `gorm:"index" json:"-"`
+	User          User           `gorm:"foreignKey:UserID" json:"user,omitempty"`
+	TaskLogs      []TaskLog      `gorm:"foreignKey:AccountID" json:"task_logs,omitempty"`
 }
 
 // TaskLog 任务日志模型

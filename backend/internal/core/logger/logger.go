@@ -27,7 +27,6 @@ const (
 // Logger 日志记录器
 type Logger struct {
 	level  LogLevel
-	paused bool
 	output io.Writer
 	mu     sync.RWMutex
 
@@ -43,22 +42,8 @@ func NewLogger(level LogLevel) *Logger {
 	}
 }
 
-// 暂停输出
-func (l *Logger) Pause() {
-	l.paused = true
-}
-
-// 恢复输出
-func (l *Logger) Resume() {
-	l.paused = false
-}
-
 // log 内部日志方法
 func (l *Logger) log(level LogLevel, color string, args ...interface{}) {
-	if l.paused {
-		return
-	}
-
 	timestamp := time.Now().Format("2006-01-02 15:04:05")
 	message := fmt.Sprintf("%s [%s] %s", color, timestamp, formatArgs(args...))
 
@@ -76,7 +61,6 @@ func formatArgs(args ...interface{}) string {
 
 // color codes
 const (
-	colorReset  = "\033[0m"
 	colorRed    = "\033[31m"
 	colorGreen  = "\033[32m"
 	colorYellow = "\033[33m"

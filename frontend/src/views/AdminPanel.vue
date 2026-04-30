@@ -329,9 +329,10 @@
                   {{ formatDate(row.created_at) }}
                 </template>
               </el-table-column>
-              <el-table-column label="操作" width="150" fixed="right">
+              <el-table-column label="操作" width="220" fixed="right">
                 <template #default="{ row }">
                   <el-button type="primary" link @click="handleEditUserRole(row)">修改角色</el-button>
+                  <el-button type="warning" link @click="handleResetUserPassword(row)">重置密码</el-button>
                   <el-button type="danger" link @click="handleDeleteUser(row)">删除</el-button>
                 </template>
               </el-table-column>
@@ -365,6 +366,7 @@
                     </div>
                     <div class="mobile-admin-card-actions">
                       <el-button type="primary" plain @click="handleEditUserRole(row)">修改角色</el-button>
+                      <el-button type="warning" plain @click="handleResetUserPassword(row)">重置密码</el-button>
                       <el-button type="danger" plain @click="handleDeleteUser(row)">删除</el-button>
                     </div>
                   </el-card>
@@ -506,6 +508,22 @@
       </template>
     </el-dialog>
 
+    <!-- 重置密码对话框 -->
+    <el-dialog v-model="passwordDialogVisible" title="重置用户密码" width="420px">
+      <el-form :model="passwordForm" label-width="90px">
+        <el-form-item label="用户">
+          <el-input v-model="passwordForm.username" disabled />
+        </el-form-item>
+        <el-form-item label="新密码">
+          <el-input v-model="passwordForm.password" type="password" show-password placeholder="至少12位，包含至少三类字符" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="passwordDialogVisible = false">取消</el-button>
+        <el-button type="primary" @click="handlePasswordSubmit">确定重置</el-button>
+      </template>
+    </el-dialog>
+
     <!-- 公告管理对话框 -->
     <el-dialog v-model="announcementDialogVisible" :title="isEditingAnnouncement ? '编辑公告' : '发布公告'" width="700px">
       <el-form :model="announcementForm" label-position="top" :rules="announcementRules" ref="announcementFormRef">
@@ -534,7 +552,7 @@
             title="弹窗公告说明"
             type="info"
             :closable="false"
-            description="开启弹窗后，用户登录后会自动弹出此公告。如有多个弹窗公告，默认只显示置顶的公告。"
+            description="开启弹窗后，仅置顶且未读的弹窗公告会自动弹出一次；其他已发布公告会展示在首页公告列表中。"
           />
         </el-form-item>
       </el-form>
@@ -574,6 +592,7 @@ import {
   getTaskConfigs,
   updateTaskConfig,
   updateUserRole,
+  resetUserPassword,
   updateAccountStatus,
   deleteUser,
   deleteAdminAccount,
@@ -648,6 +667,8 @@ const statsOverview = ref([
 // Role dialog
 const roleDialogVisible = ref(false)
 const roleForm = reactive({ id: 0, role: 'user' })
+const passwordDialogVisible = ref(false)
+const passwordForm = reactive({ id: 0, username: '', password: '' })
 
 // Announcements
 const announcementLoading = ref(false)
@@ -812,6 +833,27 @@ const handleRoleSubmit = async () => {
     roleDialogVisible.value = false
     loadUserList()
   } catch { ElMessage.error('角色修改失败') }
+}
+
+const handleResetUserPassword = (row: User) => {
+  passwordForm.id = row.id
+  passwordForm.username = row.username
+  passwordForm.password = ''
+  passwordDialogVisible.value = true
+}
+
+const handlePasswordSubmit = async () => {
+  if (passwordForm.password.length < 12) {
+    ElMessage.warning('新密码长度不能少于12个字符')
+    return
+  }
+  try {
+    await resetUserPassword(passwordForm.id, passwordForm.password)
+    ElMessage.success('密码重置成功')
+    passwordDialogVisible.value = false
+  } catch (error: any) {
+    ElMessage.error(error.response?.data?.message || '密码重置失败')
+  }
 }
 
 const handleDeleteUser = async (row: User) => {

@@ -1,4 +1,4 @@
-﻿package config
+package config
 
 import (
 	"fmt"
@@ -81,16 +81,16 @@ type TaskConfig struct {
 
 // ExchangeConfig 兑换中心配置
 type ExchangeConfig struct {
-	Concurrency           int
-	ScheduleTime1         string
-	ScheduleTime2         string
-	AutoUpdateProducts    bool
-	UpdateTime            string
-	EnablePriority        bool
-	DefaultTimeout        int
-	MaxGlobalConcurrency  int
-	AutoRetryFailed       bool
-	LogRetentionDays      int
+	Concurrency          int
+	ScheduleTime1        string
+	ScheduleTime2        string
+	AutoUpdateProducts   bool
+	UpdateTime           string
+	EnablePriority       bool
+	DefaultTimeout       int
+	MaxGlobalConcurrency int
+	AutoRetryFailed      bool
+	LogRetentionDays     int
 }
 
 // LogConfig 日志配置
@@ -117,7 +117,7 @@ func defaultConfig() *Config {
 			Host:     "localhost",
 			Port:     "3306",
 			User:     "root",
-			Password: "root123",
+			Password: "",
 			DBName:   "caiyun",
 			MaxIdle:  20,
 			MaxOpen:  100,
@@ -132,7 +132,7 @@ func defaultConfig() *Config {
 			PoolSize: 50,
 		},
 		JWT: JWTConfig{
-			Secret:  "your-secret-key-change-in-production",
+			Secret:  "",
 			Expiry:  7 * 24 * time.Hour,
 			Refresh: 24 * time.Hour,
 		},
@@ -304,8 +304,17 @@ func (c *Config) loadLogConfig() {
 // validate 验证配置
 func (c *Config) validate() error {
 	// 验证必要的环境变量
-	if c.JWT.Secret == "your-secret-key-change-in-production" {
-		fmt.Println("警告：JWT_SECRET 使用的是默认值，生产环境请修改")
+	if c.JWT.Secret == "" {
+		return fmt.Errorf("JWT_SECRET 不能为空")
+	}
+	if c.JWT.Secret == "your-secret-key-change-in-production" || len(c.JWT.Secret) < 16 {
+		return fmt.Errorf("JWT_SECRET 使用弱值或默认值")
+	}
+	if c.Database.Password == "" {
+		return fmt.Errorf("DB_PASSWORD 不能为空")
+	}
+	if len(c.Database.Password) < 16 {
+		return fmt.Errorf("DB_PASSWORD 使用弱值")
 	}
 
 	// 验证端口

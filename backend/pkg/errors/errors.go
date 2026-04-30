@@ -1,4 +1,4 @@
-﻿package errors
+package errors
 
 import (
 	"errors"
@@ -7,14 +7,14 @@ import (
 
 // 通用业务错误
 var (
-	ErrNotFound          = errors.New("资源不存在")
-	ErrUnauthorized      = errors.New("未授权访问")
-	ErrForbidden         = errors.New("权限不足")
-	ErrInvalidParams     = errors.New("参数错误")
-	ErrInternalServer    = errors.New("服务器内部错误")
-	ErrResourceExists    = errors.New("资源已存在")
-	ErrOperationFailed   = errors.New("操作失败")
-	ErrTimeout           = errors.New("操作超时")
+	ErrNotFound           = errors.New("资源不存在")
+	ErrUnauthorized       = errors.New("未授权访问")
+	ErrForbidden          = errors.New("权限不足")
+	ErrInvalidParams      = errors.New("参数错误")
+	ErrInternalServer     = errors.New("服务器内部错误")
+	ErrResourceExists     = errors.New("资源已存在")
+	ErrOperationFailed    = errors.New("操作失败")
+	ErrTimeout            = errors.New("操作超时")
 	ErrServiceUnavailable = errors.New("服务不可用")
 )
 
@@ -83,15 +83,11 @@ func (e *appError) Unwrap() error {
 
 // 错误码常量
 const (
-	CodeOK                  = 0
-	CodeBadRequest          = 400
-	CodeUnauthorized        = 401
-	CodeForbidden           = 403
-	CodeNotFound            = 404
-	CodeConflict            = 409
-	CodeInternalError       = 500
-	CodeServiceUnavailable  = 503
-	CodeTimeout             = 504
+	CodeBadRequest    = 400
+	CodeUnauthorized  = 401
+	CodeForbidden     = 403
+	CodeNotFound      = 404
+	CodeInternalError = 500
 )
 
 // New 创建应用错误

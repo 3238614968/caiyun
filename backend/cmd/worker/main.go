@@ -152,7 +152,6 @@ func (w *Worker) Stop() {
 	w.taskManager.Stop()
 	w.jobScheduler.Stop()
 	w.taskMonitor.Stop()
-	w.cancel() // 停止队列监听器
 
 	w.wg.Wait()
 	log.Println("Worker已停止")
@@ -230,49 +229,6 @@ func (w *Worker) RunAllAccounts() error {
 	return nil
 }
 
-// RunScheduledTask 定时任务
-func (w *Worker) RunScheduledTask(schedule string) {
-	// 解析定时任务表达式
-	// 这里使用简单的定时器，实际生产环境可以使用更强大的调度库如 robfig/cron
-
-	// 每天早上8点执行一次
-	ticker := time.NewTicker(24 * time.Hour)
-	defer ticker.Stop()
-
-	// 计算第一次执行时间（早上8点）
-	now := time.Now()
-	firstRun := time.Date(now.Year(), now.Month(), now.Day(), 8, 0, 0, 0, now.Location())
-	if firstRun.Before(now) {
-		firstRun = firstRun.Add(24 * time.Hour)
-	}
-
-	waitDuration := firstRun.Sub(now)
-	log.Printf("首次任务执行时间: %s (等待 %v)", firstRun.Format("2006-01-02 15:04:05"), waitDuration)
-
-	// 等待首次执行
-	select {
-	case <-time.After(waitDuration):
-		// 执行任务
-		if err := w.RunAllAccounts(); err != nil {
-			log.Printf("定时任务执行失败: %v", err)
-		}
-	case <-w.ctx.Done():
-		return
-	}
-
-	// 之后的定时执行
-	for {
-		select {
-		case <-ticker.C:
-			if err := w.RunAllAccounts(); err != nil {
-				log.Printf("定时任务执行失败: %v", err)
-			}
-		case <-w.ctx.Done():
-			return
-		}
-	}
-}
-
 func getEnv(key, defaultValue string) string {
 	value, exists := os.LookupEnv(key)
 	if !exists {
@@ -294,8 +250,8 @@ func main() {
 	dbConfig := database.Config{
 		Host:     getEnv("DB_HOST", "localhost"),
 		Port:     getEnv("DB_PORT", "3306"),
-		User:     getEnv("DB_USER", "root"),
-		Password: getEnv("DB_PASSWORD", "root123"),
+		User:     getEnv("DB_USER", "caiyun_app"),
+		Password: getSecretEnv("DB_PASSWORD", "local-development-password"),
 		DBName:   getEnv("DB_NAME", "caiyun"),
 	}
 	db, err := database.NewMySQL(dbConfig)
@@ -485,13 +441,13 @@ func startMonitoringAPI(worker *Worker) {
 			"time":   time.Now().Format("2006-01-02 15:04:05"),
 		})
 	})
-	mux.HandleFunc("/status", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/status", requireMonitorAuth(func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]interface{}{
 			"task_monitor": worker.taskMonitor.GetStats(),
 			"task_manager": worker.taskManager.GetStatus(),
 		})
-	})
-	mux.Handle("/metrics", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	}))
+	mux.Handle("/metrics", requireMonitorAuth(func(w http.ResponseWriter, r *http.Request) {
 		updateMetrics()
 		metricsHandler.ServeHTTP(w, r)
 	}))
@@ -541,6 +497,45 @@ func writeJSON(w http.ResponseWriter, statusCode int, data interface{}) {
 	if err := json.NewEncoder(w).Encode(data); err != nil {
 		log.Printf("监控API响应编码失败: %v", err)
 	}
+}
+
+func requireMonitorAuth(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		token := strings.TrimSpace(os.Getenv("WORKER_MONITOR_TOKEN"))
+		if token == "" {
+			http.Error(w, "monitor token is required", http.StatusUnauthorized)
+			return
+		}
+
+		provided := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+		if provided == "" {
+			provided = r.Header.Get("X-Monitor-Token")
+		}
+		if provided != token {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		next(w, r)
+	}
+}
+
+func getSecretEnv(key, insecureDefault string) string {
+	value, exists := os.LookupEnv(key)
+	if !exists || value == "" {
+		if os.Getenv("ALLOW_INSECURE_DEFAULTS") == "true" {
+			log.Printf("警告：%s 使用不安全默认值，仅允许本地调试", key)
+			return insecureDefault
+		}
+		log.Fatalf("缺少必需环境变量 %s；如仅本地调试可设置 ALLOW_INSECURE_DEFAULTS=true", key)
+	}
+	if value == insecureDefault || len(value) < 16 {
+		if os.Getenv("ALLOW_INSECURE_DEFAULTS") == "true" {
+			log.Printf("警告：%s 使用弱值，仅允许本地调试", key)
+			return value
+		}
+		log.Fatalf("%s 使用弱值或默认值，请更换为强随机值", key)
+	}
+	return value
 }
 
 // toInt 将常见数值类型转换为 int。

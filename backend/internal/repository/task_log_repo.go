@@ -1,4 +1,4 @@
-﻿package repository
+package repository
 
 import (
 	"caiyun/internal/models"
@@ -224,12 +224,33 @@ func (r *TaskLogRepository) GetCloudGainedByAccountAndRange(accountID uint, star
 	return total
 }
 
+// GetCloudGainedByUserAndRange 获取指定用户在日期范围内获得的云朵数
+func (r *TaskLogRepository) GetCloudGainedByUserAndRange(userID uint, start, end time.Time) int {
+	var total int
+	r.db.Model(&models.TaskLog{}).
+		Where("user_id = ? AND created_at >= ? AND created_at < ?", userID, start, end).
+		Select("COALESCE(SUM(cloud_gained), 0)").
+		Scan(&total)
+	return total
+}
+
 // CountByAccountStatusAndRange 统计指定账号在日期范围内指定状态的日志数量
 func (r *TaskLogRepository) CountByAccountStatusAndRange(accountID uint, status string, start, end time.Time) int64 {
 	var count int64
 	r.db.Model(&models.TaskLog{}).
 		Where("account_id = ? AND status = ? AND created_at >= ? AND created_at < ?", accountID, status, start, end).
 		Count(&count)
+	return count
+}
+
+// CountByUserStatusAndRange 统计指定用户在日期范围内指定状态的日志数量（空status表示全部）
+func (r *TaskLogRepository) CountByUserStatusAndRange(userID uint, status string, start, end time.Time) int64 {
+	var count int64
+	q := r.db.Model(&models.TaskLog{}).Where("user_id = ? AND created_at >= ? AND created_at < ?", userID, start, end)
+	if status != "" {
+		q = q.Where("status = ?", status)
+	}
+	q.Count(&count)
 	return count
 }
 

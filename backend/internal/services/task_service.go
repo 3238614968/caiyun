@@ -726,8 +726,7 @@ func (r *TaskRunner) runMessagePushTask() *TaskResult {
 	return result
 }
 
-// runBackupGiftTask 执行备份礼包任务
-// runRevivalRewardTask executes the revival reward task.
+// runRevivalRewardTask 执行复活卡奖励任务
 func (r *TaskRunner) runRevivalRewardTask() *TaskResult {
 	startTime := time.Now()
 	task := tasks.NewRevivalRewardTask(r.httpClient, r.logger)
@@ -753,6 +752,7 @@ func (r *TaskRunner) runRevivalRewardTask() *TaskResult {
 	return result
 }
 
+// runBackupGiftTask 执行备份礼包任务
 func (r *TaskRunner) runBackupGiftTask() *TaskResult {
 	startTime := time.Now()
 	task := tasks.NewBackupGiftTask(r.httpClient, r.logger)
@@ -770,29 +770,6 @@ func (r *TaskRunner) runBackupGiftTask() *TaskResult {
 	} else {
 		result.Status = "success"
 		result.Message = "备份礼包任务执行成功"
-	}
-
-	return result
-}
-
-// runExchangeTask 执行兑换任务
-func (r *TaskRunner) runExchangeTask() *TaskResult {
-	startTime := time.Now()
-	task := tasks.NewExchangeMonthlyCardTask(r.httpClient, r.logger)
-	err := task.Run()
-	duration := time.Since(startTime).Milliseconds()
-
-	result := &TaskResult{
-		TaskType:      "exchange",
-		ExecutionTime: int(duration),
-	}
-
-	if err != nil {
-		result.Status = "failed"
-		result.Message = err.Error()
-	} else {
-		result.Status = "success"
-		result.Message = "兑换任务执行成功"
 	}
 
 	return result
@@ -1076,6 +1053,10 @@ func (s *TaskService) ExecuteTaskForAccount(account *models.Account) ([]TaskResu
 // GetTaskLogs 获取任务日志
 func (s *TaskService) GetTaskLogs(userID uint, accountID *uint, page, pageSize int) ([]*models.TaskLog, int64, error) {
 	if accountID != nil {
+		account, err := s.accountRepo.FindByID(*accountID)
+		if err != nil || account.UserID != userID {
+			return nil, 0, fmt.Errorf("账号不存在")
+		}
 		return s.taskLogRepo.FindByAccountID(*accountID, (page-1)*pageSize, pageSize)
 	}
 	return s.taskLogRepo.FindByUserID(userID, (page-1)*pageSize, pageSize)

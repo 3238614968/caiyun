@@ -1,4 +1,4 @@
-﻿package repository
+package repository
 
 import (
 	"caiyun/internal/models"
@@ -135,7 +135,7 @@ func (r *CloudStatsRepository) UpsertByAccountIDAndDate(stats *models.CloudStats
 
 // GetTodayStatsByUserID 获取用户今日的所有统计记录
 func (r *CloudStatsRepository) GetTodayStatsByUserID(userID uint) ([]*models.CloudStats, error) {
-	today := time.Now().Format("2006-01-02")
+	today := time.Now().In(cstZone).Format("2006-01-02")
 	var stats []*models.CloudStats
 	err := r.db.Preload("Account").Where("user_id = ? AND date = ?", userID, today).Find(&stats).Error
 	return stats, err
@@ -143,7 +143,7 @@ func (r *CloudStatsRepository) GetTodayStatsByUserID(userID uint) ([]*models.Clo
 
 // GetYesterdayStatsByUserID 获取用户昨日的统计记录
 func (r *CloudStatsRepository) GetYesterdayStatsByUserID(userID uint) ([]*models.CloudStats, error) {
-	yesterday := time.Now().AddDate(0, 0, -1).Format("2006-01-02")
+	yesterday := time.Now().In(cstZone).AddDate(0, 0, -1).Format("2006-01-02")
 	var stats []*models.CloudStats
 	err := r.db.Preload("Account").Where("user_id = ? AND date = ?", userID, yesterday).Find(&stats).Error
 	return stats, err
@@ -151,7 +151,7 @@ func (r *CloudStatsRepository) GetYesterdayStatsByUserID(userID uint) ([]*models
 
 // GetLastWeekStatsByUserID 获取用户上周同期的统计记录
 func (r *CloudStatsRepository) GetLastWeekStatsByUserID(userID uint) ([]*models.CloudStats, error) {
-	lastWeek := time.Now().AddDate(0, 0, -7).Format("2006-01-02")
+	lastWeek := time.Now().In(cstZone).AddDate(0, 0, -7).Format("2006-01-02")
 	var stats []*models.CloudStats
 	err := r.db.Preload("Account").Where("user_id = ? AND date = ?", userID, lastWeek).Find(&stats).Error
 	return stats, err
@@ -172,11 +172,28 @@ func (r *CloudStatsRepository) GetTotalCloudCountByUserID(userID uint) (int, err
 // GetTrendDataByUserID 获取用户最近N天的趋势数据
 func (r *CloudStatsRepository) GetTrendDataByUserID(userID uint, days int) ([]*models.CloudStats, error) {
 	var stats []*models.CloudStats
-	endDate := time.Now().Format("2006-01-02")
-	startDate := time.Now().AddDate(0, 0, -days+1).Format("2006-01-02")
+	now := time.Now().In(cstZone)
+	endDate := now.Format("2006-01-02")
+	startDate := now.AddDate(0, 0, -days+1).Format("2006-01-02")
 
 	err := r.db.Model(&models.CloudStats{}).
 		Where("user_id = ? AND date BETWEEN ? AND ?", userID, startDate, endDate).
+		Group("date").
+		Select("date, SUM(cloud_count) as cloud_count, 0 as cloud_diff, 0 as cloud_diff_week, created_at, updated_at").
+		Order("date ASC").
+		Find(&stats).Error
+	return stats, err
+}
+
+// GetTrendDataGlobal 获取全局最近N天的趋势数据
+func (r *CloudStatsRepository) GetTrendDataGlobal(days int) ([]*models.CloudStats, error) {
+	var stats []*models.CloudStats
+	now := time.Now().In(cstZone)
+	endDate := now.Format("2006-01-02")
+	startDate := now.AddDate(0, 0, -days+1).Format("2006-01-02")
+
+	err := r.db.Model(&models.CloudStats{}).
+		Where("date BETWEEN ? AND ?", startDate, endDate).
 		Group("date").
 		Select("date, SUM(cloud_count) as cloud_count, 0 as cloud_diff, 0 as cloud_diff_week, created_at, updated_at").
 		Order("date ASC").

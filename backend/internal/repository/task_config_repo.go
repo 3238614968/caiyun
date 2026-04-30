@@ -30,11 +30,6 @@ func (r *TaskConfigRepository) AutoMigrate() error {
 	return err
 }
 
-// InitDefaults 仅保留兼容入口，新的默认任务定义请使用 SyncDefinitions。
-func (r *TaskConfigRepository) InitDefaults() error {
-	return nil
-}
-
 // SyncDefinitions 将代码中的任务注册表同步到数据库。
 // 已存在任务保留管理员设置的 is_enabled，仅刷新描述、排序和批次标记。
 func (r *TaskConfigRepository) SyncDefinitions(defs []models.TaskConfig) error {

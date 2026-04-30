@@ -469,23 +469,25 @@ INSERT IGNORE INTO `system_configs` (`key_name`, `key_value`, `description`) VAL
 -- 插入默认任务配置数据
 -- ============================================
 INSERT IGNORE INTO `task_configs` (`task_type`, `task_name`, `is_enabled`, `sort_order`) VALUES
-('signin', '签到', TRUE, 1),
-('tasklist', '任务列表', TRUE, 2),
-('wechat', '微信签到', TRUE, 3),
-('wxdraw', '微信抽奖', TRUE, 4),
-('todaycloud', '今日云朵', TRUE, 5),
-('invitefriends', '邀请好友', TRUE, 6),
-('shake', '摇一摇', TRUE, 7),
-('receive', '领取云朵', TRUE, 8),
-('messagepush', '消息推送', TRUE, 9),
-('backupgift', '备份礼包', TRUE, 10),
-('blindbox', '盲盒', TRUE, 11),
-('redpacket', '红包', TRUE, 12),
-('aicloud', 'AI云朵', TRUE, 13),
-('garden', '花园', TRUE, 14),
-('cloudphone', '云手机红包', TRUE, 15),
-('cloudbattle', '云朵大战', TRUE, 16),
-('exchange', '兑换月卡', TRUE, 17);
+('signin', '每日签到', TRUE, 10),
+('task_expansion_reward', '备份翻倍奖励', TRUE, 20),
+('wechat', '微信签到', TRUE, 30),
+('wxdraw', '微信抽奖', TRUE, 40),
+('tasklist', '任务中心巡检', TRUE, 50),
+('invitefriends', '邀请好友看电影', TRUE, 60),
+('shake', '摇一摇', TRUE, 70),
+('receive', '领取云朵', TRUE, 80),
+('messagepush', '消息推送奖励', TRUE, 90),
+('revivalreward', '复活卡奖励', TRUE, 95),
+('backupgift', '备份礼包', TRUE, 100),
+('garden', '果园', FALSE, 110),
+('redpacket', 'AI红包', FALSE, 120),
+('aicloud', 'AI云朵', FALSE, 130),
+('cloudbattle', '云朵大作战', TRUE, 140),
+('blindbox', '盲盒', FALSE, 150),
+('cloudphone', '云手机红包', TRUE, 160),
+('todaycloud', '今日云朵统计', TRUE, 165),
+('after_task', '收尾清理', TRUE, 170);
 
 -- ============================================
 -- 清理辅助存储过程

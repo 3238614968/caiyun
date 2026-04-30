@@ -5,11 +5,13 @@ services:
     image: mysql:8.0
     container_name: caiyun-mysql
     environment:
-      MYSQL_ROOT_PASSWORD: root123
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?MYSQL_ROOT_PASSWORD is required}
       MYSQL_DATABASE: caiyun
+      MYSQL_USER: ${MYSQL_USER:-caiyun_app}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?MYSQL_PASSWORD is required}
       TZ: Asia/Shanghai
     ports:
-      - "3306:3306"
+      - "127.0.0.1:3306:3306"
     volumes:
       - mysql-data:/var/lib/mysql
       - ./backend/scripts/init_caiyun_database.sql:/docker-entrypoint-initdb.d/001_init_caiyun_database.sql:ro
@@ -20,7 +22,7 @@ services:
     image: redis:7.0
     container_name: caiyun-redis
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
     volumes:
       - redis-data:/data
     networks:
@@ -32,19 +34,20 @@ services:
       dockerfile: Dockerfile.api
     container_name: caiyun-api
     ports:
-      - "8080:8080"
+      - "127.0.0.1:8080:8080"
     depends_on:
       - mysql
       - redis
     environment:
       DB_HOST: mysql
       DB_PORT: 3306
-      DB_USER: root
-      DB_PASSWORD: root123
+      DB_USER: ${MYSQL_USER:-caiyun_app}
+      DB_PASSWORD: ${MYSQL_PASSWORD:?MYSQL_PASSWORD is required}
       DB_NAME: caiyun
       REDIS_HOST: redis
       REDIS_PORT: 6379
-      JWT_SECRET: your-secret-key-change-in-production
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required}
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost,http://127.0.0.1}
       TASK_CONCURRENCY: 10
     networks:
       - caiyun-network
@@ -55,18 +58,19 @@ services:
       dockerfile: Dockerfile.worker
     container_name: caiyun-worker
     ports:
-      - "8081:8081"
+      - "127.0.0.1:8081:8081"
     depends_on:
       - mysql
       - redis
     environment:
       DB_HOST: mysql
       DB_PORT: 3306
-      DB_USER: root
-      DB_PASSWORD: root123
+      DB_USER: ${MYSQL_USER:-caiyun_app}
+      DB_PASSWORD: ${MYSQL_PASSWORD:?MYSQL_PASSWORD is required}
       DB_NAME: caiyun
       REDIS_HOST: redis
       REDIS_PORT: 6379
+      WORKER_MONITOR_TOKEN: ${WORKER_MONITOR_TOKEN:?WORKER_MONITOR_TOKEN is required}
       TASK_CONCURRENCY: 10
       TASK_SCHEDULE: "0 8 * * *"
       WORKER_MONITOR_PORT: 8081
@@ -79,7 +83,7 @@ services:
       dockerfile: Dockerfile
     container_name: caiyun-frontend
     ports:
-      - "80:80"
+      - "80:8080"
     depends_on:
       - backend-api
     networks:

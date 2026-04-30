@@ -1,6 +1,6 @@
 ﻿import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
-import { login as apiLogin, register as apiRegister } from '@/api/auth'
+import { login as apiLogin, register as apiRegister, logout as apiLogout } from '@/api/auth'
 
 export interface User {
   id: number
@@ -10,33 +10,35 @@ export interface User {
 }
 
 export const useAuthStore = defineStore('auth', () => {
-  const token = ref<string>(localStorage.getItem('token') || '')
   const user = ref<User | null>(null)
+  const token = ref<string>('') // 兼容旧调用；真实令牌由 HttpOnly Cookie 保存
 
-  const isAuthenticated = computed(() => !!token.value)
+  const isAuthenticated = computed(() => !!user.value)
 
   async function login(username: string, password: string) {
     const data = await apiLogin({ username, password })
-    token.value = data.token
+    token.value = 'cookie'
     user.value = data.user as User
-    localStorage.setItem('token', data.token)
     localStorage.setItem('user', JSON.stringify(data.user))
     return data
   }
 
   async function register(username: string, password: string, email?: string) {
     const data = await apiRegister({ username, password, email })
-    token.value = data.token
+    token.value = 'cookie'
     user.value = data.user as User
-    localStorage.setItem('token', data.token)
     localStorage.setItem('user', JSON.stringify(data.user))
     return data
   }
 
-  function logout() {
+  async function logout() {
+    try {
+      await apiLogout()
+    } catch {
+      // 即使服务端清理失败，也清理本地状态。
+    }
     token.value = ''
     user.value = null
-    localStorage.removeItem('token')
     localStorage.removeItem('user')
   }
 
@@ -45,6 +47,7 @@ export const useAuthStore = defineStore('auth', () => {
     if (savedUser && savedUser !== 'undefined') {
       try {
         user.value = JSON.parse(savedUser)
+        token.value = 'cookie'
       } catch {
         localStorage.removeItem('user')
       }

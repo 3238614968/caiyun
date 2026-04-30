@@ -1,4 +1,4 @@
-﻿package queue
+package queue
 
 import (
 	"context"
@@ -11,8 +11,7 @@ import (
 )
 
 const (
-	TaskQueueKey           = "task:queue:pending"
-	TaskQueueProcessingKey = "task:queue:processing"
+	TaskQueueKey = "task:queue:pending"
 )
 
 // TaskQueue 任务队列

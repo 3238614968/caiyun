@@ -1,4 +1,4 @@
-﻿package handlers
+package handlers
 
 import (
 	"caiyun/internal/models"
@@ -219,7 +219,13 @@ func (h *TaskHandler) GetTrendData(c *gin.Context) {
 		days = 7
 	}
 
-	trendData, err := h.cloudService.GetTrendData(userID.(uint), days)
+	var trendData []services.TrendPoint
+	var err error
+	if role, _ := c.Get("role"); role == "admin" {
+		trendData, err = h.cloudService.GetGlobalTrendData(days)
+	} else {
+		trendData, err = h.cloudService.GetTrendData(userID.(uint), days)
+	}
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, ErrorResponse{Message: err.Error()})
 		return
@@ -348,16 +354,24 @@ func (h *TaskHandler) CalculateStats(c *gin.Context) {
 		return
 	}
 
-	// 计算每日统计
-	if err := h.cloudService.CalculateDailyStats(); err != nil {
-		c.JSON(http.StatusInternalServerError, ErrorResponse{Message: "计算统计数据失败: " + err.Error()})
-		return
-	}
+	if role, _ := c.Get("role"); role == "admin" {
+		// 管理员首页展示全局数据，手动计算时同步刷新全站账号快照。
+		if err := h.cloudService.CalculateDailyStats(); err != nil {
+			c.JSON(http.StatusInternalServerError, ErrorResponse{Message: "计算统计数据失败: " + err.Error()})
+			return
+		}
+	} else {
+		// 普通用户仅计算自己的每日统计，避免触发全站账号重算。
+		if err := h.cloudService.CalculateDailyStatsByUserID(userID.(uint)); err != nil {
+			c.JSON(http.StatusInternalServerError, ErrorResponse{Message: "计算统计数据失败: " + err.Error()})
+			return
+		}
 
-	// 更新差异值
-	if err := h.cloudService.UpdateCloudDiffs(userID.(uint)); err != nil {
-		c.JSON(http.StatusInternalServerError, ErrorResponse{Message: "更新差异值失败: " + err.Error()})
-		return
+		// 更新差异值
+		if err := h.cloudService.UpdateCloudDiffs(userID.(uint)); err != nil {
+			c.JSON(http.StatusInternalServerError, ErrorResponse{Message: "更新差异值失败: " + err.Error()})
+			return
+		}
 	}
 
 	c.JSON(http.StatusOK, SuccessResponse{Message: "统计数据计算完成"})

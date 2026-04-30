@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"caiyun/internal/services"
+	"errors"
 	"net/http"
 	"strconv"
 
@@ -163,6 +164,35 @@ func (h *AdminHandler) UpdateUserRole(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, SuccessResponse{Message: "角色更新成功"})
+}
+
+// ResetUserPassword 管理员重置用户密码
+func (h *AdminHandler) ResetUserPassword(c *gin.Context) {
+	userID, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, ErrorResponse{Message: "无效的用户ID"})
+		return
+	}
+
+	var req services.ResetUserPasswordRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, ErrorResponse{Message: err.Error()})
+		return
+	}
+
+	if err := h.adminService.ResetUserPassword(uint(userID), &req); err != nil {
+		switch {
+		case errors.Is(err, services.ErrUserNotFound):
+			c.JSON(http.StatusNotFound, ErrorResponse{Message: "用户不存在"})
+		case errors.Is(err, services.ErrWeakPassword):
+			c.JSON(http.StatusBadRequest, ErrorResponse{Message: err.Error()})
+		default:
+			c.JSON(http.StatusInternalServerError, ErrorResponse{Message: err.Error()})
+		}
+		return
+	}
+
+	c.JSON(http.StatusOK, SuccessResponse{Message: "用户密码已重置"})
 }
 
 // UpdateAccountStatusRequest 更新账号状态请求

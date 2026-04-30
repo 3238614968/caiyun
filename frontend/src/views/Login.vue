@@ -37,6 +37,10 @@
           />
         </el-form-item>
 
+        <div class="forgot-link">
+          <router-link to="/forgot-password" class="gradient-text">忘记密码？</router-link>
+        </div>
+
         <el-form-item>
           <el-button
             type="primary"
@@ -90,7 +94,7 @@ const rules = reactive<FormRules>({
   ],
   password: [
     { required: true, message: '请输入密码', trigger: 'blur' },
-    { min: 6, message: '密码长度不能少于6个字符', trigger: 'blur' }
+    { min: 1, message: '请输入密码', trigger: 'blur' }
   ]
 })
 
@@ -202,6 +206,12 @@ async function handleLogin() {
   text-align: center;
   margin-top: 20px;
   color: #666;
+  font-size: 14px;
+}
+
+.forgot-link {
+  text-align: right;
+  margin: -8px 0 18px;
   font-size: 14px;
 }
 

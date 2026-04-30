@@ -5,6 +5,8 @@ import (
 	"caiyun/internal/repository"
 	"errors"
 	"time"
+
+	"golang.org/x/crypto/bcrypt"
 )
 
 // 北京时间时区
@@ -143,6 +145,11 @@ type UpdateUserRoleRequest struct {
 	Role string `json:"role" binding:"required,oneof=user admin"`
 }
 
+// ResetUserPasswordRequest 管理员重置用户密码请求
+type ResetUserPasswordRequest struct {
+	Password string `json:"password" binding:"required,min=12"`
+}
+
 // UpdateUserRole 更新用户角色
 func (s *AdminService) UpdateUserRole(userID uint, req *UpdateUserRoleRequest) error {
 	user, err := s.userRepo.FindByID(userID)
@@ -150,6 +157,23 @@ func (s *AdminService) UpdateUserRole(userID uint, req *UpdateUserRoleRequest) e
 		return ErrUserNotFound
 	}
 	user.Role = req.Role
+	return s.userRepo.Update(user)
+}
+
+// ResetUserPassword 管理员重置用户密码
+func (s *AdminService) ResetUserPassword(userID uint, req *ResetUserPasswordRequest) error {
+	user, err := s.userRepo.FindByID(userID)
+	if err != nil {
+		return ErrUserNotFound
+	}
+	if err := validatePasswordStrength(user.Username, req.Password); err != nil {
+		return err
+	}
+	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
+	if err != nil {
+		return err
+	}
+	user.Password = string(hashedPassword)
 	return s.userRepo.Update(user)
 }
 
@@ -216,18 +240,18 @@ func (s *AdminService) GetStatsOverview() (*StatsOverview, error) {
 
 // AccountSummary 账号概况（管理员查看所有账号）
 type AccountSummary struct {
-	ID             uint   `json:"id"`
-	Phone          string `json:"phone"`
-	Remark         string `json:"remark"`
-	OwnerUsername  string `json:"owner_username"`
-	CloudCount     int    `json:"cloud_count"`
-	IsActive       bool   `json:"is_active"`
-	CreatedAt      string `json:"created_at"`
-	TodayGained    int    `json:"today_gained"`
-	YesterdayGained int   `json:"yesterday_gained"`
-	SuccessCount   int64  `json:"success_count"`
-	FailedCount    int64  `json:"failed_count"`
-	LastExecutedAt string `json:"last_executed_at"`
+	ID              uint   `json:"id"`
+	Phone           string `json:"phone"`
+	Remark          string `json:"remark"`
+	OwnerUsername   string `json:"owner_username"`
+	CloudCount      int    `json:"cloud_count"`
+	IsActive        bool   `json:"is_active"`
+	CreatedAt       string `json:"created_at"`
+	TodayGained     int    `json:"today_gained"`
+	YesterdayGained int    `json:"yesterday_gained"`
+	SuccessCount    int64  `json:"success_count"`
+	FailedCount     int64  `json:"failed_count"`
+	LastExecutedAt  string `json:"last_executed_at"`
 }
 
 // GetAccountSummaries 获取所有账号概况
@@ -245,12 +269,12 @@ func (s *AdminService) GetAccountSummaries(page, pageSize int) ([]*AccountSummar
 	summaries := make([]*AccountSummary, len(accounts))
 	for i, acc := range accounts {
 		summary := &AccountSummary{
-			ID:            acc.ID,
-			Phone:         acc.Phone,
-			Remark:        acc.Remark,
-			CloudCount:    acc.CloudCount,
-			IsActive:      acc.IsActive,
-			CreatedAt:     acc.CreatedAt.Format("2006-01-02 15:04:05"),
+			ID:         acc.ID,
+			Phone:      acc.Phone,
+			Remark:     acc.Remark,
+			CloudCount: acc.CloudCount,
+			IsActive:   acc.IsActive,
+			CreatedAt:  acc.CreatedAt.Format("2006-01-02 15:04:05"),
 		}
 
 		if acc.User.ID > 0 {

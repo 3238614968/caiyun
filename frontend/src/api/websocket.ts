@@ -10,7 +10,6 @@ type MessageHandler = (msg: WsMessage) => void
 class WebSocketClient {
   private ws: WebSocket | null = null
   private url: string = ''
-  private token: string = ''
   private handlers: Map<string, Set<MessageHandler>> = new Map()
   private reconnectTimer: number | null = null
   private reconnectDelay: number = 3000
@@ -22,8 +21,6 @@ class WebSocketClient {
 
   connect() {
     this.manualClose = false
-    this.token = localStorage.getItem('token') || ''
-    if (!this.token) return
 
     // 构建WebSocket URL
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
@@ -31,12 +28,12 @@ class WebSocketClient {
     
     // 如果配置了完整URL则使用，否则使用当前host
     if (wsUrl.startsWith('ws://') || wsUrl.startsWith('wss://')) {
-      this.url = `${wsUrl}?token=${encodeURIComponent(this.token)}`
+      this.url = wsUrl
     } else {
       // 相对路径，使用当前host
       const host = window.location.host
       const path = wsUrl.startsWith('/') ? wsUrl : `/${wsUrl}`
-      this.url = `${protocol}//${host}${path}?token=${encodeURIComponent(this.token)}`
+      this.url = `${protocol}//${host}${path}`
     }
 
     this.doConnect()

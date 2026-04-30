@@ -80,6 +80,9 @@ func (s *ExchangeService) AddExchangeAccount(userID uint, accountID uint, remark
 	if err != nil {
 		return nil, fmt.Errorf("云盘账号不存在")
 	}
+	if account.UserID != userID {
+		return nil, fmt.Errorf("云盘账号不存在")
+	}
 
 	// 检查是否已添加为兑换账号
 	if s.exchangeAccountRepo.ExistsByAccountID(accountID) {

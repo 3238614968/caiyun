@@ -1,10 +1,14 @@
-﻿package ws
+package ws
 
 import (
 	"caiyun/internal/repository"
 	"encoding/json"
 	"log"
+	"net"
 	"net/http"
+	"net/url"
+	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -15,15 +19,70 @@ var upgrader = websocket.Upgrader{
 	ReadBufferSize:  1024,
 	WriteBufferSize: 1024,
 	CheckOrigin: func(r *http.Request) bool {
-		return true // 允许所有来源（生产环境可按需限制）
+		origin := r.Header.Get("Origin")
+		if origin == "" {
+			return true
+		}
+		if sameOriginHost(origin, r.Host) {
+			return true
+		}
+		allowedOrigins := strings.TrimSpace(os.Getenv("ALLOWED_ORIGINS"))
+		if allowedOrigins == "" {
+			allowedOrigins = "http://localhost:3000,http://localhost:5173,http://127.0.0.1:3000,http://127.0.0.1:5173"
+		}
+		for _, allowed := range strings.Split(allowedOrigins, ",") {
+			if strings.TrimSpace(allowed) == origin {
+				return true
+			}
+		}
+		return false
 	},
+}
+
+func sameOriginHost(origin, requestHost string) bool {
+	parsed, err := url.Parse(origin)
+	if err != nil || parsed.Host == "" || requestHost == "" {
+		return false
+	}
+
+	originHost := strings.ToLower(parsed.Hostname())
+	originPort := parsed.Port()
+	if originPort == "" {
+		originPort = defaultPort(parsed.Scheme)
+	}
+
+	host, port, err := net.SplitHostPort(requestHost)
+	if err != nil {
+		host = requestHost
+		port = ""
+	}
+	host = strings.ToLower(strings.Trim(host, "[]"))
+
+	if originHost != host {
+		return false
+	}
+	if port == "" {
+		return originPort == defaultPort(parsed.Scheme)
+	}
+	return originPort == port
+}
+
+func defaultPort(scheme string) string {
+	switch strings.ToLower(scheme) {
+	case "http", "ws":
+		return "80"
+	case "https", "wss":
+		return "443"
+	default:
+		return ""
+	}
 }
 
 // Message WebSocket消息结构
 type Message struct {
-	Type string      `json:"type"` // task_progress, task_complete, notification, queue_status
-	Data interface{} `json:"data"`
-	UserID uint      `json:"user_id,omitempty"` // 可选，用于指定接收用户
+	Type   string      `json:"type"` // task_progress, task_complete, notification, queue_status
+	Data   interface{} `json:"data"`
+	UserID uint        `json:"user_id,omitempty"` // 可选，用于指定接收用户
 }
 
 // Client 单个WebSocket连接

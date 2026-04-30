@@ -13,11 +13,15 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /out/caiyun-api ./cmd/api
 
 FROM alpine:3.20
 
-RUN apk add --no-cache ca-certificates tzdata
+RUN apk add --no-cache ca-certificates tzdata \
+    && addgroup -S app \
+    && adduser -S -G app app
 
 WORKDIR /app
 
-COPY --from=builder /out/caiyun-api /usr/local/bin/caiyun-api
+COPY --from=builder --chown=app:app /out/caiyun-api /usr/local/bin/caiyun-api
+
+USER app
 
 EXPOSE 8080
 

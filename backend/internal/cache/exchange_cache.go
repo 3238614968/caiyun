@@ -1,4 +1,4 @@
-﻿package cache
+package cache
 
 import (
 	"context"
@@ -32,9 +32,6 @@ const (
 const (
 	ProductTTL = 10 * time.Minute // 商品缓存 10 分钟
 	AccountTTL = 30 * time.Minute // 账号缓存 30 分钟
-	TaskTTL    = 5 * time.Minute  // 任务缓存 5 分钟
-	ConfigTTL  = 60 * time.Minute // 配置缓存 1 小时
-	StatsTTL   = 5 * time.Minute  // 统计缓存 5 分钟
 )
 
 // CacheProduct 缓存商品信息

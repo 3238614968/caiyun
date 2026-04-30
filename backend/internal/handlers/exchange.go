@@ -3,9 +3,11 @@ package handlers
 import (
 	"caiyun/internal/models"
 	"caiyun/internal/services"
+	"encoding/csv"
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -76,6 +78,12 @@ type UpdateProductsRequest struct {
 
 // UpdateProducts 手动更新商品
 func (h *ExchangeHandler) UpdateProducts(c *gin.Context) {
+	userID, exists := c.Get("user_id")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, ErrorResponse{Message: "未授权"})
+		return
+	}
+
 	var req UpdateProductsRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, ErrorResponse{Message: err.Error()})
@@ -88,8 +96,11 @@ func (h *ExchangeHandler) UpdateProducts(c *gin.Context) {
 		return
 	}
 
+	role, _ := c.Get("role")
+	isAdmin := role == "admin"
+
 	// 调用 Service 更新商品（带账号 ID）
-	count, err := h.productService.UpdateProducts(req.AccountID)
+	count, err := h.productService.UpdateProducts(req.AccountID, userID.(uint), isAdmin)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, ErrorResponse{Message: "更新失败：" + err.Error()})
 		return
@@ -727,23 +738,38 @@ func (h *ExchangeHandler) ExportExchangeRecords(c *gin.Context) {
 	// 写入BOM以支持中文
 	c.Writer.Write([]byte("\xEF\xBB\xBF"))
 
+	writer := csv.NewWriter(c.Writer)
+	defer writer.Flush()
+
 	// 写入表头
-	c.Writer.Write([]byte("记录ID,用户ID,账号ID,商品ID,商品名称,状态,消息,执行时长(ms),创建时间\n"))
+	_ = writer.Write([]string{"记录ID", "用户ID", "账号ID", "商品ID", "商品名称", "状态", "消息", "执行时长(ms)", "创建时间"})
 
 	// 写入数据
 	for _, record := range records {
-		line := fmt.Sprintf("%d,%d,%d,%d,%s,%s,%s,%d,%s\n",
-			record.ID,
-			record.UserID,
-			record.ExchangeAccountID,
-			record.ProductID,
-			record.PrizeName,
-			record.Status,
-			record.Message,
-			record.ExecutionTimeMs,
+		_ = writer.Write([]string{
+			strconv.FormatUint(uint64(record.ID), 10),
+			strconv.FormatUint(uint64(record.UserID), 10),
+			strconv.FormatUint(uint64(record.ExchangeAccountID), 10),
+			strconv.FormatUint(uint64(record.ProductID), 10),
+			escapeCSVFormula(record.PrizeName),
+			escapeCSVFormula(record.Status),
+			escapeCSVFormula(record.Message),
+			strconv.Itoa(record.ExecutionTimeMs),
 			record.CreatedAt.Format("2006-01-02 15:04:05"),
-		)
-		c.Writer.Write([]byte(line))
+		})
+	}
+}
+
+func escapeCSVFormula(value string) string {
+	trimmed := strings.TrimLeft(value, " \t\r\n")
+	if trimmed == "" {
+		return value
+	}
+	switch trimmed[0] {
+	case '=', '+', '-', '@':
+		return "'" + value
+	default:
+		return value
 	}
 }
 

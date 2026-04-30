@@ -1,10 +1,13 @@
-﻿package middleware
+package middleware
 
 import (
 	"caiyun/internal/constants"
+	"caiyun/internal/repository"
 	"caiyun/pkg/jwt"
+	"crypto/subtle"
 	"fmt"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -136,8 +139,8 @@ type RateLimitConfig struct {
 
 // APIRateLimit 特定API的限流配置
 type APIRateLimit struct {
-	Rate  int
-	Burst int
+	Rate   int
+	Burst  int
 	ByUser bool // 是否基于用户限流，false则基于IP
 }
 
@@ -150,12 +153,13 @@ func DefaultRateLimitConfig() *RateLimitConfig {
 		UserBurst:   constants.DefaultUserBurst,   // 突发50请求
 		APIRates: map[string]APIRateLimit{
 			// 兑换API：更严格的限流
-			"/api/exchange/tasks":               {Rate: constants.ExchangeTaskRate,  Burst: constants.ExchangeTaskBurst,  ByUser: true},
-			"/api/exchange/tasks/batch-execute": {Rate: constants.BatchExecuteRate,  Burst: constants.BatchExecuteBurst,  ByUser: true},
-			"/api/exchange/records/export":      {Rate: constants.ExportRate,        Burst: constants.ExportBurst,        ByUser: true},
+			"/api/exchange/tasks":               {Rate: constants.ExchangeTaskRate, Burst: constants.ExchangeTaskBurst, ByUser: true},
+			"/api/exchange/tasks/batch-execute": {Rate: constants.BatchExecuteRate, Burst: constants.BatchExecuteBurst, ByUser: true},
+			"/api/exchange/records/export":      {Rate: constants.ExportRate, Burst: constants.ExportBurst, ByUser: true},
 			// 登录API：防止暴力破解
-			"/api/auth/login":    {Rate: 5, Burst: 10, ByUser: false},
-			"/api/auth/register": {Rate: 3, Burst: 5, ByUser: false},
+			"/api/auth/login":          {Rate: 5, Burst: 10, ByUser: false},
+			"/api/auth/register":       {Rate: 3, Burst: 5, ByUser: false},
+			"/api/auth/password/reset": {Rate: 3, Burst: 5, ByUser: false},
 			// 商品搜索API
 			"/api/products/search": {Rate: 20, Burst: 30, ByUser: true},
 		},
@@ -245,22 +249,31 @@ func TimeoutMiddleware(timeout time.Duration) gin.HandlerFunc {
 }
 
 func AuthMiddleware(jwtManager *jwt.Manager) gin.HandlerFunc {
+	return AuthMiddlewareWithUser(jwtManager, nil)
+}
+
+func AuthMiddlewareWithUser(jwtManager *jwt.Manager, userRepo *repository.UserRepository) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		authHeader := c.GetHeader("Authorization")
-		if authHeader == "" {
+		token := ""
+		authFromCookie := false
+		if authHeader != "" {
+			parts := strings.SplitN(authHeader, " ", 2)
+			if len(parts) != 2 || parts[0] != "Bearer" {
+				c.JSON(http.StatusUnauthorized, gin.H{"error": "认证格式错误"})
+				c.Abort()
+				return
+			}
+			token = parts[1]
+		} else if cookieToken, err := c.Cookie("auth_token"); err == nil {
+			token = cookieToken
+			authFromCookie = true
+		}
+		if token == "" {
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "未提供认证信息"})
 			c.Abort()
 			return
 		}
-
-		parts := strings.SplitN(authHeader, " ", 2)
-		if len(parts) != 2 || parts[0] != "Bearer" {
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "认证格式错误"})
-			c.Abort()
-			return
-		}
-
-		token := parts[1]
 		claims, err := jwtManager.ValidateToken(token)
 		if err != nil {
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "无效的token"})
@@ -268,12 +281,64 @@ func AuthMiddleware(jwtManager *jwt.Manager) gin.HandlerFunc {
 			return
 		}
 
-		// 将用户信息存入上下文
-		c.Set("user_id", claims.UserID)
-		c.Set("username", claims.Username)
-		c.Set("role", claims.Role)
+		userID := claims.UserID
+		username := claims.Username
+		role := claims.Role
+		if userRepo != nil {
+			user, err := userRepo.FindByID(claims.UserID)
+			if err != nil {
+				c.JSON(http.StatusUnauthorized, gin.H{"error": "用户不存在或已失效"})
+				c.Abort()
+				return
+			}
+			username = user.Username
+			role = user.Role
+		}
+
+		// 将当前数据库中的用户信息存入上下文，避免角色变更或删号后旧 JWT 继续保留旧权限。
+		c.Set("user_id", userID)
+		c.Set("username", username)
+		c.Set("role", role)
+		c.Set("auth_from_cookie", authFromCookie)
 
 		c.Next()
+	}
+}
+
+func CSRFMiddleware() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if !isUnsafeMethod(c.Request.Method) {
+			c.Next()
+			return
+		}
+		if fromCookie, _ := c.Get("auth_from_cookie"); fromCookie != true {
+			c.Next()
+			return
+		}
+
+		csrfCookie, err := c.Cookie("csrf_token")
+		if err != nil || csrfCookie == "" {
+			c.JSON(http.StatusForbidden, gin.H{"error": "缺少CSRF令牌"})
+			c.Abort()
+			return
+		}
+		csrfHeader := c.GetHeader("X-CSRF-Token")
+		if csrfHeader == "" || subtle.ConstantTimeCompare([]byte(csrfHeader), []byte(csrfCookie)) != 1 {
+			c.JSON(http.StatusForbidden, gin.H{"error": "无效的CSRF令牌"})
+			c.Abort()
+			return
+		}
+
+		c.Next()
+	}
+}
+
+func isUnsafeMethod(method string) bool {
+	switch method {
+	case http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete:
+		return true
+	default:
+		return false
 	}
 }
 
@@ -291,8 +356,17 @@ func AdminMiddleware() gin.HandlerFunc {
 
 func CORSMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		c.Writer.Header().Set("Access-Control-Allow-Origin", "*")
-		c.Writer.Header().Set("Access-Control-Allow-Credentials", "true")
+		origin := c.GetHeader("Origin")
+		if origin != "" {
+			if isAllowedOrigin(origin) {
+				c.Writer.Header().Set("Access-Control-Allow-Origin", origin)
+				c.Writer.Header().Set("Access-Control-Allow-Credentials", "true")
+				c.Writer.Header().Add("Vary", "Origin")
+			} else if c.Request.Method == "OPTIONS" {
+				c.AbortWithStatus(http.StatusForbidden)
+				return
+			}
+		}
 		c.Writer.Header().Set("Access-Control-Allow-Headers", "Content-Type, Content-Length, Accept-Encoding, X-CSRF-Token, Authorization, accept, origin, Cache-Control, X-Requested-With")
 		c.Writer.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS, GET, PUT, DELETE")
 
@@ -303,4 +377,18 @@ func CORSMiddleware() gin.HandlerFunc {
 
 		c.Next()
 	}
+}
+
+func isAllowedOrigin(origin string) bool {
+	allowedOrigins := strings.TrimSpace(os.Getenv("ALLOWED_ORIGINS"))
+	if allowedOrigins == "" {
+		allowedOrigins = "http://localhost:3000,http://localhost:5173,http://127.0.0.1:3000,http://127.0.0.1:5173"
+	}
+	for _, allowed := range strings.Split(allowedOrigins, ",") {
+		allowed = strings.TrimSpace(allowed)
+		if allowed != "" && allowed == origin {
+			return true
+		}
+	}
+	return false
 }

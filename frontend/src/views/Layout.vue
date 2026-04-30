@@ -164,7 +164,6 @@
   <AnnouncementPopup
     v-model="popupVisible"
     :announcement="popupAnnouncement"
-    :can-dismiss="true"
     @dismiss="handlePopupDismiss"
   />
 </template>
@@ -181,7 +180,6 @@ import {
   Setting,
   Fold,
   Expand,
-  Bell,
   FullScreen,
   ArrowDown,
   SwitchButton
@@ -215,6 +213,10 @@ const asideWidth = computed(() => (isMobileViewport.value ? '100%' : isTabletVie
 
 // 是否为管理员
 const isAdmin = computed(() => authStore.user?.role === 'admin')
+const readAnnouncementStorageKey = computed(() => {
+  const userID = authStore.user?.id || 'guest'
+  return `readAnnouncements:${userID}`
+})
 
 // 用户头像文字
 const userInitials = computed(() => {
@@ -258,7 +260,7 @@ const handleCommand = async (command: string) => {
           type: 'warning'
         })
         wsClient.disconnect()
-        authStore.logout()
+        await authStore.logout()
         router.push('/login')
         ElMessage.success('已退出登录')
       } catch {
@@ -268,26 +270,35 @@ const handleCommand = async (command: string) => {
   }
 }
 
-// 弹窗公告队列
-const popupQueue = ref<Announcement[]>([])
-const currentPopupIndex = ref(0)
+const loadReadAnnouncementIDs = () => {
+  const legacyDismissed = JSON.parse(localStorage.getItem('dismissedAnnouncements') || '[]')
+  const userRead = JSON.parse(localStorage.getItem(readAnnouncementStorageKey.value) || '[]')
+  return Array.from(new Set([...legacyDismissed, ...userRead]))
+}
+
+const markAnnouncementRead = (announcement: Announcement | null) => {
+  if (!announcement) return
+  const readIDs = loadReadAnnouncementIDs()
+  if (!readIDs.includes(announcement.id)) {
+    readIDs.push(announcement.id)
+    localStorage.setItem(readAnnouncementStorageKey.value, JSON.stringify(readIDs))
+  }
+}
 
 // 检查并显示弹窗公告
 const checkPopupAnnouncement = async () => {
   try {
     const res: any = await getPopupAnnouncement()
     if (res.has_popup && res.announcements && res.announcements.length > 0) {
-      // 检查用户已经关闭过的公告
-      const dismissedAnnouncements = JSON.parse(localStorage.getItem('dismissedAnnouncements') || '[]')
-      // 过滤出未关闭的公告
-      const unreadAnnouncements = res.announcements.filter(
-        (a: Announcement) => !dismissedAnnouncements.includes(a.id)
+      const readAnnouncements = loadReadAnnouncementIDs()
+      // 只自动弹出置顶且未读的弹窗公告；其他公告仅展示在首页列表中。
+      const topUnreadPopup = res.announcements.find(
+        (a: Announcement) => a.is_top && a.is_popup && !readAnnouncements.includes(a.id)
       )
-      
-      if (unreadAnnouncements.length > 0) {
-        popupQueue.value = unreadAnnouncements
-        currentPopupIndex.value = 0
-        showNextPopup()
+
+      if (topUnreadPopup) {
+        popupAnnouncement.value = topUnreadPopup
+        popupVisible.value = true
       }
     }
   } catch (error) {
@@ -295,26 +306,17 @@ const checkPopupAnnouncement = async () => {
   }
 }
 
-// 显示下一个弹窗公告
-const showNextPopup = () => {
-  if (currentPopupIndex.value < popupQueue.value.length) {
-    popupAnnouncement.value = popupQueue.value[currentPopupIndex.value]
-    popupVisible.value = true
-  }
-}
-
 const handlePopupDismiss = () => {
+  markAnnouncementRead(popupAnnouncement.value)
   popupVisible.value = false
-  // 显示下一个公告
-  currentPopupIndex.value++
-  showNextPopup()
+  popupAnnouncement.value = null
 }
 
 onMounted(() => {
   syncViewport()
   window.addEventListener('resize', syncViewport)
   // 用户已登录时建立WebSocket连接
-  if (authStore.token) {
+  if (authStore.isAuthenticated) {
     wsClient.connect()
   }
   // 检查弹窗公告

@@ -47,7 +47,7 @@ type CreateAccountRequest struct {
 // UpdateAccountRequest 更新账号请求
 type UpdateAccountRequest struct {
 	Phone  string `json:"phone" binding:"required"`
-	Auth   string `json:"auth" binding:"required"`
+	Auth   string `json:"auth" binding:"omitempty"`
 	Remark string `json:"remark" binding:"omitempty"`
 }
 
@@ -169,15 +169,17 @@ func (s *AccountService) UpdateAccount(userID, accountID uint, req *UpdateAccoun
 
 	// 更新账号信息
 	account.Phone = req.Phone
-	account.Auth = req.Auth
 	account.Remark = req.Remark
 
 	// 同步解析 Auth 到 token/平台/过期时间
-	if info, err := auth.ParseToken(req.Auth); err == nil && info != nil {
-		account.Token = info.Token
-		account.ExpireAt = info.Expire
-		if info.Platform != "" {
-			account.Platform = info.Platform
+	if req.Auth != "" {
+		account.Auth = req.Auth
+		if info, err := auth.ParseToken(req.Auth); err == nil && info != nil {
+			account.Token = info.Token
+			account.ExpireAt = info.Expire
+			if info.Platform != "" {
+				account.Platform = info.Platform
+			}
 		}
 	}
 

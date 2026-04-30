@@ -15,6 +15,12 @@ export interface LoginRequest {
   password: string
 }
 
+export interface ResetPasswordRequest {
+  username: string
+  email: string
+  new_password: string
+}
+
 // 注册请求
 export interface RegisterRequest {
   username: string
@@ -24,7 +30,7 @@ export interface RegisterRequest {
 
 // 登录/注册响应
 export interface AuthResponse {
-  token: string
+  expires_at: number
   user: User
 }
 
@@ -46,10 +52,27 @@ export function register(data: RegisterRequest): Promise<AuthResponse> {
   })
 }
 
+// 通过用户名和注册邮箱重置密码
+export function resetPassword(data: ResetPasswordRequest): Promise<{ message: string }> {
+  return request({
+    url: '/api/auth/password/reset',
+    method: 'post',
+    data
+  })
+}
+
 // 刷新Token
-export function refreshToken(): Promise<{ token: string }> {
+export function refreshToken(): Promise<{ expires_at: number }> {
   return request({
     url: '/api/auth/refresh',
+    method: 'post'
+  })
+}
+
+// 退出登录
+export function logout(): Promise<{ message: string }> {
+  return request({
+    url: '/api/auth/logout',
     method: 'post'
   })
 }

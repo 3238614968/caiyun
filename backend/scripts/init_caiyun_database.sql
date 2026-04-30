@@ -331,22 +331,25 @@ CREATE TABLE IF NOT EXISTS `task_configs` (
 
 -- 插入默认任务配置
 INSERT IGNORE INTO `task_configs` (`task_type`, `task_name`, `is_enabled`, `sort_order`) VALUES
-('signin', '签到', TRUE, 1),
-('tasklist', '任务列表', TRUE, 2),
-('wechat', '微信签到', TRUE, 3),
-('wxdraw', '微信抽奖', TRUE, 4),
-('todaycloud', '今日云朵', TRUE, 5),
-('invitefriends', '邀请好友', TRUE, 6),
-('shake', '摇一摇', TRUE, 7),
-('receive', '领取云朵', TRUE, 8),
-('messagepush', '消息推送', TRUE, 9),
-('backupgift', '备份礼包', TRUE, 10),
-('blindbox', '盲盒', TRUE, 11),
-('redpacket', '红包', TRUE, 12),
-('aicloud', 'AI 云朵', TRUE, 13),
-('garden', '花园', TRUE, 14),
-('cloudphone', '云手机红包', TRUE, 15),
-('cloudbattle', '云朵大战', TRUE, 16);
+('signin', '每日签到', TRUE, 10),
+('task_expansion_reward', '备份翻倍奖励', TRUE, 20),
+('wechat', '微信签到', TRUE, 30),
+('wxdraw', '微信抽奖', TRUE, 40),
+('tasklist', '任务中心巡检', TRUE, 50),
+('invitefriends', '邀请好友看电影', TRUE, 60),
+('shake', '摇一摇', TRUE, 70),
+('receive', '领取云朵', TRUE, 80),
+('messagepush', '消息推送奖励', TRUE, 90),
+('revivalreward', '复活卡奖励', TRUE, 95),
+('backupgift', '备份礼包', TRUE, 100),
+('garden', '果园', FALSE, 110),
+('redpacket', 'AI红包', FALSE, 120),
+('aicloud', 'AI云朵', FALSE, 130),
+('cloudbattle', '云朵大作战', TRUE, 140),
+('blindbox', '盲盒', FALSE, 150),
+('cloudphone', '云手机红包', TRUE, 160),
+('todaycloud', '今日云朵统计', TRUE, 165),
+('after_task', '收尾清理', TRUE, 170);
 
 -- ============================================
 -- 9. 创建兑换中心相关表 (002_exchange_center.sql)
@@ -630,17 +633,11 @@ CREATE TABLE IF NOT EXISTS `web_socket_messages` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='WebSocket消息表';
 
 -- ============================================
--- 7. 创建默认管理员账号（如果不存在）
+-- 7. 默认管理员账号
 -- ============================================
 
--- 默认管理员账号
--- 用户名：admin
--- 密码：admin123 (bcrypt 加密后的 hash)
-INSERT INTO `users` (`username`, `password`, `email`, `role`)
-SELECT 'admin', '$2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy', 'admin@caiyun.com', 'admin'
-WHERE NOT EXISTS (
-    SELECT 1 FROM `users` WHERE `username` = 'admin'
-);
+-- 安全起见，不再创建默认管理员。
+-- 请通过注册流程创建用户后，在受控环境中手动提升管理员权限。
 
 -- ============================================
 -- 8. 为兑换中心表添加增强字段 (003_exchange_enhancements.sql)
@@ -1075,17 +1072,16 @@ ORDER BY id;
 
 SELECT '' AS '';
 
--- 显示默认管理员
-SELECT '默认管理员账号:' AS '';
+-- 显示管理员概况
+SELECT '管理员账号概况:' AS '';
 SELECT username AS '用户名', 
        email AS '邮箱', 
-       role AS '角色',
-       '密码：admin123' AS '默认密码'
+       role AS '角色'
 FROM users 
 WHERE role = 'admin'
 LIMIT 1;
 
 SELECT '' AS '';
 SELECT '============================================' AS '';
-SELECT '提示：请立即修改默认管理员密码！' AS 'Warning';
+SELECT '提示：初始化脚本不会创建默认管理员，请按部署流程创建强密码管理员。' AS 'Info';
 SELECT '============================================' AS '';

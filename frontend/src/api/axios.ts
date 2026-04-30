@@ -1,6 +1,5 @@
 import axios, { type AxiosInstance, type AxiosRequestConfig, type AxiosResponse } from 'axios'
 import { ElMessage } from 'element-plus'
-import { useAuthStore } from '@/store/auth'
 
 // 创建 axios 实例
 const service: AxiosInstance = axios.create({
@@ -8,6 +7,7 @@ const service: AxiosInstance = axios.create({
   // 否则会出现 `/api/api/...` 导致 404。
   baseURL: import.meta.env.VITE_API_BASE_URL || '',
   timeout: 30000,
+  withCredentials: true,
   headers: {
     'Content-Type': 'application/json'
   }
@@ -16,10 +16,12 @@ const service: AxiosInstance = axios.create({
 // 请求拦截器
 service.interceptors.request.use(
   (config) => {
-    // 从 localStorage 获取 token
-    const token = localStorage.getItem('token')
-    if (token) {
-      config.headers.Authorization = `Bearer ${token}`
+    const method = (config.method || 'get').toLowerCase()
+    if (['post', 'put', 'patch', 'delete'].includes(method)) {
+      const csrfToken = getCookie('csrf_token')
+      if (csrfToken) {
+        config.headers['X-CSRF-Token'] = csrfToken
+      }
     }
     return config
   },
@@ -28,6 +30,15 @@ service.interceptors.request.use(
     return Promise.reject(error)
   }
 )
+
+function getCookie(name: string): string {
+  const prefix = `${encodeURIComponent(name)}=`
+  return document.cookie
+    .split(';')
+    .map(item => item.trim())
+    .find(item => item.startsWith(prefix))
+    ?.slice(prefix.length) || ''
+}
 
 // 响应拦截器
 service.interceptors.response.use(
@@ -48,7 +59,6 @@ service.interceptors.response.use(
         case 401:
           ElMessage.error('登录已过期，请重新登录')
           // 清除登录状态并跳转到登录页
-          localStorage.removeItem('token')
           localStorage.removeItem('user')
           window.location.href = '/login'
           break

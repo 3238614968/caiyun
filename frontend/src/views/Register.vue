@@ -116,6 +116,32 @@ const validateConfirmPassword = (rule: any, value: any, callback: any) => {
   }
 }
 
+const validatePassword = (_rule: any, value: string, callback: any) => {
+  if (!value) {
+    callback(new Error('请输入密码'))
+    return
+  }
+  if (value.length < 12) {
+    callback(new Error('密码长度不能少于12个字符'))
+    return
+  }
+  const classes = [
+    /[a-z]/.test(value),
+    /[A-Z]/.test(value),
+    /\d/.test(value),
+    /[^\w\s]/.test(value)
+  ].filter(Boolean).length
+  if (classes < 3) {
+    callback(new Error('密码需包含大小写字母、数字、符号中的至少三类'))
+    return
+  }
+  if (registerForm.username && value.toLowerCase().includes(registerForm.username.toLowerCase())) {
+    callback(new Error('密码不能包含用户名'))
+    return
+  }
+  callback()
+}
+
 // 验证规则
 const rules = reactive<FormRules>({
   username: [
@@ -124,7 +150,7 @@ const rules = reactive<FormRules>({
   ],
   password: [
     { required: true, message: '请输入密码', trigger: 'blur' },
-    { min: 6, message: '密码长度不能少于6个字符', trigger: 'blur' }
+    { validator: validatePassword, trigger: 'blur' }
   ],
   confirmPassword: [
     { required: true, validator: validateConfirmPassword, trigger: 'blur' }

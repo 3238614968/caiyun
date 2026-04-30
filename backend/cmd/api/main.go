@@ -39,8 +39,8 @@ func main() {
 	dbConfig := database.Config{
 		Host:     getEnv("DB_HOST", "localhost"),
 		Port:     getEnv("DB_PORT", "3306"),
-		User:     getEnv("DB_USER", "root"),
-		Password: getEnv("DB_PASSWORD", "root123"),
+		User:     getEnv("DB_USER", "caiyun_app"),
+		Password: getSecretEnv("DB_PASSWORD", "local-development-password"),
 		DBName:   getEnv("DB_NAME", "caiyun"),
 	}
 	db, err := database.NewMySQL(dbConfig)
@@ -63,7 +63,7 @@ func main() {
 	}
 
 	// 初始化认证与仓储依赖。
-	jwtSecret := getEnv("JWT_SECRET", "your-secret-key-change-in-production")
+	jwtSecret := getSecretEnv("JWT_SECRET", "your-secret-key-change-in-production")
 	jwtExpiry := 7 * 24 * time.Hour
 	jwtManager := jwt.NewManager(jwtSecret)
 	authMgr := auth.NewAuth(corehttp.NewClient())
@@ -169,19 +169,22 @@ func main() {
 	r.GET("/health", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
 	})
-	r.GET("/metrics", gin.WrapH(promhttp.HandlerFor(metricsCollector.Registry(), promhttp.HandlerOpts{})))
+	r.GET("/metrics", middleware.AuthMiddlewareWithUser(jwtManager, userRepo), middleware.AdminMiddleware(), gin.WrapH(promhttp.HandlerFor(metricsCollector.Registry(), promhttp.HandlerOpts{})))
 
 	public := r.Group("/api/auth")
 	{
 		public.POST("/register", authHandler.Register)
 		public.POST("/login", authHandler.Login)
-		public.POST("/refresh", authHandler.RefreshToken)
+		public.POST("/password/reset", authHandler.ResetPassword)
 	}
 
 	protected := r.Group("/api")
-	protected.Use(middleware.AuthMiddleware(jwtManager))
+	protected.Use(middleware.AuthMiddlewareWithUser(jwtManager, userRepo))
+	protected.Use(middleware.CSRFMiddleware())
 	{
 		protected.GET("/auth/me", authHandler.GetCurrentUser)
+		protected.POST("/auth/refresh", authHandler.RefreshToken)
+		protected.POST("/auth/logout", authHandler.Logout)
 
 		accounts := protected.Group("/accounts")
 		{
@@ -251,7 +254,8 @@ func main() {
 
 	admin := r.Group("/api/admin")
 	admin.Use(
-		middleware.AuthMiddleware(jwtManager),
+		middleware.AuthMiddlewareWithUser(jwtManager, userRepo),
+		middleware.CSRFMiddleware(),
 		middleware.AdminMiddleware(),
 		middleware.AuditMiddlewareWithFilter(auditLogRepo, auditFilter),
 	)
@@ -262,6 +266,7 @@ func main() {
 		admin.GET("/accounts/summaries", adminHandler.GetAccountSummaries)
 		admin.GET("/dashboard", adminHandler.GetAdminDashboard)
 		admin.PUT("/users/:id/role", adminHandler.UpdateUserRole)
+		admin.PUT("/users/:id/password", adminHandler.ResetUserPassword)
 		admin.PUT("/accounts/:id/status", adminHandler.UpdateAccountStatus)
 		admin.DELETE("/users/:id", adminHandler.DeleteUser)
 		admin.DELETE("/accounts/:id", adminHandler.DeleteAccount)
@@ -288,7 +293,10 @@ func main() {
 	wsHub.SetWSMessageRepository(wsMessageRepo)
 
 	r.GET("/ws", func(c *gin.Context) {
-		token := c.Query("token")
+		token := ""
+		if cookieToken, err := c.Cookie("auth_token"); err == nil {
+			token = cookieToken
+		}
 		if token == "" {
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "missing token"})
 			return
@@ -299,8 +307,13 @@ func main() {
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid token"})
 			return
 		}
+		user, err := userRepo.FindByID(claims.UserID)
+		if err != nil {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "user not found"})
+			return
+		}
 
-		wsHub.HandleWebSocket(c.Writer, c.Request, claims.UserID)
+		wsHub.HandleWebSocket(c.Writer, c.Request, user.ID)
 	})
 
 	port := getEnv("PORT", "8080")
@@ -342,6 +355,25 @@ func getEnv(key, defaultValue string) string {
 		return value
 	}
 	return defaultValue
+}
+
+func getSecretEnv(key, insecureDefault string) string {
+	value, exists := os.LookupEnv(key)
+	if !exists || value == "" {
+		if os.Getenv("ALLOW_INSECURE_DEFAULTS") == "true" {
+			log.Printf("警告：%s 使用不安全默认值，仅允许本地调试", key)
+			return insecureDefault
+		}
+		log.Fatalf("缺少必需环境变量 %s；如仅本地调试可设置 ALLOW_INSECURE_DEFAULTS=true", key)
+	}
+	if value == insecureDefault || len(value) < 16 {
+		if os.Getenv("ALLOW_INSECURE_DEFAULTS") == "true" {
+			log.Printf("警告：%s 使用弱值，仅允许本地调试", key)
+			return value
+		}
+		log.Fatalf("%s 使用弱值或默认值，请更换为强随机值", key)
+	}
+	return value
 }
 
 // toInt 将常见数值类型安全转换为 int。

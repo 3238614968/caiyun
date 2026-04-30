@@ -4,6 +4,7 @@
     title="公告"
     width="500px"
     :close-on-click-modal="false"
+    :close-on-press-escape="false"
     class="announcement-popup"
     align-center
   >
@@ -19,7 +20,7 @@
     </div>
     <template #footer>
       <div class="popup-footer">
-        <el-checkbox v-model="dontShowAgain" v-if="canDismiss">不再提示</el-checkbox>
+        <span class="popup-hint">确认后本公告不会再次自动弹出</span>
         <el-button type="primary" @click="closePopup">我知道了</el-button>
       </div>
     </template>
@@ -34,7 +35,6 @@ import type { Announcement } from '@/api/announcement'
 const props = defineProps<{
   modelValue: boolean
   announcement: Announcement | null
-  canDismiss?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -43,7 +43,6 @@ const emit = defineEmits<{
 }>()
 
 const visible = ref(props.modelValue)
-const dontShowAgain = ref(false)
 
 watch(() => props.modelValue, (val) => {
   visible.value = val
@@ -59,12 +58,6 @@ const formatDate = (date: string) => {
 
 const closePopup = () => {
   visible.value = false
-  if (dontShowAgain.value && props.announcement) {
-    // 保存到本地存储，不再显示此公告
-    const dismissedAnnouncements = JSON.parse(localStorage.getItem('dismissedAnnouncements') || '[]')
-    dismissedAnnouncements.push(props.announcement.id)
-    localStorage.setItem('dismissedAnnouncements', JSON.stringify(dismissedAnnouncements))
-  }
   emit('dismiss')
 }
 </script>
@@ -122,5 +115,10 @@ const closePopup = () => {
   justify-content: space-between;
   align-items: center;
   width: 100%;
+}
+
+.popup-hint {
+  font-size: 12px;
+  color: #909399;
 }
 </style>
