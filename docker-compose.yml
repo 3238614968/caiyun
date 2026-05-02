@@ -21,6 +21,7 @@ services:
   redis:
     image: redis:7.0
     container_name: caiyun-redis
+    command: ["redis-server", "--appendonly", "yes", "--requirepass", "${REDIS_PASSWORD:?REDIS_PASSWORD is required}"]
     ports:
       - "127.0.0.1:6379:6379"
     volumes:
@@ -46,7 +47,15 @@ services:
       DB_NAME: caiyun
       REDIS_HOST: redis
       REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD is required}
       JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USERNAME: ${SMTP_USERNAME:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_FROM: ${SMTP_FROM:-}
+      SMTP_FROM_NAME: ${SMTP_FROM_NAME:-移动云盘}
+      SMTP_USE_TLS: ${SMTP_USE_TLS:-false}
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost,http://127.0.0.1}
       TASK_CONCURRENCY: 10
     networks:
@@ -70,6 +79,7 @@ services:
       DB_NAME: caiyun
       REDIS_HOST: redis
       REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD is required}
       WORKER_MONITOR_TOKEN: ${WORKER_MONITOR_TOKEN:?WORKER_MONITOR_TOKEN is required}
       TASK_CONCURRENCY: 10
       TASK_SCHEDULE: "0 8 * * *"
@@ -89,9 +99,25 @@ services:
     networks:
       - caiyun-network
 
+  grafana:
+    image: grafana/grafana:10.4.2
+    container_name: caiyun-grafana
+    ports:
+      - "127.0.0.1:3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?GRAFANA_ADMIN_PASSWORD is required}
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./backend/configs/grafana_dashboard.json:/var/lib/grafana/dashboards/caiyun.json:ro
+      - ./backend/configs/grafana_provisioning:/etc/grafana/provisioning:ro
+    networks:
+      - caiyun-network
+
 volumes:
   mysql-data:
   redis-data:
+  grafana-data:
 
 networks:
   caiyun-network:

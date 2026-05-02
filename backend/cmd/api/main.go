@@ -93,7 +93,18 @@ func main() {
 	}
 
 	// 初始化服务层。
-	authService := services.NewAuthService(userRepo, jwtManager, jwtExpiry)
+	passwordResetConfig := services.PasswordResetConfig{
+		SMTP: services.SMTPConfig{
+			Host:     getEnv("SMTP_HOST", ""),
+			Port:     getEnv("SMTP_PORT", "587"),
+			Username: getEnv("SMTP_USERNAME", ""),
+			Password: getEnv("SMTP_PASSWORD", ""),
+			From:     getEnv("SMTP_FROM", ""),
+			FromName: getEnv("SMTP_FROM_NAME", "移动云盘"),
+			UseTLS:   getBoolEnv("SMTP_USE_TLS", false),
+		},
+	}
+	authService := services.NewAuthServiceWithPasswordResetCache(userRepo, jwtManager, jwtExpiry, passwordResetConfig, redisCache)
 	accountService := services.NewAccountService(accountRepo, userRepo, redisCache, authMgr)
 	taskService := services.NewTaskService(accountRepo, taskLogRepo, redisStorage, authMgr, taskConfigRepo)
 	cloudService := services.NewCloudService(accountRepo, cloudStatsRepo, taskLogRepo)
@@ -161,7 +172,9 @@ func main() {
 
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.New()
+	r.MaxMultipartMemory = 8 << 20 // 8 MiB
 	r.Use(gin.Recovery())
+	r.Use(middleware.BodySizeLimitMiddleware(10 << 20)) // 10 MiB
 	r.Use(middleware.CORSMiddleware())
 	// 使用高级限流中间件保护接口。
 	r.Use(middleware.AdvancedRateLimitMiddleware(middleware.DefaultRateLimitConfig()))
@@ -175,6 +188,7 @@ func main() {
 	{
 		public.POST("/register", authHandler.Register)
 		public.POST("/login", authHandler.Login)
+		public.POST("/password/reset-code/send", authHandler.SendPasswordResetCode)
 		public.POST("/password/reset", authHandler.ResetPassword)
 	}
 
@@ -355,6 +369,14 @@ func getEnv(key, defaultValue string) string {
 		return value
 	}
 	return defaultValue
+}
+
+func getBoolEnv(key string, defaultValue bool) bool {
+	value, exists := os.LookupEnv(key)
+	if !exists || value == "" {
+		return defaultValue
+	}
+	return value == "true" || value == "1" || value == "yes"
 }
 
 func getSecretEnv(key, insecureDefault string) string {

@@ -60,6 +60,7 @@ service.interceptors.response.use(
           ElMessage.error('登录已过期，请重新登录')
           // 清除登录状态并跳转到登录页
           localStorage.removeItem('user')
+          window.dispatchEvent(new Event('auth:clear'))
           window.location.href = '/login'
           break
         case 403:

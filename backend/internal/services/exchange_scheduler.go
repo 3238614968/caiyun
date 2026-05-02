@@ -457,14 +457,36 @@ func (s *ExchangeScheduler) groupTasksByProduct(tasks []*models.ExchangeTask) ma
 func (s *ExchangeScheduler) executeProductGroup(prizeID string, tasks []*models.ExchangeTask, limiter chan struct{}) {
 	log.Printf("【抢兑调度器】开始抢兑商品 %s，共 %d 个账号", prizeID, len(tasks))
 
-	var stopFlag sync.Map
-	stopFlag.Store(prizeID, false)
-
 	successMap := make(map[uint]bool)
 	failureReasons := make(map[string]int)
 	var successMutex sync.Mutex
 	var reasonMutex sync.Mutex
+	var stopMutex sync.RWMutex
+	shouldStop := false
+	stopReason := ""
 	var wg sync.WaitGroup
+
+	getStopReason := func() (bool, string) {
+		stopMutex.RLock()
+		defer stopMutex.RUnlock()
+		return shouldStop, stopReason
+	}
+	setStopReason := func(reason string) {
+		stopMutex.Lock()
+		defer stopMutex.Unlock()
+		if !shouldStop {
+			shouldStop = true
+			stopReason = reason
+		}
+	}
+	recordFailureReason := func(reason string) {
+		if reason == "" {
+			reason = "未知错误"
+		}
+		reasonMutex.Lock()
+		failureReasons[reason]++
+		reasonMutex.Unlock()
+	}
 
 	for _, task := range tasks {
 		if task == nil {
@@ -480,8 +502,13 @@ func (s *ExchangeScheduler) executeProductGroup(prizeID string, tasks []*models.
 				accountName = fmt.Sprintf("exchange-account-%d", task.ExchangeAccountID)
 			}
 
-			if shouldStop, _ := stopFlag.Load(prizeID); shouldStop.(bool) {
-				log.Printf("【抢兑调度器】任务 %d 跳过执行，商品 %s 已收到停止信号", task.ID, prizeID)
+			if stopped, reason := getStopReason(); stopped {
+				if reason == "" {
+					reason = "商品已无库存，跳过抢兑"
+				}
+				log.Printf("【抢兑调度器】任务 %d 跳过执行，商品 %s 已停止抢兑，原因: %s", task.ID, prizeID, reason)
+				recordFailureReason(reason)
+				s.finalizeTaskResult(task, false, reason, 0)
 				return
 			}
 
@@ -518,6 +545,17 @@ func (s *ExchangeScheduler) executeProductGroup(prizeID string, tasks []*models.
 			}
 
 			limiter <- struct{}{}
+			if stopped, reason := getStopReason(); stopped {
+				<-limiter
+				if reason == "" {
+					reason = "商品已无库存，跳过抢兑"
+				}
+				log.Printf("【抢兑调度器】任务 %d 获取执行槽后跳过，商品 %s 已停止抢兑，原因: %s", task.ID, prizeID, reason)
+				recordFailureReason(reason)
+				s.finalizeTaskResult(task, false, reason, 0)
+				return
+			}
+
 			success, message, execTime := s.executeTask(task)
 			<-limiter
 
@@ -543,9 +581,7 @@ func (s *ExchangeScheduler) executeProductGroup(prizeID string, tasks []*models.
 					reason = "未知错误"
 				}
 
-				reasonMutex.Lock()
-				failureReasons[reason]++
-				reasonMutex.Unlock()
+				recordFailureReason(reason)
 
 				log.Printf(
 					"【抢兑调度器】任务 %d 抢兑失败: 账号=%s, exchange_account=%d, account=%d, 商品=%s(%s), 原因=%s, 耗时=%dms",
@@ -561,7 +597,7 @@ func (s *ExchangeScheduler) executeProductGroup(prizeID string, tasks []*models.
 
 				if s.shouldStopExchange(reason) {
 					log.Printf("【抢兑调度器】商品 %s 抢兑停止，原因: %s", prizeID, reason)
-					stopFlag.Store(prizeID, true)
+					setStopReason(reason)
 				}
 			}
 
@@ -614,11 +650,16 @@ func (s *ExchangeScheduler) executeTask(task *models.ExchangeTask) (bool, string
 
 // shouldStopExchange 判断是否应该停止抢兑
 func (s *ExchangeScheduler) shouldStopExchange(message string) bool {
-	// 以下情况应该停止抢兑
+	// 以下商品级库存/上下架状态应该停止当前商品后续账号抢兑。
+	// 账号级结果（如当前账号已兑换、云朵不足）不停止其他账号。
 	stopPatterns := []string{
+		"无库存",
+		"库存不足",
+		"已兑完",
+		"已耗尽",
+		"已下架",
 		"奖品单日已耗尽",
 		"奖品已兑完",
-		"今日已兑换",
 	}
 
 	for _, pattern := range stopPatterns {

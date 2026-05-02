@@ -38,7 +38,7 @@ func (h *AnnouncementHandler) CreateAnnouncement(c *gin.Context) {
 
 	announcement, err := h.announcementService.CreateAnnouncement(req.Title, req.Content, req.IsPopup, req.IsTop)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, ErrorResponse{Message: "创建公告失败: " + err.Error()})
+		c.JSON(http.StatusInternalServerError, InternalServerErrorResponse())
 		return
 	}
 
@@ -74,7 +74,7 @@ func (h *AnnouncementHandler) UpdateAnnouncement(c *gin.Context) {
 
 	announcement, err := h.announcementService.UpdateAnnouncement(uint(id), req.Title, req.Content, req.IsPopup, req.IsTop, req.IsPublished)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, ErrorResponse{Message: "更新公告失败: " + err.Error()})
+		c.JSON(http.StatusInternalServerError, InternalServerErrorResponse())
 		return
 	}
 
@@ -94,7 +94,7 @@ func (h *AnnouncementHandler) DeleteAnnouncement(c *gin.Context) {
 	}
 
 	if err := h.announcementService.DeleteAnnouncement(uint(id)); err != nil {
-		c.JSON(http.StatusInternalServerError, ErrorResponse{Message: "删除公告失败: " + err.Error()})
+		c.JSON(http.StatusInternalServerError, InternalServerErrorResponse())
 		return
 	}
 
@@ -127,7 +127,7 @@ func (h *AnnouncementHandler) GetAnnouncement(c *gin.Context) {
 func (h *AnnouncementHandler) GetAllAnnouncements(c *gin.Context) {
 	announcements, err := h.announcementService.GetAllAnnouncements()
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, ErrorResponse{Message: "获取公告列表失败: " + err.Error()})
+		c.JSON(http.StatusInternalServerError, InternalServerErrorResponse())
 		return
 	}
 
@@ -141,7 +141,7 @@ func (h *AnnouncementHandler) GetAllAnnouncements(c *gin.Context) {
 func (h *AnnouncementHandler) GetPublishedAnnouncements(c *gin.Context) {
 	announcements, err := h.announcementService.GetPublishedAnnouncements()
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, ErrorResponse{Message: "获取公告列表失败: " + err.Error()})
+		c.JSON(http.StatusInternalServerError, InternalServerErrorResponse())
 		return
 	}
 

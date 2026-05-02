@@ -1,4 +1,4 @@
-﻿package auth
+package auth
 
 import (
 	"encoding/base64"
@@ -232,9 +232,9 @@ func (a *Auth) LoginMail(ssoToken string) (*LoginMailResp, error) {
 
 	// 尝试 JSON 解析（mail.10086.cn 可能返回 JSON）
 	var jsonResult struct {
-		Code string `json:"code"`
+		Code    string `json:"code"`
 		Summary string `json:"summary"`
-		Var  struct {
+		Var     struct {
 			Sid   string `json:"sid"`
 			Rmkey string `json:"rmkey"`
 		} `json:"var"`
@@ -315,7 +315,7 @@ func (a *Auth) QuerySpecTokenForJWT(phone string) (string, error) {
 	}
 
 	resp, err := a.client.Post(
-		"https://yun.139.com/orchestration/auth-rebuild/token/v1.0/querySpecToken",
+		"https://orches.yun.139.com/orchestration/auth-rebuild/token/v1.0/querySpecToken",
 		headers,
 		reqBody,
 	)

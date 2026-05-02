@@ -1,6 +1,7 @@
-﻿package utils
+package utils
 
 import (
+	"net/url"
 	"strings"
 )
 
@@ -20,9 +21,10 @@ func SanitizeAuthValue(auth string) string {
 // BuildExchangeURL 构建兑换请求URL
 // 参数：
 //   - prizeID: 奖品ID
+//
 // 返回：兑换URL
 func BuildExchangeURL(prizeID string) string {
-	return "https://m.mcloud.139.com/market/signin/page/exchange?prizeId=" + prizeID + "&client=app&clientVersion=12.4.0&smsCode="
+	return "https://m.mcloud.139.com/market/signin/page/exchangeV2?prizeId=" + url.QueryEscape(prizeID) + "&client=app&clientVersion=12.5.3&smsCode="
 }
 
 // BuildProductListURL 构建商品列表请求URL
@@ -34,6 +36,7 @@ func BuildProductListURL() string {
 // IsRetryableError 判断错误是否可重试
 // 参数：
 //   - message: 错误消息
+//
 // 返回：是否可重试
 func IsRetryableError(message string) bool {
 	// 以下错误不需要重试

@@ -1,9 +1,15 @@
-﻿package handlers
+package handlers
 
 // ErrorResponse 错误响应
 type ErrorResponse struct {
 	Message string `json:"message" example:"错误信息"`
 	Error   string `json:"error,omitempty" example:"详细错误描述"`
+}
+
+// InternalServerErrorResponse 返回统一的 500 错误响应，避免把内部路径、
+// 上游响应体或数据库错误直接暴露给客户端。
+func InternalServerErrorResponse() ErrorResponse {
+	return ErrorResponse{Message: "服务器内部错误，请稍后再试"}
 }
 
 // SuccessResponse 成功响应

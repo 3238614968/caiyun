@@ -10,7 +10,7 @@
       </div>
 
       <el-alert
-        title="如果账号未绑定邮箱，请联系管理员在后台重置密码。"
+        title="验证码会发送到注册邮箱；如果账号未绑定邮箱，请联系管理员在后台重置密码。"
         type="info"
         show-icon
         :closable="false"
@@ -31,6 +31,22 @@
 
         <el-form-item prop="email">
           <el-input v-model="form.email" placeholder="请输入注册邮箱" :prefix-icon="Message" clearable />
+        </el-form-item>
+
+        <el-form-item prop="code">
+          <el-input
+            v-model="form.code"
+            placeholder="请输入邮箱验证码"
+            :prefix-icon="Message"
+            maxlength="6"
+            clearable
+          >
+            <template #append>
+              <el-button :loading="sendingCode" :disabled="codeCountdown > 0" @click="handleSendCode">
+                {{ codeCountdown > 0 ? `${codeCountdown}s后重发` : '发送验证码' }}
+              </el-button>
+            </template>
+          </el-input>
         </el-form-item>
 
         <el-form-item prop="newPassword">
@@ -83,20 +99,24 @@
 </template>
 
 <script setup lang="ts">
-import { reactive, ref } from 'vue'
+import { onUnmounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import type { FormInstance, FormRules } from 'element-plus'
 import { Lock, Message, User } from '@element-plus/icons-vue'
-import { resetPassword } from '@/api/auth'
+import { resetPassword, sendPasswordResetCode } from '@/api/auth'
 
 const router = useRouter()
 const formRef = ref<FormInstance>()
 const loading = ref(false)
+const sendingCode = ref(false)
+const codeCountdown = ref(0)
+let countdownTimer: number | undefined
 
 const form = reactive({
   username: '',
   email: '',
+  code: '',
   newPassword: '',
   confirmPassword: ''
 })
@@ -118,6 +138,10 @@ const rules = reactive<FormRules>({
     { required: true, message: '请输入注册邮箱', trigger: 'blur' },
     { type: 'email', message: '请输入有效邮箱地址', trigger: 'blur' }
   ],
+  code: [
+    { required: true, message: '请输入邮箱验证码', trigger: 'blur' },
+    { pattern: /^\d{6}$/, message: '验证码应为6位数字', trigger: 'blur' }
+  ],
   newPassword: [
     { required: true, message: '请输入新密码', trigger: 'blur' },
     { min: 12, message: '密码长度不能少于12个字符', trigger: 'blur' }
@@ -127,6 +151,49 @@ const rules = reactive<FormRules>({
     { validator: validateConfirmPassword, trigger: 'blur' }
   ]
 })
+
+function startCountdown() {
+  codeCountdown.value = 60
+  if (countdownTimer) {
+    window.clearInterval(countdownTimer)
+  }
+  countdownTimer = window.setInterval(() => {
+    codeCountdown.value -= 1
+    if (codeCountdown.value <= 0 && countdownTimer) {
+      window.clearInterval(countdownTimer)
+      countdownTimer = undefined
+    }
+  }, 1000)
+}
+
+async function validateResetIdentity() {
+  if (!formRef.value) return false
+  try {
+    await formRef.value.validateField(['username', 'email'])
+    return true
+  } catch {
+    return false
+  }
+}
+
+async function handleSendCode() {
+  if (sendingCode.value || codeCountdown.value > 0) return
+  if (!(await validateResetIdentity())) return
+
+  sendingCode.value = true
+  try {
+    await sendPasswordResetCode({
+      username: form.username,
+      email: form.email
+    })
+    ElMessage.success('如果用户名和邮箱匹配，验证码将发送到该邮箱')
+    startCountdown()
+  } catch (error: any) {
+    ElMessage.error(error.response?.data?.message || '验证码发送失败')
+  } finally {
+    sendingCode.value = false
+  }
+}
 
 async function handleReset() {
   if (!formRef.value) return
@@ -138,6 +205,7 @@ async function handleReset() {
       await resetPassword({
         username: form.username,
         email: form.email,
+        code: form.code,
         new_password: form.newPassword
       })
       ElMessage.success('密码已重置，请使用新密码登录')
@@ -149,6 +217,12 @@ async function handleReset() {
     }
   })
 }
+
+onUnmounted(() => {
+  if (countdownTimer) {
+    window.clearInterval(countdownTimer)
+  }
+})
 </script>
 
 <style scoped>

@@ -43,7 +43,7 @@ func (h *ExchangeHandler) SearchProducts(c *gin.Context) {
 
 	products, err := h.exchangeService.SearchProducts(keyword, limit)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, ErrorResponse{Message: err.Error()})
+		c.JSON(http.StatusInternalServerError, InternalServerErrorResponse())
 		return
 	}
 
@@ -62,7 +62,7 @@ type GetCategoriesResponse struct {
 func (h *ExchangeHandler) GetCategories(c *gin.Context) {
 	categories, err := h.exchangeService.GetProductCategories()
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, ErrorResponse{Message: err.Error()})
+		c.JSON(http.StatusInternalServerError, InternalServerErrorResponse())
 		return
 	}
 
@@ -102,7 +102,7 @@ func (h *ExchangeHandler) UpdateProducts(c *gin.Context) {
 	// 调用 Service 更新商品（带账号 ID）
 	count, err := h.productService.UpdateProducts(req.AccountID, userID.(uint), isAdmin)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, ErrorResponse{Message: "更新失败：" + err.Error()})
+		c.JSON(http.StatusInternalServerError, InternalServerErrorResponse())
 		return
 	}
 
@@ -189,7 +189,7 @@ func (h *ExchangeHandler) GetExchangeAccounts(c *gin.Context) {
 
 	accounts, err := h.exchangeService.GetExchangeAccounts(userID.(uint), isAdmin)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, ErrorResponse{Message: err.Error()})
+		c.JSON(http.StatusInternalServerError, InternalServerErrorResponse())
 		return
 	}
 
@@ -348,7 +348,7 @@ func (h *ExchangeHandler) GetExchangeTasks(c *gin.Context) {
 
 	tasks, err := h.exchangeService.GetExchangeTasks(userID.(uint), isAdmin)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, ErrorResponse{Message: err.Error()})
+		c.JSON(http.StatusInternalServerError, InternalServerErrorResponse())
 		return
 	}
 
@@ -568,32 +568,32 @@ func (h *ExchangeHandler) UpdateExchangeConfig(c *gin.Context) {
 
 	// 更新自动更新配置
 	if err := h.exchangeService.SetSystemConfig("exchange_auto_update_products", fmt.Sprintf("%v", req.AutoUpdateProducts), "是否自动更新商品列表"); err != nil {
-		c.JSON(http.StatusInternalServerError, ErrorResponse{Message: err.Error()})
+		c.JSON(http.StatusInternalServerError, InternalServerErrorResponse())
 		return
 	}
 
 	// 更新并发数配置
 	if err := h.exchangeService.SetSystemConfig("exchange_concurrency", fmt.Sprintf("%d", req.Concurrency), "抢兑任务并发数量"); err != nil {
-		c.JSON(http.StatusInternalServerError, ErrorResponse{Message: err.Error()})
+		c.JSON(http.StatusInternalServerError, InternalServerErrorResponse())
 		return
 	}
 
 	// 更新启用状态
 	if err := h.exchangeService.SetSystemConfig("exchange_enabled", fmt.Sprintf("%v", req.Enabled), "是否启用抢兑功能"); err != nil {
-		c.JSON(http.StatusInternalServerError, ErrorResponse{Message: err.Error()})
+		c.JSON(http.StatusInternalServerError, InternalServerErrorResponse())
 		return
 	}
 
 	// 更新兑换月卡开关
 	if err := h.exchangeService.SetSystemConfig("exchange_monthly_enabled", fmt.Sprintf("%v", req.ExchangeMonthlyEnabled), "是否启用自动兑换月卡"); err != nil {
-		c.JSON(http.StatusInternalServerError, ErrorResponse{Message: err.Error()})
+		c.JSON(http.StatusInternalServerError, InternalServerErrorResponse())
 		return
 	}
 
 	// 更新兑换月卡时间
 	if req.ExchangeTime != "" {
 		if err := h.exchangeService.SetSystemConfig("exchange_monthly_time", req.ExchangeTime, "自动兑换月卡时间"); err != nil {
-			c.JSON(http.StatusInternalServerError, ErrorResponse{Message: err.Error()})
+			c.JSON(http.StatusInternalServerError, InternalServerErrorResponse())
 			return
 		}
 	}
@@ -601,14 +601,14 @@ func (h *ExchangeHandler) UpdateExchangeConfig(c *gin.Context) {
 	// 更新月卡商品ID
 	if req.MonthlyPrizeID != "" {
 		if err := h.exchangeService.SetSystemConfig("exchange_monthly_prize_id", req.MonthlyPrizeID, "月卡商品ID"); err != nil {
-			c.JSON(http.StatusInternalServerError, ErrorResponse{Message: err.Error()})
+			c.JSON(http.StatusInternalServerError, InternalServerErrorResponse())
 			return
 		}
 	}
 
 	// 更新立即兑换开关
 	if err := h.exchangeService.SetSystemConfig("exchange_immediate_enabled", fmt.Sprintf("%v", req.ImmediateExchangeEnabled), "是否启用立即兑换功能"); err != nil {
-		c.JSON(http.StatusInternalServerError, ErrorResponse{Message: err.Error()})
+		c.JSON(http.StatusInternalServerError, InternalServerErrorResponse())
 		return
 	}
 
@@ -663,7 +663,7 @@ func (h *ExchangeHandler) GetExchangeRecords(c *gin.Context) {
 		limit,
 	)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, ErrorResponse{Message: err.Error()})
+		c.JSON(http.StatusInternalServerError, InternalServerErrorResponse())
 		return
 	}
 
@@ -672,7 +672,7 @@ func (h *ExchangeHandler) GetExchangeRecords(c *gin.Context) {
 	endTime := time.Now()
 	successCount, failCount, err := h.exchangeService.GetRecordStats(userID.(uint), startTime, endTime)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, ErrorResponse{Message: err.Error()})
+		c.JSON(http.StatusInternalServerError, InternalServerErrorResponse())
 		return
 	}
 
@@ -714,7 +714,7 @@ func (h *ExchangeHandler) ExportExchangeRecords(c *gin.Context) {
 		10000, // 最多导出10000条
 	)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, ErrorResponse{Message: err.Error()})
+		c.JSON(http.StatusInternalServerError, InternalServerErrorResponse())
 		return
 	}
 
@@ -819,7 +819,7 @@ func (h *ExchangeHandler) ImmediateExchange(c *gin.Context) {
 		1,
 	)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, ErrorResponse{Message: "创建兑换任务失败: " + err.Error()})
+		c.JSON(http.StatusInternalServerError, InternalServerErrorResponse())
 		return
 	}
 

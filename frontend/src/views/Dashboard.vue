@@ -38,7 +38,8 @@
               <el-button
                 v-if="announcements.length > 0"
                 type="primary"
-                link
+                size="small"
+                class="announcement-read-all-btn"
                 @click="markAllAnnouncementsRead"
               >
                 全部标为已读
@@ -126,29 +127,6 @@
       </el-col>
     </el-row>
 
-    <el-row :gutter="20" style="margin-top: 20px">
-      <!-- 快速操作 -->
-      <el-col :span="24">
-        <el-card shadow="hover">
-          <template #header>
-            <div class="card-header">
-              <span>快速操作</span>
-            </div>
-          </template>
-          <div class="quick-actions">
-            <el-button type="primary" @click="handleTriggerAll" :loading="loading">
-              <el-icon><Refresh /></el-icon>
-              执行所有任务
-            </el-button>
-            <el-button type="success" @click="handleCalculateStats" :loading="calculating">
-              <el-icon><DataAnalysis /></el-icon>
-              计算统计数据
-            </el-button>
-          </div>
-        </el-card>
-      </el-col>
-    </el-row>
-
     <el-dialog
       v-model="announcementDetailVisible"
       title="公告详情"
@@ -173,7 +151,7 @@
 <script setup lang="ts">
 import { ref, reactive, onMounted, onUnmounted, computed } from 'vue'
 import { ElMessage } from 'element-plus'
-import { getDashboard, getTrendData, triggerAllTasks, calculateStats, type DashboardData } from '../api/task'
+import { getDashboard, getTrendData, type DashboardData } from '../api/task'
 import TaskStatusMonitor from '../components/TaskStatusMonitor.vue'
 import { wsClient, type WsMessage } from '../api/websocket'
 import { getAdminDashboard, type AdminDashboardData } from '../api/account'
@@ -186,8 +164,6 @@ const isAdmin = computed(() => authStore.user?.role === 'admin')
 
 const trendChartRef = ref<HTMLElement>()
 const trendChart = ref<echarts.ECharts>()
-const loading = ref(false)
-const calculating = ref(false)
 const trendDays = ref(7)
 const announcements = ref<Announcement[]>([])
 const announcementLoading = ref(false)
@@ -300,9 +276,28 @@ const formatDateTime = (value: string) => {
   })
 }
 
+const loadNumberArrayFromStorage = (key: string) => {
+  const rawValue = localStorage.getItem(key)
+  if (!rawValue) return []
+
+  try {
+    const parsedValue = JSON.parse(rawValue)
+    if (!Array.isArray(parsedValue)) {
+      localStorage.removeItem(key)
+      return []
+    }
+    return parsedValue
+      .map(item => Number(item))
+      .filter(item => Number.isInteger(item) && item > 0)
+  } catch {
+    localStorage.removeItem(key)
+    return []
+  }
+}
+
 const loadReadAnnouncementIDs = () => {
-  const legacyDismissed = JSON.parse(localStorage.getItem('dismissedAnnouncements') || '[]')
-  const userRead = JSON.parse(localStorage.getItem(readAnnouncementStorageKey.value) || '[]')
+  const legacyDismissed = loadNumberArrayFromStorage('dismissedAnnouncements')
+  const userRead = loadNumberArrayFromStorage(readAnnouncementStorageKey.value)
   readAnnouncementIDs.value = Array.from(new Set([...legacyDismissed, ...userRead]))
 }
 
@@ -524,36 +519,6 @@ const renderTrendChart = () => {
   trendChart.value.setOption(option)
 }
 
-const handleTriggerAll = async () => {
-  loading.value = true
-  try {
-    await triggerAllTasks()
-    ElMessage.success('任务已提交执行')
-    setTimeout(() => {
-      loadDashboardData()
-    }, 3000)
-  } catch (error) {
-    ElMessage.error('任务执行失败')
-  } finally {
-    loading.value = false
-  }
-}
-
-// 计算统计数据
-const handleCalculateStats = async () => {
-  calculating.value = true
-  try {
-    await calculateStats()
-    ElMessage.success('统计数据计算完成')
-    loadDashboardData()
-    loadTrendData()
-  } catch (error) {
-    ElMessage.error('统计数据计算失败')
-  } finally {
-    calculating.value = false
-  }
-}
-
 // 窗口大小变化时重新渲染图表
 const handleResize = () => {
   trendChart.value?.resize()
@@ -635,14 +600,16 @@ onUnmounted(() => {
 
 .stat-value {
   font-size: 28px;
-  font-weight: bold;
-  color: #1e40af;
+  font-weight: 800;
+  color: #1d4ed8;
   margin-bottom: 4px;
+  letter-spacing: 0.2px;
 }
 
 .stat-label {
   font-size: 14px;
-  color: #3b82f6;
+  color: #2563eb;
+  font-weight: 600;
   margin-bottom: 4px;
 }
 
@@ -666,11 +633,6 @@ onUnmounted(() => {
   align-items: center;
   color: #1e40af;
   font-weight: 600;
-}
-
-.quick-actions {
-  display: flex;
-  gap: 12px;
 }
 
 :deep(.el-button--primary) {
@@ -746,6 +708,24 @@ onUnmounted(() => {
   display: inline-flex;
   align-items: center;
   gap: 8px;
+  color: #1e3a8a;
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.announcement-read-all-btn {
+  color: #ffffff;
+  font-weight: 700;
+  background: #2563eb;
+  border-color: #2563eb;
+  box-shadow: 0 8px 18px rgba(37, 99, 235, 0.24);
+}
+
+.announcement-read-all-btn:hover,
+.announcement-read-all-btn:focus {
+  color: #ffffff;
+  background: #1d4ed8;
+  border-color: #1d4ed8;
 }
 
 .announcement-list {
@@ -793,7 +773,8 @@ onUnmounted(() => {
 }
 
 .announcement-name {
-  font-weight: 600;
+  font-size: 15px;
+  font-weight: 700;
   color: #1e3a8a;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -802,8 +783,10 @@ onUnmounted(() => {
 
 .announcement-preview {
   margin-top: 6px;
-  color: #64748b;
-  font-size: 13px;
+  color: #334155;
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 1.55;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -811,8 +794,9 @@ onUnmounted(() => {
 
 .announcement-date {
   flex-shrink: 0;
-  color: #94a3b8;
-  font-size: 12px;
+  color: #475569;
+  font-size: 13px;
+  font-weight: 500;
   white-space: nowrap;
   padding-top: 2px;
 }

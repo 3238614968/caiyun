@@ -15,6 +15,12 @@ export const useAuthStore = defineStore('auth', () => {
 
   const isAuthenticated = computed(() => !!user.value)
 
+  function clearAuthState() {
+    token.value = ''
+    user.value = null
+    localStorage.removeItem('user')
+  }
+
   async function login(username: string, password: string) {
     const data = await apiLogin({ username, password })
     token.value = 'cookie'
@@ -37,9 +43,7 @@ export const useAuthStore = defineStore('auth', () => {
     } catch {
       // 即使服务端清理失败，也清理本地状态。
     }
-    token.value = ''
-    user.value = null
-    localStorage.removeItem('user')
+    clearAuthState()
   }
 
   function initialize() {
@@ -54,6 +58,10 @@ export const useAuthStore = defineStore('auth', () => {
     }
   }
 
+  if (typeof window !== 'undefined') {
+    window.addEventListener('auth:clear', clearAuthState)
+  }
+
   return {
     token,
     user,
@@ -61,6 +69,7 @@ export const useAuthStore = defineStore('auth', () => {
     login,
     register,
     logout,
-    initialize
+    initialize,
+    clearAuthState
   }
 })

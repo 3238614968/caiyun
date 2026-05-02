@@ -37,7 +37,7 @@ func (h *AdminHandler) GetAllUsers(c *gin.Context) {
 
 	users, total, err := h.adminService.GetAllUsers(page, size)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, ErrorResponse{Message: err.Error()})
+		c.JSON(http.StatusInternalServerError, InternalServerErrorResponse())
 		return
 	}
 
@@ -65,7 +65,7 @@ func (h *AdminHandler) GetAllAccounts(c *gin.Context) {
 
 	accounts, total, err := h.adminService.GetAllAccounts(page, pageSize)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, ErrorResponse{Message: err.Error()})
+		c.JSON(http.StatusInternalServerError, InternalServerErrorResponse())
 		return
 	}
 
@@ -95,7 +95,7 @@ func (h *AdminHandler) SearchAllAccounts(c *gin.Context) {
 
 	resp, err := h.adminService.SearchAllAccounts(req)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, ErrorResponse{Message: err.Error()})
+		c.JSON(http.StatusInternalServerError, InternalServerErrorResponse())
 		return
 	}
 
@@ -118,7 +118,7 @@ func (h *AdminHandler) GetAccountSummaries(c *gin.Context) {
 
 	summaries, total, err := h.adminService.GetAccountSummaries(page, pageSize)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, ErrorResponse{Message: err.Error()})
+		c.JSON(http.StatusInternalServerError, InternalServerErrorResponse())
 		return
 	}
 
@@ -134,7 +134,7 @@ func (h *AdminHandler) GetAccountSummaries(c *gin.Context) {
 func (h *AdminHandler) GetAdminDashboard(c *gin.Context) {
 	data, err := h.adminService.GetAdminDashboard()
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, ErrorResponse{Message: err.Error()})
+		c.JSON(http.StatusInternalServerError, InternalServerErrorResponse())
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"data": data})
@@ -159,7 +159,7 @@ func (h *AdminHandler) UpdateUserRole(c *gin.Context) {
 			c.JSON(http.StatusNotFound, ErrorResponse{Message: "用户不存在"})
 			return
 		}
-		c.JSON(http.StatusInternalServerError, ErrorResponse{Message: err.Error()})
+		c.JSON(http.StatusInternalServerError, InternalServerErrorResponse())
 		return
 	}
 
@@ -187,7 +187,7 @@ func (h *AdminHandler) ResetUserPassword(c *gin.Context) {
 		case errors.Is(err, services.ErrWeakPassword):
 			c.JSON(http.StatusBadRequest, ErrorResponse{Message: err.Error()})
 		default:
-			c.JSON(http.StatusInternalServerError, ErrorResponse{Message: err.Error()})
+			c.JSON(http.StatusInternalServerError, InternalServerErrorResponse())
 		}
 		return
 	}
@@ -213,7 +213,7 @@ func (h *AdminHandler) UpdateAccountStatus(c *gin.Context) {
 	}
 
 	if err := h.adminService.UpdateAccountStatus(uint(accountID), &req); err != nil {
-		c.JSON(http.StatusInternalServerError, ErrorResponse{Message: err.Error()})
+		c.JSON(http.StatusInternalServerError, InternalServerErrorResponse())
 		return
 	}
 
@@ -239,7 +239,7 @@ func (h *AdminHandler) DeleteUser(c *gin.Context) {
 			c.JSON(http.StatusBadRequest, ErrorResponse{Message: "不能删除自己"})
 			return
 		}
-		c.JSON(http.StatusInternalServerError, ErrorResponse{Message: err.Error()})
+		c.JSON(http.StatusInternalServerError, InternalServerErrorResponse())
 		return
 	}
 
@@ -255,7 +255,7 @@ func (h *AdminHandler) DeleteAccount(c *gin.Context) {
 	}
 
 	if err := h.adminService.DeleteAccount(uint(accountID)); err != nil {
-		c.JSON(http.StatusInternalServerError, ErrorResponse{Message: err.Error()})
+		c.JSON(http.StatusInternalServerError, InternalServerErrorResponse())
 		return
 	}
 
@@ -266,7 +266,7 @@ func (h *AdminHandler) DeleteAccount(c *gin.Context) {
 func (h *AdminHandler) GetStatsOverview(c *gin.Context) {
 	stats, err := h.adminService.GetStatsOverview()
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, ErrorResponse{Message: err.Error()})
+		c.JSON(http.StatusInternalServerError, InternalServerErrorResponse())
 		return
 	}
 
@@ -282,7 +282,7 @@ func (h *AdminHandler) GetStatsOverview(c *gin.Context) {
 func (h *AdminHandler) GetTaskConfigs(c *gin.Context) {
 	configs, err := h.adminService.GetTaskConfigs()
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, ErrorResponse{Message: err.Error()})
+		c.JSON(http.StatusInternalServerError, InternalServerErrorResponse())
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"configs": configs})
@@ -303,7 +303,7 @@ func (h *AdminHandler) UpdateTaskConfig(c *gin.Context) {
 	}
 
 	if err := h.adminService.UpdateTaskConfig(taskType, &req); err != nil {
-		c.JSON(http.StatusInternalServerError, ErrorResponse{Message: err.Error()})
+		c.JSON(http.StatusInternalServerError, InternalServerErrorResponse())
 		return
 	}
 

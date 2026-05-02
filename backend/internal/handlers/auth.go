@@ -45,7 +45,13 @@ type LoginRequest struct {
 type ResetPasswordRequest struct {
 	Username    string `json:"username" binding:"required,min=3,max=50"`
 	Email       string `json:"email" binding:"required,email"`
+	Code        string `json:"code" binding:"required,len=6"`
 	NewPassword string `json:"new_password" binding:"required,min=12"`
+}
+
+type SendPasswordResetCodeRequest struct {
+	Username string `json:"username" binding:"required,min=3,max=50"`
+	Email    string `json:"email" binding:"required,email"`
 }
 
 type AuthResponse struct {
@@ -87,7 +93,7 @@ func (h *AuthHandler) Register(c *gin.Context) {
 		case errors.Is(err, services.ErrWeakPassword):
 			c.JSON(http.StatusBadRequest, ErrorResponse{Message: err.Error()})
 		default:
-			c.JSON(http.StatusInternalServerError, ErrorResponse{Message: err.Error()})
+			c.JSON(http.StatusInternalServerError, InternalServerErrorResponse())
 		}
 		return
 	}
@@ -127,7 +133,7 @@ func (h *AuthHandler) Login(c *gin.Context) {
 		case services.ErrUserNotFound, services.ErrInvalidCredentials:
 			c.JSON(http.StatusUnauthorized, ErrorResponse{Message: "用户名或密码错误"})
 		default:
-			c.JSON(http.StatusInternalServerError, ErrorResponse{Message: err.Error()})
+			c.JSON(http.StatusInternalServerError, InternalServerErrorResponse())
 		}
 		return
 	}
@@ -144,7 +150,31 @@ func (h *AuthHandler) Login(c *gin.Context) {
 	})
 }
 
-// ResetPassword 通过用户名和注册邮箱重置密码。
+// SendPasswordResetCode 发送密码重置邮箱验证码。
+func (h *AuthHandler) SendPasswordResetCode(c *gin.Context) {
+	var req SendPasswordResetCodeRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, ErrorResponse{Message: err.Error()})
+		return
+	}
+
+	if err := h.authService.SendPasswordResetCode(req.Username, req.Email); err != nil {
+		switch {
+		case errors.Is(err, services.ErrEmailServiceDisabled):
+			c.JSON(http.StatusServiceUnavailable, ErrorResponse{Message: "邮箱服务未配置，请联系管理员重置密码"})
+		case errors.Is(err, services.ErrResetCodeTooFrequent):
+			// 与无效用户名/邮箱组合保持相同响应，避免通过冷却状态枚举账号邮箱关联。
+			c.JSON(http.StatusOK, SuccessResponse{Message: "如果用户名和邮箱匹配，验证码将发送到该邮箱"})
+		default:
+			c.JSON(http.StatusInternalServerError, InternalServerErrorResponse())
+		}
+		return
+	}
+
+	c.JSON(http.StatusOK, SuccessResponse{Message: "如果用户名和邮箱匹配，验证码将发送到该邮箱"})
+}
+
+// ResetPassword 通过邮箱验证码重置密码。
 func (h *AuthHandler) ResetPassword(c *gin.Context) {
 	var req ResetPasswordRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -152,15 +182,15 @@ func (h *AuthHandler) ResetPassword(c *gin.Context) {
 		return
 	}
 
-	err := h.authService.ResetPasswordByEmail(req.Username, req.Email, req.NewPassword)
+	err := h.authService.ResetPasswordWithCode(req.Username, req.Email, req.Code, req.NewPassword)
 	if err != nil {
 		switch {
-		case errors.Is(err, services.ErrInvalidRecoveryInfo):
-			c.JSON(http.StatusBadRequest, ErrorResponse{Message: "用户名或邮箱不匹配"})
+		case errors.Is(err, services.ErrInvalidRecoveryInfo), errors.Is(err, services.ErrInvalidResetCode):
+			c.JSON(http.StatusBadRequest, ErrorResponse{Message: "验证码错误或已过期"})
 		case errors.Is(err, services.ErrWeakPassword):
 			c.JSON(http.StatusBadRequest, ErrorResponse{Message: err.Error()})
 		default:
-			c.JSON(http.StatusInternalServerError, ErrorResponse{Message: "密码重置失败"})
+			c.JSON(http.StatusInternalServerError, InternalServerErrorResponse())
 		}
 		return
 	}

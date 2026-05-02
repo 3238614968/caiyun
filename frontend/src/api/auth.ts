@@ -18,7 +18,13 @@ export interface LoginRequest {
 export interface ResetPasswordRequest {
   username: string
   email: string
+  code: string
   new_password: string
+}
+
+export interface SendPasswordResetCodeRequest {
+  username: string
+  email: string
 }
 
 // 注册请求
@@ -52,7 +58,16 @@ export function register(data: RegisterRequest): Promise<AuthResponse> {
   })
 }
 
-// 通过用户名和注册邮箱重置密码
+// 发送密码重置邮箱验证码
+export function sendPasswordResetCode(data: SendPasswordResetCodeRequest): Promise<{ message: string }> {
+  return request({
+    url: '/api/auth/password/reset-code/send',
+    method: 'post',
+    data
+  })
+}
+
+// 通过邮箱验证码重置密码
 export function resetPassword(data: ResetPasswordRequest): Promise<{ message: string }> {
   return request({
     url: '/api/auth/password/reset',

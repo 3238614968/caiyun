@@ -270,9 +270,28 @@ const handleCommand = async (command: string) => {
   }
 }
 
+const loadNumberArrayFromStorage = (key: string) => {
+  const rawValue = localStorage.getItem(key)
+  if (!rawValue) return []
+
+  try {
+    const parsedValue = JSON.parse(rawValue)
+    if (!Array.isArray(parsedValue)) {
+      localStorage.removeItem(key)
+      return []
+    }
+    return parsedValue
+      .map(item => Number(item))
+      .filter(item => Number.isInteger(item) && item > 0)
+  } catch {
+    localStorage.removeItem(key)
+    return []
+  }
+}
+
 const loadReadAnnouncementIDs = () => {
-  const legacyDismissed = JSON.parse(localStorage.getItem('dismissedAnnouncements') || '[]')
-  const userRead = JSON.parse(localStorage.getItem(readAnnouncementStorageKey.value) || '[]')
+  const legacyDismissed = loadNumberArrayFromStorage('dismissedAnnouncements')
+  const userRead = loadNumberArrayFromStorage(readAnnouncementStorageKey.value)
   return Array.from(new Set([...legacyDismissed, ...userRead]))
 }
 

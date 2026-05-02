@@ -85,7 +85,7 @@ func (h *TaskHandler) GetTaskLogs(c *gin.Context) {
 
 	taskLogs, total, err := h.taskService.GetTaskLogs(userID.(uint), accountID, page, pageSize)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, ErrorResponse{Message: err.Error()})
+		c.JSON(http.StatusInternalServerError, InternalServerErrorResponse())
 		return
 	}
 
@@ -120,7 +120,7 @@ func (h *TaskHandler) GetDashboard(c *gin.Context) {
 
 	dashboard, err := h.cloudService.GetDashboard(userID.(uint))
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, ErrorResponse{Message: err.Error()})
+		c.JSON(http.StatusInternalServerError, InternalServerErrorResponse())
 		return
 	}
 
@@ -184,7 +184,7 @@ func (h *TaskHandler) GetCloudStats(c *gin.Context) {
 	}
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, ErrorResponse{Message: err.Error()})
+		c.JSON(http.StatusInternalServerError, InternalServerErrorResponse())
 		return
 	}
 
@@ -227,7 +227,7 @@ func (h *TaskHandler) GetTrendData(c *gin.Context) {
 		trendData, err = h.cloudService.GetTrendData(userID.(uint), days)
 	}
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, ErrorResponse{Message: err.Error()})
+		c.JSON(http.StatusInternalServerError, InternalServerErrorResponse())
 		return
 	}
 
@@ -260,7 +260,7 @@ func (h *TaskHandler) TriggerAllTasks(c *gin.Context) {
 	// 获取用户的所有激活账号
 	accounts, err := h.accountService.GetActiveAccounts(userID.(uint))
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, ErrorResponse{Message: "获取账号列表失败: " + err.Error()})
+		c.JSON(http.StatusInternalServerError, InternalServerErrorResponse())
 		return
 	}
 
@@ -357,19 +357,19 @@ func (h *TaskHandler) CalculateStats(c *gin.Context) {
 	if role, _ := c.Get("role"); role == "admin" {
 		// 管理员首页展示全局数据，手动计算时同步刷新全站账号快照。
 		if err := h.cloudService.CalculateDailyStats(); err != nil {
-			c.JSON(http.StatusInternalServerError, ErrorResponse{Message: "计算统计数据失败: " + err.Error()})
+			c.JSON(http.StatusInternalServerError, InternalServerErrorResponse())
 			return
 		}
 	} else {
 		// 普通用户仅计算自己的每日统计，避免触发全站账号重算。
 		if err := h.cloudService.CalculateDailyStatsByUserID(userID.(uint)); err != nil {
-			c.JSON(http.StatusInternalServerError, ErrorResponse{Message: "计算统计数据失败: " + err.Error()})
+			c.JSON(http.StatusInternalServerError, InternalServerErrorResponse())
 			return
 		}
 
 		// 更新差异值
 		if err := h.cloudService.UpdateCloudDiffs(userID.(uint)); err != nil {
-			c.JSON(http.StatusInternalServerError, ErrorResponse{Message: "更新差异值失败: " + err.Error()})
+			c.JSON(http.StatusInternalServerError, InternalServerErrorResponse())
 			return
 		}
 	}
@@ -395,7 +395,7 @@ func (h *TaskHandler) GetTotalCloudCount(c *gin.Context) {
 
 	total, err := h.cloudService.GetTotalCloudCount(userID.(uint))
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, ErrorResponse{Message: err.Error()})
+		c.JSON(http.StatusInternalServerError, InternalServerErrorResponse())
 		return
 	}
 

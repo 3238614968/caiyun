@@ -157,9 +157,10 @@ func DefaultRateLimitConfig() *RateLimitConfig {
 			"/api/exchange/tasks/batch-execute": {Rate: constants.BatchExecuteRate, Burst: constants.BatchExecuteBurst, ByUser: true},
 			"/api/exchange/records/export":      {Rate: constants.ExportRate, Burst: constants.ExportBurst, ByUser: true},
 			// 登录API：防止暴力破解
-			"/api/auth/login":          {Rate: 5, Burst: 10, ByUser: false},
-			"/api/auth/register":       {Rate: 3, Burst: 5, ByUser: false},
-			"/api/auth/password/reset": {Rate: 3, Burst: 5, ByUser: false},
+			"/api/auth/login":                    {Rate: 5, Burst: 10, ByUser: false},
+			"/api/auth/register":                 {Rate: 3, Burst: 5, ByUser: false},
+			"/api/auth/password/reset-code/send": {Rate: 1, Burst: 3, ByUser: false},
+			"/api/auth/password/reset":           {Rate: 3, Burst: 5, ByUser: false},
 			// 商品搜索API
 			"/api/products/search": {Rate: 20, Burst: 30, ByUser: true},
 		},

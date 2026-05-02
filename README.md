@@ -51,7 +51,7 @@
 ### 1) 用户认证
 
 - 登录、注册、HttpOnly Cookie 会话
-- 用户可通过“用户名 + 注册邮箱”自助重置密码
+- 用户可通过“用户名 + 注册邮箱 + 邮箱验证码”自助重置密码
 - 管理员可在后台为用户重置密码，用于未绑定邮箱账号的兜底恢复
 
 ### 2) 账号管理
@@ -128,9 +128,25 @@
 - **修复兑换与账号相关流程细节**
   - 同手机号跨用户添加场景下的账号查重与创建逻辑更稳定
   - 失效账号在商品更新选择列表中不再参与展示
+- **增强密码找回与会话安全**
+  - 密码找回改为邮箱验证码流程，验证码存入 Redis 并设置 TTL
+  - 发送验证码、重置密码的错误响应做统一处理，降低账号邮箱枚举风险
+  - Cookie 会话场景补充 CSRF 校验，登录态异常时前端会同步清理本地状态
+- **优化首页公告与统计展示**
+  - 首页展示公告列表，不再新增用户侧公告菜单
+  - 仅置顶弹窗公告会弹出，其余公告仅展示在列表中
+  - 修复公告已读状态本地缓存异常导致首页加载中断的问题
+- **修复抢兑请求上下文**
+  - 抢兑接口切换到新版 `exchangeV2`
+  - 补齐 `jwttoken / activityid / deviceid / appversion / referer` 等移动端上下文
+  - 单账号只提交一次抢兑；成功后继续下一个账号，商品无库存/已兑完/已下架时停止当前商品后续账号
 - **统一初始化材料与运行时定义**
   - 已同步 `README`、`backend/migrations/init.sql`、`backend/scripts/init_caiyun_database.sql`
   - 默认任务清单、启用状态、排序顺序与代码注册表保持一致
+- **增强部署与监控配置**
+  - Docker Compose 使用 Redis 密码、独立数据库应用用户，并补充 Grafana 示例服务
+  - 新增 K8s 示例清单，内置 MySQL 初始化 SQL ConfigMap 与 MySQL PVC
+  - API / Worker / 前端容器以非 root 用户运行
 - **统一默认调度配置**
   - `backend/configs/.env.example` 中的 `TASK_SCHEDULE` 已调整为 `0 8 * * *`
   - 与 Worker 内部默认回退值保持一致，避免环境配置漂移
@@ -239,6 +255,21 @@ cp configs/.env.example .env
 
 根据实际环境填写数据库、Redis、JWT、端口等配置。
 
+如需启用用户自助找回密码，还需要配置 SMTP：
+
+```bash
+SMTP_HOST=smtp.example.com
+SMTP_PORT=587
+SMTP_USERNAME=your_smtp_username
+SMTP_PASSWORD=your_smtp_password_or_app_password
+SMTP_FROM=no-reply@example.com
+SMTP_FROM_NAME=移动云盘
+# 465 端口通常设为 true；587 端口通常设为 false 并使用 STARTTLS
+SMTP_USE_TLS=false
+```
+
+密码找回验证码会写入 Redis，并按 TTL 自动过期；因此生产环境请务必配置 `REDIS_PASSWORD`。
+
 ### 3. 启动后端 API
 
 ```bash
@@ -300,11 +331,23 @@ backend/worker-linux
 
 ```bash
 MYSQL_ROOT_PASSWORD=replace_with_strong_root_password
+MYSQL_USER=caiyun_app
 MYSQL_PASSWORD=replace_with_strong_app_password
+REDIS_PASSWORD=replace_with_strong_redis_password
 JWT_SECRET=replace_with_32_chars_random_secret
 WORKER_MONITOR_TOKEN=replace_with_random_monitor_token
+GRAFANA_ADMIN_PASSWORD=replace_with_strong_grafana_password
 # 逗号分隔。必须包含浏览器实际访问前端的 Origin，例如域名、局域网 IP 或非 80 端口。
 ALLOWED_ORIGINS=http://localhost,http://127.0.0.1,http://your-domain.com
+
+# 可选：启用密码找回邮件
+SMTP_HOST=smtp.example.com
+SMTP_PORT=587
+SMTP_USERNAME=your_smtp_username
+SMTP_PASSWORD=your_smtp_password_or_app_password
+SMTP_FROM=no-reply@example.com
+SMTP_FROM_NAME=移动云盘
+SMTP_USE_TLS=false
 ```
 
 Compose 模式下前端 Nginx 会统一代理 `/api` 与 `/ws` 到 `backend-api:8080`，后端端口仅绑定到宿主机 `127.0.0.1`。如果通过 `http://192.168.x.x`、`https://example.com` 或 `http://localhost:8088` 访问前端，请同步把这些完整 Origin 加入 `ALLOWED_ORIGINS`，否则跨域 API 或 WebSocket Origin 校验会拒绝连接。
@@ -313,6 +356,48 @@ Compose 模式下前端 Nginx 会统一代理 `/api` 与 `/ws` 到 `backend-api:
 docker-compose build
 docker-compose up -d
 ```
+
+Compose 会启动以下核心服务：
+
+- `mysql`：初始化并持久化业务数据库
+- `redis`：启用 `requirepass`，用于队列、缓存和密码找回验证码
+- `backend-api`：仅绑定到宿主机 `127.0.0.1:8080`
+- `backend-worker`：仅绑定到宿主机 `127.0.0.1:8081`，监控接口需要 `WORKER_MONITOR_TOKEN`
+- `frontend`：对外暴露 Web 页面，并代理 `/api`、`/ws`
+- `grafana`：示例监控面板，仅绑定到宿主机 `127.0.0.1:3000`
+
+### Kubernetes 部署示例
+
+项目提供单文件示例清单：
+
+```text
+k8s/caiyun.yaml
+```
+
+部署前必须先创建业务 Secret，不要使用弱口令：
+
+```bash
+kubectl apply -f k8s/caiyun.yaml --dry-run=client
+
+kubectl create namespace caiyun
+kubectl -n caiyun create secret generic caiyun-secrets \
+  --from-literal=mysql-root-password='<强随机 root 密码>' \
+  --from-literal=mysql-password='<强随机应用数据库密码>' \
+  --from-literal=redis-password='<强随机 Redis 密码>' \
+  --from-literal=jwt-secret='<至少 32 字符随机 JWT 密钥>' \
+  --from-literal=worker-monitor-token='<强随机 Worker 监控 Token>' \
+  --from-literal=smtp-password='<SMTP 密码，可为空>'
+
+kubectl apply -f k8s/caiyun.yaml
+```
+
+说明：
+
+- `k8s/caiyun.yaml` 已内置 `caiyun-mysql-init-sql` ConfigMap，首次启动 MySQL 空 PVC 时会自动执行初始化 SQL。
+- MySQL 使用 `mysql-data` PVC，请根据集群 StorageClass 调整容量、回收策略和备份方案。
+- 示例镜像名为 `caiyun-api:latest`、`caiyun-worker:latest`、`caiyun-frontend:latest`，实际部署前请替换为你的镜像仓库地址。
+- `ALLOWED_ORIGINS` 默认是占位域名，请改为浏览器实际访问前端的完整 Origin。
+- 如果使用外部 MySQL，可移除清单中的 MySQL Deployment/PVC/Service，并确保外部库已执行初始化 SQL。
 
 ### 宝塔面板部署
 
@@ -365,9 +450,10 @@ scp -r dist root@server:/www/wwwroot/caiyun/frontend/
 ```text
 1. 到达设定兑换时间
 2. 预加载待执行抢兑队列
-3. 多账号并发执行抢兑
-4. 提交兑换请求并记录结果
-5. 同步日志、状态与统计数据
+3. 按管理员后台配置的并发数执行多个账号
+4. 每个账号只提交一次抢兑请求并记录结果
+5. 成功后继续下一个账号；商品无库存/已兑完/已下架时停止当前商品后续账号
+6. 同步日志、状态与统计数据
 ```
 
 ### Token 处理机制

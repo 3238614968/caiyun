@@ -199,7 +199,7 @@ func (h *AccountHandler) CreateAccount(c *gin.Context) {
 			c.JSON(http.StatusConflict, ErrorResponse{Message: "账号已存在"})
 			return
 		}
-		c.JSON(http.StatusInternalServerError, ErrorResponse{Message: err.Error()})
+		c.JSON(http.StatusInternalServerError, InternalServerErrorResponse())
 		return
 	}
 
@@ -239,7 +239,7 @@ func (h *AccountHandler) ListAccounts(c *gin.Context) {
 
 	accounts, total, err := h.accountService.ListAccounts(userID.(uint), page, pageSize, phone)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, ErrorResponse{Message: err.Error()})
+		c.JSON(http.StatusInternalServerError, InternalServerErrorResponse())
 		return
 	}
 
@@ -282,7 +282,7 @@ func (h *AccountHandler) GetAccount(c *gin.Context) {
 			c.JSON(http.StatusNotFound, ErrorResponse{Message: "账号不存在"})
 			return
 		}
-		c.JSON(http.StatusInternalServerError, ErrorResponse{Message: err.Error()})
+		c.JSON(http.StatusInternalServerError, InternalServerErrorResponse())
 		return
 	}
 
@@ -332,7 +332,7 @@ func (h *AccountHandler) UpdateAccount(c *gin.Context) {
 			c.JSON(http.StatusConflict, ErrorResponse{Message: "账号已存在"})
 			return
 		}
-		c.JSON(http.StatusInternalServerError, ErrorResponse{Message: err.Error()})
+		c.JSON(http.StatusInternalServerError, InternalServerErrorResponse())
 		return
 	}
 
@@ -369,7 +369,7 @@ func (h *AccountHandler) DeleteAccount(c *gin.Context) {
 			c.JSON(http.StatusNotFound, ErrorResponse{Message: "账号不存在"})
 			return
 		}
-		c.JSON(http.StatusInternalServerError, ErrorResponse{Message: err.Error()})
+		c.JSON(http.StatusInternalServerError, InternalServerErrorResponse())
 		return
 	}
 
@@ -411,7 +411,7 @@ func (h *AccountHandler) SetAccountStatus(c *gin.Context) {
 			c.JSON(http.StatusNotFound, ErrorResponse{Message: "账号不存在"})
 			return
 		}
-		c.JSON(http.StatusInternalServerError, ErrorResponse{Message: err.Error()})
+		c.JSON(http.StatusInternalServerError, InternalServerErrorResponse())
 		return
 	}
 
@@ -450,7 +450,7 @@ func (h *AccountHandler) RefreshToken(c *gin.Context) {
 			c.JSON(http.StatusNotFound, ErrorResponse{Message: "账号不存在"})
 			return
 		}
-		c.JSON(http.StatusInternalServerError, ErrorResponse{Message: err.Error()})
+		c.JSON(http.StatusInternalServerError, InternalServerErrorResponse())
 		return
 	}
 
@@ -458,14 +458,14 @@ func (h *AccountHandler) RefreshToken(c *gin.Context) {
 	if err := h.accountService.RefreshToken(account); err != nil {
 		// 服务端打日志便于排查 500
 		log.Printf("[RefreshToken] account_id=%d phone=%s err=%v", accountID, account.Phone, err)
-		c.JSON(http.StatusInternalServerError, ErrorResponse{Message: "Token刷新失败: " + err.Error()})
+		c.JSON(http.StatusInternalServerError, InternalServerErrorResponse())
 		return
 	}
 
 	// 重新获取更新后的账号信息
 	updatedAccount, err := h.accountService.GetAccount(userID.(uint), uint(accountID))
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, ErrorResponse{Message: err.Error()})
+		c.JSON(http.StatusInternalServerError, InternalServerErrorResponse())
 		return
 	}
 
@@ -504,7 +504,7 @@ func (h *AccountHandler) TriggerTask(c *gin.Context) {
 			c.JSON(http.StatusNotFound, ErrorResponse{Message: "账号不存在"})
 			return
 		}
-		c.JSON(http.StatusInternalServerError, ErrorResponse{Message: err.Error()})
+		c.JSON(http.StatusInternalServerError, InternalServerErrorResponse())
 		return
 	}
 
@@ -597,7 +597,7 @@ func (h *AccountHandler) SendSmsCode(c *gin.Context) {
 		} else if strings.Contains(errMsg, "频率") {
 			errMsg = "发送过于频繁，请稍后再试"
 		}
-		c.JSON(http.StatusInternalServerError, ErrorResponse{Message: errMsg})
+		c.JSON(http.StatusInternalServerError, InternalServerErrorResponse())
 		return
 	}
 
@@ -757,7 +757,7 @@ func (h *AccountHandler) SmsLogin(c *gin.Context) {
 			c.JSON(http.StatusConflict, ErrorResponse{Message: "该手机号账号已存在"})
 			return
 		}
-		c.JSON(http.StatusInternalServerError, ErrorResponse{Message: err.Error()})
+		c.JSON(http.StatusInternalServerError, InternalServerErrorResponse())
 		return
 	}
 
