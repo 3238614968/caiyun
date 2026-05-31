@@ -95,7 +95,7 @@ func (r *ProductRepository) FindAll() ([]*models.Product, error) {
 // FindActive 获取所有启用的商品
 func (r *ProductRepository) FindActive() ([]*models.Product, error) {
 	var products []*models.Product
-	err := r.db.Where("is_active = ?", true).
+	err := r.db.Where("is_active = ? AND is_deleted = ?", true, false).
 		Order("category ASC, p_order ASC").
 		Find(&products).Error
 	return products, err
@@ -104,7 +104,7 @@ func (r *ProductRepository) FindActive() ([]*models.Product, error) {
 // FindByCategory 根据分类获取商品
 func (r *ProductRepository) FindByCategory(category string) ([]*models.Product, error) {
 	var products []*models.Product
-	err := r.db.Where("category = ? AND is_active = ?", category, true).
+	err := r.db.Where("category = ? AND is_active = ? AND is_deleted = ?", category, true, false).
 		Order("p_order ASC").
 		Find(&products).Error
 	return products, err
@@ -118,7 +118,7 @@ func (r *ProductRepository) Search(keyword string, limit int) ([]*models.Product
 
 	var products []*models.Product
 	searchTerm := "%" + strings.ToLower(keyword) + "%"
-	err := r.db.Where("LOWER(prize_name) LIKE ? AND is_active = ?", searchTerm, true).
+	err := r.db.Where("LOWER(prize_name) LIKE ? AND is_active = ? AND is_deleted = ?", searchTerm, true, false).
 		Limit(limit).
 		Order("p_order ASC").
 		Find(&products).Error
@@ -129,7 +129,7 @@ func (r *ProductRepository) Search(keyword string, limit int) ([]*models.Product
 func (r *ProductRepository) GetCategories() ([]string, error) {
 	var categories []string
 	err := r.db.Model(&models.Product{}).
-		Where("is_active = ?", true).
+		Where("is_active = ? AND is_deleted = ?", true, false).
 		Distinct().
 		Pluck("category", &categories).Error
 	return categories, err
@@ -172,7 +172,7 @@ func (r *ProductRepository) Upsert(product *models.Product) error {
 // Count 获取商品总数
 func (r *ProductRepository) Count() (int64, error) {
 	var count int64
-	err := r.db.Model(&models.Product{}).Where("is_active = ?", true).Count(&count).Error
+	err := r.db.Model(&models.Product{}).Where("is_active = ? AND is_deleted = ?", true, false).Count(&count).Error
 	return count, err
 }
 
@@ -266,4 +266,171 @@ func (r *ProductRepository) UpsertProducts(products []*models.Product) (updated,
 	}
 
 	return updated, inserted, deleted, nil
+}
+
+// ReplaceProducts 用本次成功拉取到的商品列表整体替换本地商品缓存。
+// 注意：只有上游商品列表完整获取并解析成功后才调用此方法；如果上游失败，调用方不应调用，
+// 从而继续使用上一次缓存。历史商品不会物理删除，避免破坏兑换记录外键，但会标记为不可用。
+func (r *ProductRepository) ReplaceProducts(products []*models.Product) (updated, inserted, disabled, syncedTasks, stoppedTasks int, err error) {
+	if len(products) == 0 {
+		return 0, 0, 0, 0, 0, nil
+	}
+
+	ctx := context.Background()
+	tx := r.db.WithContext(ctx).Begin()
+	defer func() {
+		if v := recover(); v != nil {
+			tx.Rollback()
+		}
+	}()
+
+	var existingPrizeIDs []string
+	if err = tx.Model(&models.Product{}).Pluck("prize_id", &existingPrizeIDs).Error; err != nil {
+		tx.Rollback()
+		return 0, 0, 0, 0, 0, err
+	}
+	existingMap := make(map[string]bool, len(existingPrizeIDs))
+	for _, id := range existingPrizeIDs {
+		existingMap[id] = true
+	}
+
+	now := time.Now()
+	result := tx.Model(&models.Product{}).
+		Where("is_active = ? OR is_deleted = ?", true, false).
+		Updates(map[string]interface{}{
+			"is_active":  false,
+			"is_deleted": true,
+			"updated_at": now,
+		})
+	if result.Error != nil {
+		tx.Rollback()
+		return 0, 0, 0, 0, 0, result.Error
+	}
+	disabled = int(result.RowsAffected)
+
+	for _, product := range products {
+		product.IsActive = true
+		product.IsDeleted = false
+		if product.UpdatedAt.IsZero() {
+			product.UpdatedAt = now
+		}
+		if existingMap[product.PrizeID] {
+			updated++
+		} else {
+			inserted++
+		}
+	}
+
+	if err = tx.Clauses(clause.OnConflict{
+		Columns: []clause.Column{{Name: "prize_id"}},
+		DoUpdates: clause.AssignmentColumns([]string{
+			"prize_name",
+			"p_order",
+			"category",
+			"daily_remainder_count",
+			"daily_limit_count",
+			"daily_count",
+			"image_url",
+			"stock_status",
+			"last_stock_check",
+			"memo",
+			"is_active",
+			"is_deleted",
+			"updated_at",
+		}),
+	}).CreateInBatches(products, 100).Error; err != nil {
+		tx.Rollback()
+		return 0, 0, 0, 0, 0, err
+	}
+
+	var latestProducts []*models.Product
+	if err = tx.Where("is_active = ? AND is_deleted = ?", true, false).
+		Order("daily_remainder_count DESC, updated_at DESC").
+		Find(&latestProducts).Error; err != nil {
+		tx.Rollback()
+		return 0, 0, 0, 0, 0, err
+	}
+
+	syncedTasks, stoppedTasks, err = syncExchangeTasksToLatestProducts(tx, latestProducts, now)
+	if err != nil {
+		tx.Rollback()
+		return 0, 0, 0, 0, 0, err
+	}
+
+	if err = tx.Commit().Error; err != nil {
+		return 0, 0, 0, 0, 0, err
+	}
+
+	return updated, inserted, disabled, syncedTasks, stoppedTasks, nil
+}
+
+func syncExchangeTasksToLatestProducts(tx *gorm.DB, products []*models.Product, now time.Time) (synced int, stopped int, err error) {
+	if len(products) == 0 {
+		return 0, 0, nil
+	}
+
+	seenName := make(map[string]bool)
+	for _, product := range products {
+		if product == nil || product.ID == 0 || product.PrizeID == "" {
+			continue
+		}
+
+		if strings.TrimSpace(product.Memo) != "" {
+			result := tx.Model(&models.ExchangeTask{}).
+				Where("deleted_at IS NULL").
+				Where("status IN ?", []string{string(models.ExchangeTaskPending), string(models.ExchangeTaskRunning)}).
+				Where("prize_id = ?", product.Memo).
+				Updates(map[string]interface{}{
+					"product_id": product.ID,
+					"prize_id":   product.PrizeID,
+					"prize_name": product.PrizedName,
+					"updated_at": now,
+				})
+			if result.Error != nil {
+				return synced, stopped, result.Error
+			}
+			synced += int(result.RowsAffected)
+		}
+
+		if product.PrizedName == "" || seenName[product.PrizedName] {
+			continue
+		}
+		seenName[product.PrizedName] = true
+
+		result := tx.Model(&models.ExchangeTask{}).
+			Where("deleted_at IS NULL").
+			Where("status IN ?", []string{string(models.ExchangeTaskPending), string(models.ExchangeTaskRunning)}).
+			Where("prize_name = ?", product.PrizedName).
+			Updates(map[string]interface{}{
+				"product_id": product.ID,
+				"prize_id":   product.PrizeID,
+				"prize_name": product.PrizedName,
+				"updated_at": now,
+			})
+		if result.Error != nil {
+			return synced, stopped, result.Error
+		}
+		synced += int(result.RowsAffected)
+	}
+
+	result := tx.Exec(`
+UPDATE exchange_tasks AS t
+LEFT JOIN products AS p
+  ON p.prize_name = t.prize_name
+ AND p.is_active = TRUE
+ AND p.is_deleted = FALSE
+ AND p.deleted_at IS NULL
+SET t.status = ?,
+    t.last_result = ?,
+    t.updated_at = ?
+WHERE t.deleted_at IS NULL
+  AND t.status IN ?
+  AND p.id IS NULL
+`, string(models.ExchangeTaskCompleted), "商品已下架或不存在，已根据最新商品列表停止任务", now, []string{string(models.ExchangeTaskPending), string(models.ExchangeTaskRunning)})
+	if result.Error != nil {
+		return synced, stopped, result.Error
+	}
+	stopped = int(result.RowsAffected)
+
+	return synced, stopped, nil
 }

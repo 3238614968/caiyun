@@ -197,10 +197,12 @@ func syncProductsFromCloud(productRepo *repository.ProductRepository, accountRep
 		return 0, fmt.Errorf("未获取到任何商品数据")
 	}
 
-	updated, inserted, _, err := productRepo.UpsertProducts(products)
+	updated, inserted, disabled, syncedTasks, stoppedTasks, err := productRepo.ReplaceProducts(products)
 	if err != nil {
 		return 0, fmt.Errorf("保存商品失败: %w", err)
 	}
+	fmt.Printf("商品列表已刷新：最新商品 %d 个，更新 %d 个，新增 %d 个，下架旧商品 %d 个，同步抢兑任务 %d 个，停止失效任务 %d 个\n",
+		len(products), updated, inserted, disabled, syncedTasks, stoppedTasks)
 
-	return int64(updated + inserted), nil
+	return int64(len(products)), nil
 }
