@@ -7,7 +7,7 @@ import (
 
 // GetProductList 获取商品列表
 func (api *CaiyunAPI) GetProductList() (*CaiyunResponse, error) {
-	const productListURL = "https://m.mcloud.139.com/market/signin/page/exchangeList?client=app&clientVersion=12.4.0"
+	const productListURL = "https://m.mcloud.139.com/market/signin/page/exchangeList?client=app&clientVersion=12.5.3"
 
 	resp, err := api.client.Get(productListURL, map[string]string{
 		"showloading":     "true",

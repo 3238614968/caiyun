@@ -124,13 +124,13 @@ func (r *ExchangeTaskRepository) UpdateAttempt(id uint, success bool, result str
 		"last_result":     result,
 		"last_attempt_at": time.Now(),
 	}
-	
+
 	if success {
 		updates["success_count"] = gorm.Expr("success_count + 1")
 	} else {
 		updates["fail_count"] = gorm.Expr("fail_count + 1")
 	}
-	
+
 	return r.db.Model(&models.ExchangeTask{}).
 		Where("id = ?", id).
 		Updates(updates).Error
@@ -140,7 +140,7 @@ func (r *ExchangeTaskRepository) UpdateAttempt(id uint, success bool, result str
 func (r *ExchangeTaskRepository) CheckTaskExists(userID uint, accountID uint, prizeID string) bool {
 	var count int64
 	r.db.Model(&models.ExchangeTask{}).
-		Where("user_id = ? AND exchange_account_id = ? AND prize_id = ? AND status IN ?", 
+		Where("user_id = ? AND exchange_account_id = ? AND prize_id = ? AND status IN ?",
 			userID, accountID, prizeID, []string{string(models.ExchangeTaskPending), string(models.ExchangeTaskRunning)}).
 		Count(&count)
 	return count > 0
@@ -231,24 +231,29 @@ func (r *ExchangeTaskRepository) GetRecordsWithFilter(userID uint, accountID uin
 // 返回：该时间段需要执行的抢兑任务列表
 func (r *ExchangeTaskRepository) GetTasksByTime(hour, minute int) ([]*models.ExchangeTask, error) {
 	var tasks []*models.ExchangeTask
-	
+
 	// 格式化时间为字符串（例如：10:00）
 	timeStr := fmt.Sprintf("%02d:%02d:00", hour, minute)
-	
+
 	// 查询条件：
 	// 1. 状态为待执行或运行中
 	// 2. 关联的兑换账号在指定时间有抢兑任务
 	// 3. 账号处于启用状态
 	// 4. 任务未删除
 	err := r.db.Joins("JOIN exchange_accounts ON exchange_accounts.id = exchange_tasks.exchange_account_id").
+		Joins("JOIN accounts ON accounts.id = exchange_accounts.account_id").
 		Where("exchange_tasks.status IN ?", []string{string(models.ExchangeTaskPending), string(models.ExchangeTaskRunning)}).
 		Where("(exchange_accounts.exchange_time_1 = ? OR exchange_accounts.exchange_time_2 = ?)", timeStr, timeStr).
 		Where("exchange_accounts.is_active = ?", true).
+		Where("accounts.is_active = ?", true).
+		Where("accounts.auth <> ''").
+		Where("exchange_accounts.deleted_at IS NULL AND accounts.deleted_at IS NULL").
 		Where("exchange_tasks.deleted_at IS NULL").
 		Preload("ExchangeAccount").
+		Preload("ExchangeAccount.Account").
 		Preload("Product").
 		Find(&tasks).Error
-	
+
 	return tasks, err
 }
 

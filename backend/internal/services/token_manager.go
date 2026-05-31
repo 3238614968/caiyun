@@ -33,6 +33,12 @@ type TokenInfo struct {
 	ErrorMsg     string
 }
 
+const (
+	tokenRefreshErrorTTL    = 2 * time.Minute
+	maxJWTRefreshFailures   = 3
+	tokenRefreshHealthySkew = 2 * time.Minute
+)
+
 // NewTokenManager 创建 Token 管理器，并启动后台维护协程。
 func NewTokenManager(
 	accountRepo *repository.AccountRepository,
@@ -59,7 +65,7 @@ func (tm *TokenManager) GetToken(accountID uint) (*TokenInfo, error) {
 	if info, ok := tm.tokenCache.Load(accountID); ok {
 		tokenInfo := info.(*TokenInfo)
 		// 提前 2 分钟视为即将过期，需要刷新（JWT Token 有效期只有 20-30 分钟）
-		if time.Now().Add(2*time.Minute).Before(tokenInfo.ExpiresAt) && tokenInfo.HealthStatus == "healthy" {
+		if tokenInfo.JWTToken != "" && tokenInfo.HealthStatus == "healthy" && time.Now().Add(tokenRefreshHealthySkew).Before(tokenInfo.ExpiresAt) {
 			return tokenInfo, nil
 		}
 	}
@@ -75,7 +81,7 @@ func (tm *TokenManager) refreshToken(accountID uint) (*TokenInfo, error) {
 	// 双重检查，避免并发重复刷新。
 	if info, ok := tm.tokenCache.Load(accountID); ok {
 		tokenInfo := info.(*TokenInfo)
-		if time.Now().Add(2 * time.Minute).Before(tokenInfo.ExpiresAt) {
+		if tokenInfo.JWTToken != "" && tokenInfo.HealthStatus == "healthy" && time.Now().Add(tokenRefreshHealthySkew).Before(tokenInfo.ExpiresAt) {
 			return tokenInfo, nil
 		}
 	}
@@ -83,6 +89,9 @@ func (tm *TokenManager) refreshToken(accountID uint) (*TokenInfo, error) {
 	account, err := tm.accountRepo.GetByID(accountID)
 	if err != nil {
 		return nil, fmt.Errorf("获取账号失败: %w", err)
+	}
+	if !account.IsActive {
+		return nil, fmt.Errorf("账号已失效，请重新登录后再启用任务")
 	}
 
 	// 使用账号 Auth 创建客户端。
@@ -118,6 +127,16 @@ func (tm *TokenManager) refreshToken(accountID uint) (*TokenInfo, error) {
 	if jwtToken == "" {
 		tokenInfo.HealthStatus = "error"
 		tokenInfo.ErrorMsg = "无法获取 JWT Token"
+		tokenInfo.ExpiresAt = now.Add(tokenRefreshErrorTTL)
+		account.JWTErrorCount++
+		if account.JWTErrorCount >= maxJWTRefreshFailures {
+			account.IsActive = false
+			tokenInfo.ErrorMsg = "连续无法获取 JWT Token，账号已暂停，请重新登录后再启用任务"
+		}
+		_ = tm.accountRepo.Update(account)
+	} else if account.JWTErrorCount != 0 {
+		account.JWTErrorCount = 0
+		_ = tm.accountRepo.Update(account)
 	}
 
 	tm.tokenCache.Store(accountID, tokenInfo)
@@ -151,6 +170,10 @@ func (tm *TokenManager) preRefreshExpiredTokens() {
 	tm.tokenCache.Range(func(key, value interface{}) bool {
 		accountID := key.(uint)
 		tokenInfo := value.(*TokenInfo)
+
+		if tokenInfo == nil || tokenInfo.JWTToken == "" || tokenInfo.HealthStatus == "error" {
+			return true
+		}
 
 		// Token 在 1 小时内过期时提前刷新。
 		if time.Now().Add(1 * time.Hour).After(tokenInfo.ExpiresAt) {

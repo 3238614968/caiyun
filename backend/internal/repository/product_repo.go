@@ -3,6 +3,7 @@ package repository
 import (
 	"caiyun/internal/models"
 	"context"
+	"errors"
 	"strings"
 	"time"
 
@@ -49,6 +50,36 @@ func (r *ProductRepository) GetByPrizeID(prizeID string) (*models.Product, error
 	var product models.Product
 	err := r.db.Where("prize_id = ?", prizeID).First(&product).Error
 	if err != nil {
+		return nil, err
+	}
+	return &product, nil
+}
+
+// FindExchangeableByName 根据商品名查找当前可用于兑换接口的商品。
+// 历史任务可能保存了 memo(JSON) 作为 prize_id，这里优先返回最新的真实 prize_id。
+func (r *ProductRepository) FindExchangeableReplacement(name string, legacyPrizeID string) (*models.Product, error) {
+	var product models.Product
+	if strings.TrimSpace(legacyPrizeID) != "" {
+		err := r.db.Where("memo = ? AND is_active = ? AND is_deleted = ?", legacyPrizeID, true, false).
+			Where("prize_id <> '' AND prize_id NOT LIKE ?", "{%").
+			Order("daily_remainder_count DESC, updated_at DESC").
+			First(&product).Error
+		if err == nil {
+			return &product, nil
+		}
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, err
+		}
+	}
+
+	err := r.db.Where("prize_name = ? AND is_active = ? AND is_deleted = ?", name, true, false).
+		Where("prize_id <> '' AND prize_id NOT LIKE ?", "{%").
+		Order("daily_remainder_count DESC, updated_at DESC").
+		First(&product).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, nil
+		}
 		return nil, err
 	}
 	return &product, nil

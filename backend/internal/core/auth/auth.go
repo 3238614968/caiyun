@@ -302,16 +302,13 @@ func (a *Auth) QuerySpecTokenForJWT(phone string) (string, error) {
 	reqBody := map[string]interface{}{
 		"toSourceId": "001005",
 		"account":    phone,
-		"commonAccountInfo": map[string]interface{}{
-			"account":     phone,
-			"accountType": 1,
-		},
 	}
 
 	headers := map[string]string{
 		"Referer":      "https://yun.139.com/w/",
 		"Accept":       "application/json, text/plain, */*",
 		"Content-Type": "application/json;charset=UTF-8",
+		"User-Agent":   "Mozilla/5.0 (Linux; Android 16; 22127RK46C Build/BP2A.250605.031.A3; wv) AppleWebKit/537.36 Chrome/146.0.7680.164 Mobile Safari/537.36",
 	}
 
 	resp, err := a.client.Post(
@@ -351,7 +348,7 @@ type TyrzLoginResp struct {
 
 // TyrzLogin 使用 ssoToken 获取 JWT token
 func (a *Auth) TyrzLogin(ssoToken string) (string, error) {
-	url := fmt.Sprintf("https://caiyun.feixin.10086.cn/portal/auth/tyrzLogin.action?ssoToken=%s", ssoToken)
+	url := fmt.Sprintf("https://caiyun.feixin.10086.cn:7071/portal/auth/tyrzLogin.action?ssoToken=%s", ssoToken)
 
 	resp, err := a.client.Get(url, nil)
 	if err != nil {

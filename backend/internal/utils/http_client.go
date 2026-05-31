@@ -47,8 +47,12 @@ func IsRetryableError(message string) bool {
 		"本月已兑换",
 		"云朵不足",
 		"账号未登录",
+		"未登录",
 		"Token 无效",
 		"账号被封禁",
+		"商品ID不是可兑换 prizeId",
+		"商品已下架或不存在",
+		"请更新商品列表后重新创建抢兑任务",
 	}
 
 	for _, pattern := range noRetryPatterns {

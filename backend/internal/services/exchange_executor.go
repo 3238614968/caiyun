@@ -33,6 +33,24 @@ type exchangeAttemptResult struct {
 	stop     bool
 }
 
+func taskExchangePrizeID(task *models.ExchangeTask) string {
+	if task == nil {
+		return ""
+	}
+	if task.Product.ID > 0 && isUsableExchangePrizeID(task.Product.PrizeID) {
+		return strings.TrimSpace(task.Product.PrizeID)
+	}
+	return strings.TrimSpace(task.PrizeID)
+}
+
+func isUsableExchangePrizeID(prizeID string) bool {
+	prizeID = strings.TrimSpace(prizeID)
+	if prizeID == "" {
+		return false
+	}
+	return !strings.HasPrefix(prizeID, "{") && !strings.Contains(prizeID, "\"actId\"") && !strings.Contains(prizeID, "\"batchID\"")
+}
+
 // performExchange wraps the exchange HTTP request for both manual and scheduled flows.
 func performExchange(account *models.ExchangeAccount, prizeID string, tokenMgr *TokenManager) (bool, string, int) {
 	startTime := time.Now()

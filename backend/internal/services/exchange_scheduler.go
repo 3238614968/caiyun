@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -18,6 +19,7 @@ type ExchangeScheduler struct {
 	exchangeTaskRepo    *repository.ExchangeTaskRepository
 	exchangeAccountRepo *repository.ExchangeAccountRepository
 	exchangeRecordRepo  *repository.ExchangeRecordRepository
+	productRepo         *repository.ProductRepository
 	configRepo          *repository.SystemConfigRepository
 	taskLogRepo         *repository.TaskLogRepository
 	tokenMgr            *TokenManager
@@ -42,6 +44,7 @@ func NewExchangeScheduler(
 	exchangeTaskRepo *repository.ExchangeTaskRepository,
 	exchangeAccountRepo *repository.ExchangeAccountRepository,
 	exchangeRecordRepo *repository.ExchangeRecordRepository,
+	productRepo *repository.ProductRepository,
 	configRepo *repository.SystemConfigRepository,
 	taskLogRepo *repository.TaskLogRepository,
 	tokenMgr *TokenManager,
@@ -50,6 +53,7 @@ func NewExchangeScheduler(
 		exchangeTaskRepo:    exchangeTaskRepo,
 		exchangeAccountRepo: exchangeAccountRepo,
 		exchangeRecordRepo:  exchangeRecordRepo,
+		productRepo:         productRepo,
 		configRepo:          configRepo,
 		taskLogRepo:         taskLogRepo,
 		tokenMgr:            tokenMgr,
@@ -116,7 +120,12 @@ func (s *ExchangeScheduler) prepareQueueByTime(hour, minute int) {
 	}
 
 	s.logQueuedTasks(slot, tasks)
-	s.preheatAccountsForTasks(slot, tasks)
+	readyAccounts := s.preheatAccountsForTasks(slot, tasks)
+	tasks = filterTasksByReadyAccounts(slot, tasks, readyAccounts)
+	if len(tasks) == 0 {
+		log.Printf("【抢兑调度器】%s 预热后没有可执行账号，本次不加入抢兑队列", slot)
+		return
+	}
 
 	s.queueMutex.Lock()
 	// Merge into the shared in-memory queue.
@@ -157,6 +166,7 @@ func (s *ExchangeScheduler) executeExchangeByTime(hour, minute int) {
 	s.morningQueue = remainingTasks
 	s.queueMutex.Unlock()
 
+	fromPreparedQueue := len(tasksToExecute) > 0
 	if len(tasksToExecute) == 0 {
 		var err error
 		tasksToExecute, err = s.exchangeTaskRepo.GetTasksByTime(hour, minute)
@@ -165,6 +175,14 @@ func (s *ExchangeScheduler) executeExchangeByTime(hour, minute int) {
 			return
 		}
 		if len(tasksToExecute) == 0 {
+			return
+		}
+	}
+	if !fromPreparedQueue {
+		readyAccounts := s.preheatAccountsForTasks(slot, tasksToExecute)
+		tasksToExecute = filterTasksByReadyAccounts(slot, tasksToExecute, readyAccounts)
+		if len(tasksToExecute) == 0 {
+			log.Printf("【抢兑调度器】%s 补查任务预热后没有可执行账号，跳过本次执行", slot)
 			return
 		}
 	}
@@ -199,9 +217,9 @@ func (s *ExchangeScheduler) logQueuedTasks(slot string, tasks []*models.Exchange
 	}
 }
 
-func (s *ExchangeScheduler) preheatAccountsForTasks(slot string, tasks []*models.ExchangeTask) {
+func (s *ExchangeScheduler) preheatAccountsForTasks(slot string, tasks []*models.ExchangeTask) map[uint]bool {
 	if s.tokenMgr == nil || len(tasks) == 0 {
-		return
+		return nil
 	}
 
 	uniqueAccounts := make(map[uint]models.ExchangeAccount)
@@ -213,6 +231,16 @@ func (s *ExchangeScheduler) preheatAccountsForTasks(slot string, tasks []*models
 			log.Printf("【抢兑调度器】%s 预热跳过: task=%d, exchange_account=%d 缺少云盘账号 ID", slot, task.ID, task.ExchangeAccountID)
 			continue
 		}
+		if task.ExchangeAccount.Account.ID > 0 {
+			if !task.ExchangeAccount.Account.IsActive {
+				log.Printf("【抢兑调度器】%s 预热跳过: task=%d, account=%d 云盘账号已失效", slot, task.ID, task.ExchangeAccount.AccountID)
+				continue
+			}
+			if task.ExchangeAccount.Account.Auth == "" {
+				log.Printf("【抢兑调度器】%s 预热跳过: task=%d, account=%d 云盘账号认证为空", slot, task.ID, task.ExchangeAccount.AccountID)
+				continue
+			}
+		}
 		if _, exists := uniqueAccounts[task.ExchangeAccount.AccountID]; exists {
 			continue
 		}
@@ -220,7 +248,7 @@ func (s *ExchangeScheduler) preheatAccountsForTasks(slot string, tasks []*models
 	}
 
 	if len(uniqueAccounts) == 0 {
-		return
+		return map[uint]bool{}
 	}
 
 	limit := s.getConfiguredConcurrency()
@@ -238,6 +266,7 @@ func (s *ExchangeScheduler) preheatAccountsForTasks(slot string, tasks []*models
 	var resultMu sync.Mutex
 	successCount := 0
 	failureCount := 0
+	readyAccounts := make(map[uint]bool)
 
 	for accountID, exchangeAccount := range uniqueAccounts {
 		accountID := accountID
@@ -289,12 +318,39 @@ func (s *ExchangeScheduler) preheatAccountsForTasks(slot string, tasks []*models
 			)
 			resultMu.Lock()
 			successCount++
+			readyAccounts[accountID] = true
 			resultMu.Unlock()
 		}()
 	}
 
 	wg.Wait()
 	log.Printf("【抢兑调度器】%s JWT 预热完成，成功 %d/%d 个云盘账号，失败 %d 个", slot, successCount, len(uniqueAccounts), failureCount)
+	return readyAccounts
+}
+
+func filterTasksByReadyAccounts(slot string, tasks []*models.ExchangeTask, readyAccounts map[uint]bool) []*models.ExchangeTask {
+	if readyAccounts == nil {
+		return tasks
+	}
+
+	filtered := make([]*models.ExchangeTask, 0, len(tasks))
+	skipped := 0
+	for _, task := range tasks {
+		if task == nil {
+			continue
+		}
+		accountID := task.ExchangeAccount.AccountID
+		if accountID == 0 || !readyAccounts[accountID] {
+			skipped++
+			log.Printf("【抢兑调度器】%s 跳过任务 %d：账号预热失败或无有效 JWT，不参与本次抢兑", slot, task.ID)
+			continue
+		}
+		filtered = append(filtered, task)
+	}
+	if skipped > 0 {
+		log.Printf("【抢兑调度器】%s 已剔除 %d 个预热失败账号关联任务，剩余 %d 个任务进入抢兑队列", slot, skipped, len(filtered))
+	}
+	return filtered
 }
 
 func formatExchangeWarmupExpiry(expiresAt time.Time) string {
@@ -448,7 +504,11 @@ func (s *ExchangeScheduler) executeExchangeWithAutoSwitch(tasks []*models.Exchan
 func (s *ExchangeScheduler) groupTasksByProduct(tasks []*models.ExchangeTask) map[string][]*models.ExchangeTask {
 	groups := make(map[string][]*models.ExchangeTask)
 	for _, task := range tasks {
-		groups[task.PrizeID] = append(groups[task.PrizeID], task)
+		prizeID := s.resolveTaskPrizeID(task)
+		if prizeID == "" {
+			prizeID = taskExchangePrizeID(task)
+		}
+		groups[prizeID] = append(groups[prizeID], task)
 	}
 	return groups
 }
@@ -645,7 +705,42 @@ func (s *ExchangeScheduler) executeTask(task *models.ExchangeTask) (bool, string
 		return false, "账号已禁用", 0
 	}
 
-	return performExchange(account, task.PrizeID, s.tokenMgr)
+	if task.ExchangeAccount.Account.ID > 0 && !task.ExchangeAccount.Account.IsActive {
+		return false, "云盘账号已失效，请重新登录后再启用任务", 0
+	}
+
+	prizeID := s.resolveTaskPrizeID(task)
+	if !isUsableExchangePrizeID(prizeID) {
+		return false, "商品已下架或不存在，请更新商品列表后重新创建抢兑任务", 0
+	}
+
+	return performExchange(account, prizeID, s.tokenMgr)
+}
+
+func (s *ExchangeScheduler) resolveTaskPrizeID(task *models.ExchangeTask) string {
+	prizeID := taskExchangePrizeID(task)
+	if isUsableExchangePrizeID(prizeID) {
+		return prizeID
+	}
+	if s.productRepo == nil || task == nil || task.PrizeName == "" {
+		return prizeID
+	}
+	product, err := s.productRepo.FindExchangeableReplacement(task.PrizeName, task.PrizeID)
+	if err != nil {
+		log.Printf("【抢兑调度器】任务 %d 查询商品替换失败: %v", task.ID, err)
+		return prizeID
+	}
+	if product == nil || !isUsableExchangePrizeID(product.PrizeID) {
+		return prizeID
+	}
+	if task.PrizeID != product.PrizeID || task.ProductID != product.ID {
+		task.PrizeID = product.PrizeID
+		task.ProductID = product.ID
+		task.Product = *product
+		_ = s.exchangeTaskRepo.Update(task)
+		log.Printf("【抢兑调度器】任务 %d 已自动修正商品ID为 %s，避免使用历史 memo 导致 404", task.ID, product.PrizeID)
+	}
+	return product.PrizeID
 }
 
 // shouldStopExchange 判断是否应该停止抢兑
@@ -735,7 +830,7 @@ func (s *ExchangeScheduler) finalizeTaskResult(task *models.ExchangeTask, succes
 		return
 	}
 
-	if s.shouldStopExchange(message) {
+	if s.shouldStopExchange(message) || strings.Contains(message, "商品已下架或不存在") || strings.Contains(message, "商品ID不是可兑换 prizeId") {
 		s.exchangeTaskRepo.UpdateStatus(task.ID, string(models.ExchangeTaskCompleted))
 		return
 	}
@@ -744,12 +839,16 @@ func (s *ExchangeScheduler) finalizeTaskResult(task *models.ExchangeTask, succes
 }
 
 func scheduledPrepareSlot(now time.Time) (int, int, bool) {
-	if constants.ExchangePreInitSeconds <= 0 || now.Second() != 60-constants.ExchangePreInitSeconds {
+	if constants.ExchangePreInitSeconds <= 0 {
 		return 0, 0, false
 	}
 
-	target := now.Add(time.Duration(constants.ExchangePreInitSeconds) * time.Second)
-	return target.Hour(), target.Minute(), true
+	executeTime := now.Add(time.Duration(constants.ExchangePreInitSeconds) * time.Second)
+	if executeTime.Second() != 0 {
+		return 0, 0, false
+	}
+
+	return executeTime.Hour(), executeTime.Minute(), true
 }
 
 func scheduledExecuteSlot(now time.Time) (int, int, bool) {

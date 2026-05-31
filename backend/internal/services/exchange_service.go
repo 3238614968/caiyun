@@ -422,6 +422,25 @@ func (s *ExchangeService) executeSingleTask(task *models.ExchangeTask) {
 		accountName = account.Phone
 	}
 
+	if s.accountRepo != nil && account.AccountID > 0 {
+		cloudAccount, err := s.accountRepo.GetByID(account.AccountID)
+		if err != nil {
+			s.recordExchangeResult(task, false, "云盘账号不存在或已删除", 0)
+			s.exchangeTaskRepo.UpdateStatus(task.ID, string(models.ExchangeTaskFailed))
+			return
+		}
+		if !cloudAccount.IsActive {
+			s.recordExchangeResult(task, false, "云盘账号已失效，请重新登录后再启用任务", 0)
+			s.exchangeTaskRepo.UpdateStatus(task.ID, string(models.ExchangeTaskPending))
+			return
+		}
+		if cloudAccount.Auth == "" {
+			s.recordExchangeResult(task, false, "云盘账号认证为空，请重新登录", 0)
+			s.exchangeTaskRepo.UpdateStatus(task.ID, string(models.ExchangeTaskPending))
+			return
+		}
+	}
+
 	log.Printf("【抢兑任务】开始执行任务 %d，账号: %s，商品: %s", task.ID, accountName, task.PrizeName)
 
 	// 执行抢兑（带重试）
@@ -444,7 +463,12 @@ func (s *ExchangeService) executeSingleTask(task *models.ExchangeTask) {
 			time.Sleep(time.Duration(attempt*2) * time.Second)
 		}
 
-		success, message, execTime = s.doExchange(account, task.PrizeID)
+		prizeID := s.resolveTaskPrizeID(task)
+		if !isUsableExchangePrizeID(prizeID) {
+			success, message, execTime = false, "商品已下架或不存在，请更新商品列表后重新创建抢兑任务", 0
+		} else {
+			success, message, execTime = s.doExchange(account, prizeID)
+		}
 
 		// 如果成功，或者错误不需要重试，则退出循环
 		if success || !s.shouldRetry(message) {
@@ -473,7 +497,7 @@ func (s *ExchangeService) executeSingleTask(task *models.ExchangeTask) {
 	} else {
 		log.Printf("【抢兑任务】任务 %d 执行失败，账号: %s，原因: %s", task.ID, accountName, message)
 		// 抢兑失败
-		if strings.Contains(message, "奖品单日已耗尽") || strings.Contains(message, "奖品已兑完") {
+		if strings.Contains(message, "奖品单日已耗尽") || strings.Contains(message, "奖品已兑完") || strings.Contains(message, "商品已下架或不存在") || strings.Contains(message, "商品ID不是可兑换 prizeId") {
 			// 奖品已抽完，停止任务
 			s.exchangeTaskRepo.UpdateStatus(task.ID, string(models.ExchangeTaskCompleted))
 		} else if task.RetryCount >= maxRetries {
@@ -508,6 +532,32 @@ func (s *ExchangeService) shouldRetry(message string) bool {
 // doExchange 执行兑换请求
 func (s *ExchangeService) doExchange(account *models.ExchangeAccount, prizeID string) (bool, string, int) {
 	return performExchange(account, prizeID, s.tokenMgr)
+}
+
+func (s *ExchangeService) resolveTaskPrizeID(task *models.ExchangeTask) string {
+	prizeID := taskExchangePrizeID(task)
+	if isUsableExchangePrizeID(prizeID) {
+		return prizeID
+	}
+	if s.productRepo == nil || task == nil || task.PrizeName == "" {
+		return prizeID
+	}
+	product, err := s.productRepo.FindExchangeableReplacement(task.PrizeName, task.PrizeID)
+	if err != nil {
+		log.Printf("【抢兑任务】任务 %d 查询商品替换失败: %v", task.ID, err)
+		return prizeID
+	}
+	if product == nil || !isUsableExchangePrizeID(product.PrizeID) {
+		return prizeID
+	}
+	if task.PrizeID != product.PrizeID || task.ProductID != product.ID {
+		task.PrizeID = product.PrizeID
+		task.ProductID = product.ID
+		task.Product = *product
+		_ = s.exchangeTaskRepo.Update(task)
+		log.Printf("【抢兑任务】任务 %d 已自动修正商品ID为 %s，避免使用历史 memo 导致 404", task.ID, product.PrizeID)
+	}
+	return product.PrizeID
 }
 
 // recordExchangeResult 记录抢兑结果

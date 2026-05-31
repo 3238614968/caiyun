@@ -73,27 +73,29 @@
                 <el-tag size="small" effect="plain" type="primary">{{ currentCategory || '全部分类' }}</el-tag>
               </div>
 
-              <el-input
-                v-model="searchKeyword"
-                placeholder="搜索商品名称..."
-                clearable
-                prefix-icon="Search"
-                class="search-input"
-                @change="handleSearch"
-              />
-              
-              <!-- 商品分类 - 移动端横向滚动 -->
-              <div class="category-list" :class="{ 'mobile-scroll': isMobile }">
-                <el-radio-group v-model="currentCategory" size="small">
-                  <el-radio-button label="">全部</el-radio-button>
-                  <el-radio-button 
-                    v-for="cat in categories" 
-                    :key="cat" 
-                    :label="cat"
-                  >
-                    {{ cat }}
-                  </el-radio-button>
-                </el-radio-group>
+              <div class="filter-controls">
+                <el-input
+                  v-model="searchKeyword"
+                  placeholder="搜索商品名称..."
+                  clearable
+                  prefix-icon="Search"
+                  class="search-input"
+                  @change="handleSearch"
+                />
+                
+                <!-- 商品分类 - 桌面端自动换行，移动端横向滚动 -->
+                <div class="category-list" :class="{ 'mobile-scroll': isMobile }">
+                  <el-radio-group v-model="currentCategory" size="small">
+                    <el-radio-button label="">全部</el-radio-button>
+                    <el-radio-button 
+                      v-for="cat in categories" 
+                      :key="cat" 
+                      :label="cat"
+                    >
+                      {{ cat }}
+                    </el-radio-button>
+                  </el-radio-group>
+                </div>
               </div>
             </div>
 
@@ -252,9 +254,9 @@
                     </div>
                     <div class="mobile-task-item" v-if="task.last_result">
                       <span class="label">执行结果：</span>
-                      <el-tag v-if="task.last_result.includes('成功')" type="success" size="small">成功</el-tag>
-                      <el-tag v-else-if="task.last_result.includes('失败') || task.last_result.includes('错误')" type="danger" size="small">失败</el-tag>
-                      <el-tag v-else type="info" size="small">{{ task.last_result.substring(0, 8) }}</el-tag>
+                      <el-tag :type="formatExchangeResult(task.last_result).type" size="small">
+                        {{ formatExchangeResult(task.last_result).label }}
+                      </el-tag>
                     </div>
                   </div>
                   <div class="mobile-task-actions">
@@ -290,13 +292,9 @@
               <el-table-column label="执行结果" min-width="200">
                 <template #default="{ row }">
                   <div v-if="row.last_result" class="task-result">
-                    <el-tag v-if="row.last_result.includes('成功')" type="success" size="small">成功</el-tag>
-                    <el-tag v-else-if="row.last_result.includes('失败') || row.last_result.includes('错误')" type="danger" size="small">失败</el-tag>
-                    <el-tag v-else type="info" size="small">{{ row.last_result }}</el-tag>
-                    <el-tooltip v-if="row.last_result.length > 10" :content="row.last_result" placement="top">
-                      <span class="result-text">{{ row.last_result.substring(0, 10) }}...</span>
-                    </el-tooltip>
-                    <span v-else class="result-text">{{ row.last_result }}</span>
+                    <el-tag :type="formatExchangeResult(row.last_result).type" size="small">
+                      {{ formatExchangeResult(row.last_result).label }}
+                    </el-tag>
                   </div>
                   <span v-else class="text-gray">-</span>
                 </template>
@@ -571,6 +569,7 @@ import { useAuthStore } from '@/store/auth'
 import { useExchangeMedia } from '@/composables/exchange/useExchangeMedia'
 import { useExchangeForms } from '@/composables/exchange/useExchangeForms'
 import { useExchangeDisplay } from '@/composables/exchange/useExchangeDisplay'
+import { formatExchangeResult } from '@/utils/exchange-result'
 
 // 状态
 const activeTab = ref('products')
@@ -1093,17 +1092,19 @@ onUnmounted(() => {
 .exchange-tabs :deep(.el-tabs__item) { height:42px; padding:0 18px; font-size:14px; font-weight:600; white-space:nowrap; }
 .exchange-tabs :deep(.el-tabs__content) { padding:8px 0 0; }
 .product-section { display:flex; flex-direction:column; gap:16px; }
-.filter-area { display:grid; grid-template-columns:minmax(240px,320px) 1fr; gap:14px 18px; align-items:start; margin-bottom:4px; padding:16px; background: rgba(255,255,255,.52); border-radius:18px; border:1px solid rgba(255,255,255,.76); }
-.filter-head { display:flex; align-items:center; justify-content:space-between; gap:12px; grid-column:1 / -1; }
+.filter-area { display:flex; flex-direction:column; gap:12px; margin-bottom:4px; padding:14px 16px; background: rgba(255,255,255,.52); border-radius:18px; border:1px solid rgba(255,255,255,.76); }
+.filter-head { display:flex; align-items:center; justify-content:space-between; gap:12px; }
 .filter-copy { display:flex; flex-direction:column; gap:4px; }
 .filter-title { font-size:15px; font-weight:700; color:#0f172a; }
 .filter-hint { font-size:12px; color:#64748b; }
+.filter-controls { display:grid; grid-template-columns:minmax(260px,420px) minmax(0,1fr); gap:12px 16px; align-items:start; }
 .search-input { width:100%; max-width:none; }
 .search-input :deep(.el-input__wrapper) { min-height:42px; border-radius:14px; box-shadow: 0 0 0 1px rgba(191,219,254,.8) inset; background: rgba(255,255,255,.84); }
-.category-list { min-width:0; overflow-x:auto; padding-bottom:4px; scrollbar-width:none; }
+.category-list { min-width:0; overflow-x:hidden; padding:0 0 2px; scrollbar-width:none; }
 .category-list::-webkit-scrollbar { display:none; }
-.category-list :deep(.el-radio-group) { display:flex; flex-wrap:nowrap; width:max-content; }
-.category-list :deep(.el-radio-button__inner) { border-radius:999px; padding:8px 16px; font-size:13px; }
+.category-list :deep(.el-radio-group) { display:flex; flex-wrap:wrap; gap:8px; width:100%; align-items:center; }
+.category-list :deep(.el-radio-button) { margin:0; }
+.category-list :deep(.el-radio-button__inner) { border-radius:999px!important; padding:8px 16px; font-size:13px; border-left: var(--el-border)!important; box-shadow: 0 4px 12px rgba(37,99,235,.06); }
 .product-grid { display:grid; grid-template-columns: repeat(auto-fill, minmax(248px,1fr)); gap:18px; }
 .product-grid.mobile-grid { grid-template-columns:1fr; }
 .product-card { border-radius:22px; overflow:hidden; border:1px solid rgba(255,255,255,.78); background: rgba(255,255,255,.84); box-shadow: 0 16px 32px rgba(37,99,235,.09); backdrop-filter: blur(12px); transition: transform .2s ease, box-shadow .2s ease, border-color .2s ease; }
@@ -1133,8 +1134,9 @@ onUnmounted(() => {
 .stock-value.empty { color:#dc2626; }
 .stock-progress { border-radius:999px; overflow:hidden; }
 .exchange-btn { width:100%; min-height:40px; border-radius:14px; font-weight:700; }
-.account-section, .task-section, .rewards-section { padding-top:4px; }
-.section-header { display:flex; justify-content:flex-end; margin-bottom:16px; }
+.account-section, .task-section { padding-top:0; display:flex; flex-direction:column; gap:10px; }
+.rewards-section { padding-top:0; min-height:220px; display:flex; align-items:center; justify-content:center; }
+.section-header { display:flex; justify-content:flex-end; align-items:center; min-height:34px; margin-bottom:0; }
 .task-result { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
 .result-text { color:#64748b; max-width:180px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .text-gray { color:#94a3b8; }
@@ -1148,7 +1150,6 @@ onUnmounted(() => {
 .mobile-account-item .label, .mobile-task-item .label { min-width:68px; color:#64748b; flex-shrink:0; }
 .mobile-account-item .value, .mobile-task-item .value { color:#334155; flex:1; word-break:break-word; }
 .mobile-account-actions, .mobile-task-actions { display:flex; gap:8px; justify-content:flex-end; flex-wrap:wrap; }
-.rewards-section { min-height:320px; display:flex; align-items:center; justify-content:center; }
 :deep(.el-table) { border-radius:18px; overflow:hidden; --el-table-border-color: rgba(148,163,184,.18); --el-table-header-bg-color: rgba(248,250,252,.9); --el-table-row-hover-bg-color: rgba(239,246,255,.74); }
 :deep(.el-table .cell) { line-height:1.45; }
 :deep(.account-dialog .el-dialog) { max-width: calc(100vw - 32px); }
@@ -1164,8 +1165,8 @@ onUnmounted(() => {
 .dialog-footer { display:flex; justify-content:flex-end; gap:12px; }
 :deep(.account-dialog .el-form-item__label) { font-weight:600; color:#475569; }
 :deep(.account-dialog .el-input__wrapper), :deep(.account-dialog .el-select .el-input__wrapper) { min-height:40px; border-radius:12px; box-shadow: 0 0 0 1px rgba(203,213,225,.9) inset; }
-@media (max-width: 1280px) { .exchange-center { padding:14px; } .header-main { flex-wrap:wrap; } .stats-row { grid-template-columns: repeat(2, minmax(0,1fr)); } .filter-area { grid-template-columns:1fr; } .product-grid { grid-template-columns: repeat(auto-fill, minmax(228px,1fr)); } }
-@media (max-width: 768px) { .exchange-center { padding:0; } .page-header, .content { border-radius:20px; } .page-header { padding:16px; } .header-main { margin-bottom:14px; } .header-actions { width:100%; } .header-actions :deep(.el-button) { width:100%; } .stats-row { grid-template-columns: repeat(2, minmax(0,1fr)); gap:10px; } .stat-item { padding:14px; border-radius:16px; } .stat-icon-bg { width:42px; height:42px; } .content { padding:14px; } .exchange-tabs :deep(.el-tabs__item) { padding:0 14px; font-size:13px; } .filter-area { padding:14px; gap:12px; } .filter-head { align-items:flex-start; flex-direction:column; } .product-layout.mobile { flex-direction:row; } .product-image.mobile { width:84px; height:84px; } .product-title { min-height:auto; font-size:14px; } .section-header { justify-content:stretch; } .section-header :deep(.el-button) { width:100%; } .dialog-content { padding:16px; } .dialog-footer { gap:10px; } }
+@media (max-width: 1280px) { .exchange-center { padding:14px; } .header-main { flex-wrap:wrap; } .stats-row { grid-template-columns: repeat(2, minmax(0,1fr)); } .filter-controls { grid-template-columns:1fr; } .product-grid { grid-template-columns: repeat(auto-fill, minmax(228px,1fr)); } }
+@media (max-width: 768px) { .exchange-center { padding:0; } .page-header, .content { border-radius:20px; } .page-header { padding:16px; } .header-main { margin-bottom:14px; } .header-actions { width:100%; } .header-actions :deep(.el-button) { width:100%; } .stats-row { grid-template-columns: repeat(2, minmax(0,1fr)); gap:10px; } .stat-item { padding:14px; border-radius:16px; } .stat-icon-bg { width:42px; height:42px; } .content { padding:14px; } .exchange-tabs :deep(.el-tabs__item) { padding:0 14px; font-size:13px; } .filter-area { padding:14px; gap:12px; } .filter-head { align-items:flex-start; flex-direction:column; } .category-list { overflow-x:auto; padding-bottom:4px; } .category-list :deep(.el-radio-group) { flex-wrap:nowrap; width:max-content; } .product-layout.mobile { flex-direction:row; } .product-image.mobile { width:84px; height:84px; } .product-title { min-height:auto; font-size:14px; } .section-header { justify-content:stretch; } .section-header :deep(.el-button) { width:100%; } .dialog-content { padding:16px; } .dialog-footer { gap:10px; } }
 @media (max-width: 520px) { .stats-row { grid-template-columns:1fr; } .mobile-account-actions, .mobile-task-actions, .dialog-footer { flex-direction:column; } .mobile-account-actions :deep(.el-button), .mobile-task-actions :deep(.el-button), .dialog-footer :deep(.el-button) { width:100%; } }
 </style>
 

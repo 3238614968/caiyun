@@ -159,9 +159,12 @@ func syncProductsFromCloud(productRepo *repository.ProductRepository, accountRep
 		}
 
 		for _, item := range prizes {
-			prizeID := item.Memo
-			if prizeID == "" && item.PrizeID > 0 {
+			prizeID := ""
+			if item.PrizeID > 0 {
 				prizeID = fmt.Sprintf("%d", item.PrizeID)
+			}
+			if prizeID == "" {
+				prizeID = item.Memo
 			}
 			if prizeID == "" {
 				continue

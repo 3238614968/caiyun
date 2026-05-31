@@ -409,7 +409,7 @@
 
         <!-- 公告管理 -->
         <el-tab-pane label="公告管理" name="announcements">
-          <div class="tab-content">
+          <div class="tab-content announcement-content">
             <div class="announcement-header">
               <el-button type="primary" @click="showAddAnnouncementDialog">
                 <el-icon><Plus /></el-icon>
@@ -605,7 +605,7 @@ import {
   getAllAnnouncements,
   createAnnouncement,
   updateAnnouncement,
-  deleteAnnouncement
+  deleteAnnouncement as apiDeleteAnnouncement
 } from '../api/announcement'
 import {
   type ExchangeConfig,
@@ -963,7 +963,7 @@ const deleteAnnouncement = async (row: Announcement) => {
       cancelButtonText: '取消',
       type: 'warning'
     })
-    await deleteAnnouncement(row.id)
+    await apiDeleteAnnouncement(row.id)
     ElMessage.success('删除成功')
     loadAnnouncements()
   } catch (error: any) {
@@ -1017,7 +1017,8 @@ onUnmounted(() => {
 .task-status-cell { display:inline-flex; align-items:center; gap:8px; flex-wrap:wrap; }
 .status-on { color:#10b981; font-size:13px; font-weight:600; }
 .status-off { color:#ef4444; font-size:13px; font-weight:600; }
-.announcement-header { margin-bottom:18px; display:flex; justify-content:flex-end; }
+.announcement-content { padding-top:10px; gap:10px; }
+.announcement-header { margin-bottom:0; min-height:34px; display:flex; justify-content:flex-end; align-items:center; }
 .title-cell { display:flex; align-items:center; gap:8px; min-width:0; }
 .title-text { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .ml-2 { margin-left:8px; }
@@ -1035,7 +1036,7 @@ onUnmounted(() => {
 :deep(.el-pagination) { justify-content:flex-end; flex-wrap:wrap; gap:8px; }
 :deep(.el-dialog) { max-width: calc(100vw - 32px); border-radius:22px; }
 @media (max-width: 1280px) { .admin-panel-container { padding:14px; } .tab-content { gap:16px; padding-top:18px; } :deep(.el-col-12) { width:100%!important; max-width:100%!important; flex:0 0 100%!important; } :deep(.el-col-6) { width:50%!important; max-width:50%!important; flex:0 0 50%!important; } }
-@media (max-width: 768px) { .admin-panel-container { padding:0; } .card-header { font-size:20px; } .admin-tabs :deep(.el-tabs__item) { height:40px; padding:0 14px; font-size:13px; } .tab-content { padding-top:16px; gap:14px; } .announcement-header { justify-content:stretch; } .announcement-header :deep(.el-button) { width:100%; } .product-management :deep(.el-form--inline) { flex-direction:column; align-items:stretch; } .product-management :deep(.el-select), .product-management :deep(.el-input), .product-management :deep(.el-button) { width:100%!important; } .task-status-cell { align-items:flex-start; } .form-options { flex-direction:column; gap:10px; } .view-title { font-size:18px; } :deep(.el-col-6) { width:50%!important; max-width:50%!important; flex:0 0 50%!important; } :deep(.el-pagination) { justify-content:center; } }
+@media (max-width: 768px) { .admin-panel-container { padding:0; } .card-header { font-size:20px; } .admin-tabs :deep(.el-tabs__item) { height:40px; padding:0 14px; font-size:13px; } .tab-content { padding-top:16px; gap:14px; } .announcement-content { padding-top:10px; gap:10px; } .announcement-header { justify-content:stretch; min-height:34px; } .announcement-header :deep(.el-button) { width:100%; } .product-management :deep(.el-form--inline) { flex-direction:column; align-items:stretch; } .product-management :deep(.el-select), .product-management :deep(.el-input), .product-management :deep(.el-button) { width:100%!important; } .task-status-cell { align-items:flex-start; } .form-options { flex-direction:column; gap:10px; } .view-title { font-size:18px; } :deep(.el-col-6) { width:50%!important; max-width:50%!important; flex:0 0 50%!important; } :deep(.el-pagination) { justify-content:center; } }
 @media (max-width: 520px) { :deep(.el-col-6) { width:100%!important; max-width:100%!important; flex:0 0 100%!important; } }
 
 .responsive-data-shell { min-height: 120px; }

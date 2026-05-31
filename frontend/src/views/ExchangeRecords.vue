@@ -109,7 +109,13 @@
               </el-tag>
             </template>
           </el-table-column>
-          <el-table-column prop="message" label="结果消息" min-width="200" show-overflow-tooltip />
+          <el-table-column label="结果消息" min-width="160">
+            <template #default="{ row }">
+              <el-tag :type="formatExchangeResult(row.message, row.status).type" size="small">
+                {{ formatExchangeResult(row.message, row.status).label }}
+              </el-tag>
+            </template>
+          </el-table-column>
           <el-table-column label="执行耗时" width="100">
             <template #default="{ row }">
               <span :class="getDurationClass(row.execution_time_ms)">
@@ -153,7 +159,11 @@
           </el-tag>
         </el-descriptions-item>
         <el-descriptions-item label="执行耗时" :span="2">{{ selectedRecord.execution_time_ms }}ms</el-descriptions-item>
-        <el-descriptions-item label="结果消息" :span="2">{{ selectedRecord.message }}</el-descriptions-item>
+        <el-descriptions-item label="结果消息" :span="2">
+          <el-tag :type="formatExchangeResult(selectedRecord.message, selectedRecord.status).type">
+            {{ formatExchangeResult(selectedRecord.message, selectedRecord.status).label }}
+          </el-tag>
+        </el-descriptions-item>
       </el-descriptions>
     </el-dialog>
   </div>
@@ -165,6 +175,7 @@ import { ElMessage } from 'element-plus'
 import PageHeader from '@/components/PageHeader.vue'
 import StatCard from '@/components/StatCard.vue'
 import { getExchangeRecords, getExchangeAccounts, exportExchangeRecords, type ExchangeRecord } from '@/api/exchange'
+import { formatExchangeResult } from '@/utils/exchange-result'
 
 // 状态
 const loading = ref(false)

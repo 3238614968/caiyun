@@ -343,7 +343,7 @@ func main() {
 
 	// 初始化抢兑调度器（用于定时抢兑任务）
 	exchangeScheduler := services.NewExchangeScheduler(
-		exchangeTaskRepo, exchangeAccountRepo, exchangeRecordRepo, configRepo, taskLogRepo, tokenManager,
+		exchangeTaskRepo, exchangeAccountRepo, exchangeRecordRepo, productRepo, configRepo, taskLogRepo, tokenManager,
 	)
 
 	// 启动抢兑调度器
