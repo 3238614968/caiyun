@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/url"
@@ -279,6 +280,12 @@ func (r *TaskListResponse) MessageText() string {
 	return normalizeMessageText(r.Msg, r.Message)
 }
 
+func (api *CaiyunAPI) ensureMarketDeviceID() {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	_ = api.client.EnsureShumeiDeviceID(ctx)
+}
+
 func (api *CaiyunAPI) buildMarketPageURL(sourceID string) string {
 	currentSourceID := strings.TrimSpace(sourceID)
 	if currentSourceID == "" {
@@ -327,6 +334,8 @@ func (api *CaiyunAPI) buildReceiveHeaders(sourceID string) map[string]string {
 }
 
 func (api *CaiyunAPI) prepareSignInCenterSession(forReceive bool) {
+	api.ensureMarketDeviceID()
+
 	pageURL := api.buildMarketPageURL("")
 	if resp, err := api.client.Get(pageURL, api.buildMarketHeaders(nil, pageURL)); err == nil && resp != nil {
 		_, _ = api.client.ReadResponseBody(resp)
@@ -452,6 +461,9 @@ func (api *CaiyunAPI) GetTaskList(marketName string) (*TaskListResponse, error) 
 	if marketName == "" {
 		marketName = "sign_in_3"
 	}
+	if strings.TrimSpace(marketName) == "sign_in_3" {
+		api.ensureMarketDeviceID()
+	}
 
 	urlStr := fmt.Sprintf("%s/signin/task/taskList?marketname=%s&clientVersion=%s",
 		MarketURL, url.QueryEscape(marketName), url.QueryEscape(MarketClientVersion))
@@ -502,6 +514,7 @@ func (api *CaiyunAPI) DoTaskWithMarket(marketName, key, taskID string) error {
 	baseURL := MarketURL
 	headers := api.buildMarketHeaders(nil, "")
 	if strings.TrimSpace(marketName) == "sign_in_3" {
+		api.ensureMarketDeviceID()
 		baseURL = MobileMarketURL
 		headers = api.buildReceiveHeaders("")
 	}
@@ -539,6 +552,7 @@ func (api *CaiyunAPI) ReceiveTaskRewardForMarket(marketName, taskID string) erro
 	baseURL := MarketURL
 	headers := api.buildMarketHeaders(nil, "")
 	if strings.TrimSpace(marketName) == "sign_in_3" {
+		api.ensureMarketDeviceID()
 		baseURL = MobileMarketURL
 		headers = api.buildReceiveHeaders("")
 	}
@@ -849,7 +863,7 @@ func (api *CaiyunAPI) ReceivePendingCloudRewards() (*CaiyunResponse, error) {
 	api.prepareSignInCenterSession(true)
 
 	resp, err := api.client.Get(
-		fmt.Sprintf("%s/signin/page/receive", MarketURL),
+		fmt.Sprintf("%s/signin/page/receiveV2?client=app", MobileMarketURL),
 		api.buildReceiveHeaders(""),
 	)
 	if err != nil {

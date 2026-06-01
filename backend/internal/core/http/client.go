@@ -2,7 +2,9 @@ package http
 
 import (
 	"bytes"
+	"caiyun/internal/core/shumei"
 	"caiyun/internal/utils"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -10,7 +12,9 @@ import (
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
+	"os"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -25,6 +29,11 @@ type Client struct {
 	clientInfo string
 	deviceInfo string
 	deviceID   string
+	deviceMu   sync.RWMutex
+	deviceOnce sync.Once
+	deviceErr  error
+	deviceLive bool
+	account    string
 	netType    string
 	channelSrc string
 	cookieJar  *cookiejar.Jar
@@ -43,7 +52,7 @@ func NewClient() *Client {
 			Timeout: 30 * time.Second,
 			Jar:     jar,
 		},
-		userAgent:  "Mozilla/5.0 (Linux; Android 10; MI 8 Build/QKQ1.190828.002; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/143.0.7499.146 Mobile Safari/537.36 MCloudApp/12.5.4 AppLanguage/zh-CN",
+		userAgent:  shumei.RandomMarketUserAgent(),
 		clientInfo: androidClientInfo,
 		deviceInfo: androidClientInfo,
 		deviceID:   deviceID,
@@ -81,6 +90,21 @@ func (c *Client) SetSSOToken(token string) {
 	c.ssoToken = strings.TrimSpace(token)
 }
 
+// SetMarketAccount 设置当前账号标识，用于写入新版签到页依赖的 .thumbcache_* 设备指纹 Cookie。
+func (c *Client) SetMarketAccount(account string) {
+	account = strings.TrimSpace(account)
+
+	c.deviceMu.Lock()
+	c.account = account
+	deviceID := c.deviceID
+	deviceLive := c.deviceLive
+	c.deviceMu.Unlock()
+
+	if deviceLive {
+		c.seedMarketDeviceCookie(deviceID, account)
+	}
+}
+
 // SetUserAgent 设置 User-Agent
 func (c *Client) SetUserAgent(ua string) {
 	c.userAgent = ua
@@ -109,7 +133,45 @@ func (c *Client) GetUserDomainID() string {
 
 // GetDeviceID 获取当前设备标识
 func (c *Client) GetDeviceID() string {
+	c.deviceMu.RLock()
+	defer c.deviceMu.RUnlock()
 	return c.deviceID
+}
+
+// SetDeviceID 设置当前设备标识。传入不带 B 前缀的数美 deviceId 时会自动补齐。
+func (c *Client) SetDeviceID(deviceID string) {
+	c.setDeviceID(deviceID, true)
+}
+
+// EnsureShumeiDeviceID 懒加载数美 deviceprofile/v4 deviceId。
+func (c *Client) EnsureShumeiDeviceID(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	c.deviceOnce.Do(func() {
+		var err error
+		if manualDeviceID := strings.TrimSpace(os.Getenv("CAIYUN_SHUMEI_DEVICE_ID")); manualDeviceID != "" {
+			c.setDeviceID(manualDeviceID, true)
+		} else {
+			var deviceID string
+			deviceID, err = shumei.FetchDeviceID(ctx, c.client, "")
+			if err == nil && deviceID != "" {
+				c.setDeviceID(deviceID, true)
+			}
+		}
+
+		c.deviceMu.Lock()
+		c.deviceErr = err
+		c.deviceMu.Unlock()
+	})
+
+	c.deviceMu.RLock()
+	defer c.deviceMu.RUnlock()
+	if c.deviceLive && c.deviceID != "" {
+		return nil
+	}
+	return c.deviceErr
 }
 
 // SetCookie 设置 Cookie
@@ -122,6 +184,65 @@ func (c *Client) SetCookie(name, value, domain string) {
 		Path:   "/",
 	}
 	c.cookieJar.SetCookies(u, []*http.Cookie{cookie})
+}
+
+func (c *Client) setDeviceID(deviceID string, deviceLive bool) {
+	deviceID = shumei.NormalizeDeviceID(deviceID)
+	if deviceID == "" {
+		return
+	}
+
+	c.deviceMu.Lock()
+	c.deviceID = deviceID
+	if deviceLive {
+		c.deviceLive = true
+	}
+	account := c.account
+	shouldSeedCookie := c.deviceLive
+	c.deviceMu.Unlock()
+
+	if shouldSeedCookie {
+		c.seedMarketDeviceCookie(deviceID, account)
+	}
+}
+
+func (c *Client) seedMarketDeviceCookie(deviceID, account string) {
+	cookieValue := shumei.CookieDeviceValue(deviceID)
+	if cookieValue == "" {
+		return
+	}
+
+	c.SetCookie(".thumbcache_caiyun", cookieValue, "m.mcloud.139.com")
+	if cookieName := marketDeviceCookieName(account); cookieName != "" {
+		c.SetCookie(cookieName, cookieValue, "m.mcloud.139.com")
+	}
+}
+
+func marketDeviceCookieName(account string) string {
+	account = strings.TrimSpace(account)
+	if account == "" {
+		return ""
+	}
+
+	var builder strings.Builder
+	for _, r := range account {
+		switch {
+		case r >= '0' && r <= '9':
+			builder.WriteRune(r)
+		case r >= 'a' && r <= 'z':
+			builder.WriteRune(r)
+		case r >= 'A' && r <= 'Z':
+			builder.WriteRune(r)
+		case r == '_' || r == '-':
+			builder.WriteRune(r)
+		default:
+			builder.WriteByte('_')
+		}
+	}
+	if builder.Len() == 0 {
+		return ""
+	}
+	return ".thumbcache_" + builder.String()
 }
 
 // GetCookies 获取指定域名的所有 Cookie
@@ -143,8 +264,8 @@ func (c *Client) buildHeaders(reqURL string, customHeaders map[string]string) ma
 	headers["x-NetType"] = c.netType
 	headers["x-requested-with"] = "com.chinamobile.mcloud"
 	headers["charset"] = "utf-8"
-	if c.deviceID != "" {
-		headers["deviceId"] = c.deviceID
+	if deviceID := c.GetDeviceID(); deviceID != "" {
+		headers["deviceId"] = deviceID
 	}
 
 	// 解析 URL

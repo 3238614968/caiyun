@@ -82,6 +82,7 @@ func syncProductsFromCloud(productRepo *repository.ProductRepository, accountRep
 	}
 
 	client := corehttp.NewClient()
+	client.SetMarketAccount(account.Phone)
 	client.SetAuth(authStr)
 	if ssoToken != "" {
 		client.SetSSOToken(ssoToken)

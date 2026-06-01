@@ -99,6 +99,7 @@ func NewTaskRunner(account *models.Account, storage tasks.Storage, authMgr *auth
 	// account.Auth 存储的是 "Basic <base64>" 或纯 "<base64>" 格式
 	// SetAuth 方法会自动移除 "Basic " 前缀，只保存 base64 部分
 	// 清理 auth 中的非法字符（换行、回车、非ASCII等），防止 net/http: invalid header field value
+	client.SetMarketAccount(account.Phone)
 	authStr := sanitizeHeaderValue(account.Auth)
 	if authStr != "" {
 		client.SetAuth(authStr)
@@ -168,6 +169,7 @@ func (s *TaskService) NewTaskRunnerWithRetry(account *models.Account, storage ta
 	}
 
 	// 设置认证信息
+	client.SetMarketAccount(account.Phone)
 	authStr := sanitizeHeaderValue(account.Auth)
 	if authStr != "" {
 		client.SetAuth(authStr)

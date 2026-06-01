@@ -9,6 +9,8 @@ import (
 func (api *CaiyunAPI) GetProductList() (*CaiyunResponse, error) {
 	const productListURL = "https://m.mcloud.139.com/market/signin/page/exchangeList?client=app&clientVersion=12.5.3"
 
+	api.ensureMarketDeviceID()
+
 	resp, err := api.client.Get(productListURL, map[string]string{
 		"showloading":     "true",
 		"Accept-Encoding": "gzip, deflate",
