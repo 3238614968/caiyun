@@ -144,7 +144,7 @@ const handleTaskComplete = (msg: WsMessage) => {
   }
 }
 
-const handleTaskSummary = (msg: WsMessage) => {
+const handleTaskSummary = () => {
   // 汇总到达时，减少pending
   if (queueStatus.value.pending_tasks > 0) {
     queueStatus.value.pending_tasks--

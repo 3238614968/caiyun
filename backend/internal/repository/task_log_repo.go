@@ -214,6 +214,17 @@ func (r *TaskLogRepository) CountByAccountIDAndDateRange(accountID uint, startDa
 		Count(count)
 }
 
+// CountByAccountIDTaskTypesAndDateRange 统计指定账号在日期范围内指定任务类型的日志数量。
+func (r *TaskLogRepository) CountByAccountIDTaskTypesAndDateRange(accountID uint, taskTypes []string, startDate, endDate time.Time, count *int64) {
+	if len(taskTypes) == 0 {
+		*count = 0
+		return
+	}
+	r.db.Model(&models.TaskLog{}).
+		Where("account_id = ? AND task_type IN ? AND created_at >= ? AND created_at < ?", accountID, taskTypes, startDate, endDate).
+		Count(count)
+}
+
 // GetCloudGainedByAccountAndRange 获取指定账号在日期范围内获得的云朵数
 func (r *TaskLogRepository) GetCloudGainedByAccountAndRange(accountID uint, start, end time.Time) int {
 	var total int

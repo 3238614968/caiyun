@@ -90,7 +90,6 @@ import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { Bell, CircleCheck, Warning, InfoFilled, Close } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { wsClient, type WsMessage } from '../api/websocket'
-import { getTaskTypeName } from '../utils/task-types'
 
 interface Notification {
   id: string
@@ -161,29 +160,6 @@ const handleNotificationClick = (notification: Notification) => {
 // 查看全部通知
 const viewAllNotifications = () => {
   historyVisible.value = true
-}
-
-const handleTaskComplete = (msg: WsMessage) => {
-  const data = msg.data
-  const level = data.status === 'success' ? 'success' : data.status === 'failed' ? 'error' : 'info'
-  const taskName = getTaskTypeName(data.task_type)
-  const phone = data.phone ? ` [${data.phone}]` : ''
-
-  const notification: Notification = {
-    id: `${Date.now()}_${data.account_id}_${data.task_type}`,
-    level: level as Notification['level'],
-    title: `${taskName}${phone}`,
-    message: data.message || (data.status === 'success' ? '执行成功' : '执行失败'),
-    timestamp: new Date().toISOString(),
-    read: false,
-    account_id: data.account_id,
-    task_type: data.task_type
-  }
-
-  notifications.value.unshift(notification)
-  if (notifications.value.length > 50) {
-    notifications.value = notifications.value.slice(0, 50)
-  }
 }
 
 const handleTaskSummary = (msg: WsMessage) => {

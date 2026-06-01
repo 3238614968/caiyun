@@ -63,16 +63,16 @@
       <!-- 统计卡片 -->
       <el-row :gutter="20" class="mb-4 mt-4">
         <el-col :span="6">
-          <stat-card title="总记录数" :value="total" icon="Document" color="#409EFF" />
+          <stat-card label="总记录数" :value="total" icon="Document" color="#409EFF" />
         </el-col>
         <el-col :span="6">
-          <stat-card title="成功次数" :value="stats.success" icon="Success" color="#67C23A" />
+          <stat-card label="成功次数" :value="stats.success" icon="Success" color="#67C23A" />
         </el-col>
         <el-col :span="6">
-          <stat-card title="失败次数" :value="stats.failed" icon="Error" color="#F56C6C" />
+          <stat-card label="失败次数" :value="stats.failed" icon="Error" color="#F56C6C" />
         </el-col>
         <el-col :span="6">
-          <stat-card title="成功率" :value="successRate + '%'" icon="PieChart" color="#E6A23C" />
+          <stat-card label="成功率" :value="successRate + '%'" icon="PieChart" color="#E6A23C" />
         </el-col>
       </el-row>
 

@@ -5,6 +5,11 @@ export interface TaskLog {
   id: number
   user_id: number
   account_id: number
+  account?: {
+    id: number
+    phone?: string
+    remark?: string
+  }
   task_type: string
   status: string
   message: string

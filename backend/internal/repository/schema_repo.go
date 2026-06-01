@@ -17,11 +17,15 @@ func NewSchemaRepository(db *gorm.DB) *SchemaRepository {
 }
 
 func (r *SchemaRepository) ValidateCriticalSchema() error {
+	if err := r.EnsureUserSessionSchema(); err != nil {
+		return err
+	}
 	if err := r.EnsureTaskConfigSchema(); err != nil {
 		return err
 	}
 
 	checks := map[string][]string{
+		"users":             {"token_version"},
 		"task_configs":      {"task_type", "task_name", "description", "is_enabled", "sort_order", "run_in_batch", "updated_at", "deleted_at"},
 		"accounts":          {"is_active", "jwt_error_count"},
 		"products":          {"prize_id", "prize_name", "image_url", "stock_status", "is_active", "is_deleted"},
@@ -36,6 +40,18 @@ func (r *SchemaRepository) ValidateCriticalSchema() error {
 	}
 
 	return nil
+}
+
+func (r *SchemaRepository) EnsureUserSessionSchema() error {
+	exists, err := r.tableExists("users")
+	if err != nil {
+		return err
+	}
+	if !exists {
+		return fmt.Errorf("缺少 users 表，请先执行 backend/migrations/init.sql")
+	}
+
+	return r.addColumnIfMissing("users", "token_version", "INT NOT NULL DEFAULT 0 COMMENT 'JWT会话版本，用于吊销旧会话' AFTER `role`")
 }
 
 func (r *SchemaRepository) EnsureTaskConfigSchema() error {

@@ -1,10 +1,10 @@
 package sms
 
 import (
+	"caiyun/internal/utils"
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log"
 	"net/http"
 	"net/url"
@@ -16,6 +16,7 @@ import (
 const (
 	defaultSMSAPIBaseURL = "https://ydyp.apisky.cn"
 	smsAPITimeout        = 30 * time.Second
+	maxSMSResponseBytes  = 1 << 20 // 1 MiB
 )
 
 // SmsApiResponse 表示短信服务接口响应结构。
@@ -114,14 +115,13 @@ func GetCodeStatus(phone string) (*CodeStatus, error) {
 	}
 	defer resp.Body.Close()
 
-	respBody, err := io.ReadAll(resp.Body)
+	respBody, err := utils.ReadLimitedBody(resp.Body, maxSMSResponseBytes)
 	if err != nil {
 		return nil, fmt.Errorf("读取响应失败: %s", err.Error())
 	}
 
-	log.Printf("[SMS] 查询状态响应 phone=%s status=%d body=%s", phone, resp.StatusCode, string(respBody))
-
 	if resp.StatusCode != http.StatusOK {
+		log.Printf("[SMS] 查询状态响应异常 phone=%s status=%d body_bytes=%d", maskPhone(phone), resp.StatusCode, len(respBody))
 		return nil, fmt.Errorf("HTTP 状态码异常: %d", resp.StatusCode)
 	}
 
@@ -129,6 +129,8 @@ func GetCodeStatus(phone string) (*CodeStatus, error) {
 	if err := json.Unmarshal(respBody, &apiResp); err != nil {
 		return nil, fmt.Errorf("解析响应失败: %s", err.Error())
 	}
+	log.Printf("[SMS] 查询状态响应 phone=%s status=%d code=%d message=%s data_keys=%s",
+		maskPhone(phone), resp.StatusCode, apiResp.Code, apiResp.Message, responseDataKeys(apiResp.Data))
 	if apiResp.Code != 0 {
 		return nil, fmt.Errorf("%s", apiResp.Message)
 	}
@@ -178,14 +180,13 @@ func postJSON(path string, payload map[string]string, phone string) (*SmsApiResp
 	}
 	defer resp.Body.Close()
 
-	respBody, err := io.ReadAll(resp.Body)
+	respBody, err := utils.ReadLimitedBody(resp.Body, maxSMSResponseBytes)
 	if err != nil {
 		return nil, fmt.Errorf("读取响应失败: %s", err.Error())
 	}
 
-	log.Printf("[SMS] 响应 phone=%s path=%s status=%d body=%s", phone, path, resp.StatusCode, string(respBody))
-
 	if resp.StatusCode != http.StatusOK {
+		log.Printf("[SMS] 响应异常 phone=%s path=%s status=%d body_bytes=%d", maskPhone(phone), path, resp.StatusCode, len(respBody))
 		return nil, fmt.Errorf("HTTP 状态码异常: %d", resp.StatusCode)
 	}
 
@@ -193,6 +194,8 @@ func postJSON(path string, payload map[string]string, phone string) (*SmsApiResp
 	if err := json.Unmarshal(respBody, &apiResp); err != nil {
 		return nil, fmt.Errorf("解析响应失败: %s", err.Error())
 	}
+	log.Printf("[SMS] 响应 phone=%s path=%s status=%d code=%d message=%s data_keys=%s",
+		maskPhone(phone), path, resp.StatusCode, apiResp.Code, apiResp.Message, responseDataKeys(apiResp.Data))
 	if apiResp.Code != 0 {
 		return nil, fmt.Errorf("%s", apiResp.Message)
 	}
@@ -235,4 +238,23 @@ func applyCommonHeaders(req *http.Request) {
 func isSMSTLSSkipVerifyEnabled() bool {
 	value := strings.TrimSpace(strings.ToLower(os.Getenv("CAIYUN_SMS_INSECURE_SKIP_VERIFY")))
 	return value == "1" || value == "true" || value == "yes"
+}
+
+func maskPhone(phone string) string {
+	phone = strings.TrimSpace(phone)
+	if len(phone) < 7 {
+		return "***"
+	}
+	return phone[:3] + "****" + phone[len(phone)-4:]
+}
+
+func responseDataKeys(data map[string]interface{}) string {
+	if len(data) == 0 {
+		return ""
+	}
+	keys := make([]string, 0, len(data))
+	for key := range data {
+		keys = append(keys, key)
+	}
+	return strings.Join(keys, ",")
 }

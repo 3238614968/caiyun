@@ -188,7 +188,7 @@ func (s *AuthService) Register(req *RegisterRequest) (*AuthResponse, error) {
 	}
 
 	// 生成JWT Token
-	token, err := s.jwtMgr.GenerateToken(user.ID, user.Username, user.Role, s.jwtExpiry)
+	token, err := s.jwtMgr.GenerateToken(user.ID, user.Username, user.Role, user.TokenVersion, s.jwtExpiry)
 	if err != nil {
 		return nil, err
 	}
@@ -274,7 +274,7 @@ func (s *AuthService) Login(req *LoginRequest) (*AuthResponse, error) {
 	}
 
 	// 生成JWT Token
-	token, err := s.jwtMgr.GenerateToken(user.ID, user.Username, user.Role, s.jwtExpiry)
+	token, err := s.jwtMgr.GenerateToken(user.ID, user.Username, user.Role, user.TokenVersion, s.jwtExpiry)
 	if err != nil {
 		return nil, err
 	}
@@ -298,7 +298,7 @@ func (s *AuthService) RefreshToken(userID uint) (*AuthResponse, error) {
 	}
 
 	// 生成新的JWT Token
-	token, err := s.jwtMgr.GenerateToken(user.ID, user.Username, user.Role, s.jwtExpiry)
+	token, err := s.jwtMgr.GenerateToken(user.ID, user.Username, user.Role, user.TokenVersion, s.jwtExpiry)
 	if err != nil {
 		return nil, err
 	}
@@ -372,8 +372,7 @@ func (s *AuthService) ChangePassword(userID uint, oldPassword, newPassword strin
 		return err
 	}
 
-	user.Password = string(hashedPassword)
-	return s.userRepo.Update(user)
+	return s.userRepo.UpdatePasswordAndRevokeSessions(user.ID, string(hashedPassword))
 }
 
 // SendPasswordResetCode 向用户注册邮箱发送密码重置验证码。
@@ -438,8 +437,7 @@ func (s *AuthService) ResetPasswordWithCode(username, email, code, newPassword s
 	if err != nil {
 		return err
 	}
-	user.Password = string(hashedPassword)
-	if err := s.userRepo.Update(user); err != nil {
+	if err := s.userRepo.UpdatePasswordAndRevokeSessions(user.ID, string(hashedPassword)); err != nil {
 		return err
 	}
 

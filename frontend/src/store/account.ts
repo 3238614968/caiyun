@@ -26,8 +26,6 @@ export const useAccountStore = defineStore('account', () => {
       const data = await getAccounts(page, pageSize, phone)
       accounts.value = data.accounts
       return data
-    } catch (error) {
-      throw error
     } finally {
       loading.value = false
     }
@@ -40,8 +38,6 @@ export const useAccountStore = defineStore('account', () => {
       const account = await getAccount(id)
       currentAccount.value = account
       return account
-    } catch (error) {
-      throw error
     } finally {
       loading.value = false
     }
@@ -54,8 +50,6 @@ export const useAccountStore = defineStore('account', () => {
       const account = await createAccount(data)
       accounts.value.push(account)
       return account
-    } catch (error) {
-      throw error
     } finally {
       loading.value = false
     }
@@ -74,8 +68,6 @@ export const useAccountStore = defineStore('account', () => {
         currentAccount.value = account
       }
       return account
-    } catch (error) {
-      throw error
     } finally {
       loading.value = false
     }
@@ -90,8 +82,6 @@ export const useAccountStore = defineStore('account', () => {
       if (currentAccount.value?.id === id) {
         currentAccount.value = null
       }
-    } catch (error) {
-      throw error
     } finally {
       loading.value = false
     }
@@ -109,8 +99,6 @@ export const useAccountStore = defineStore('account', () => {
       if (currentAccount.value?.id === id) {
         currentAccount.value.is_active = isActive
       }
-    } catch (error) {
-      throw error
     } finally {
       loading.value = false
     }
@@ -129,8 +117,6 @@ export const useAccountStore = defineStore('account', () => {
         currentAccount.value = account
       }
       return account
-    } catch (error) {
-      throw error
     } finally {
       loading.value = false
     }
@@ -141,8 +127,6 @@ export const useAccountStore = defineStore('account', () => {
     loading.value = true
     try {
       await triggerAccountTask(id)
-    } catch (error) {
-      throw error
     } finally {
       loading.value = false
     }

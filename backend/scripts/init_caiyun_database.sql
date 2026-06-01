@@ -23,6 +23,7 @@ CREATE TABLE IF NOT EXISTS `users` (
     `password` VARCHAR(255) NOT NULL COMMENT 'bcrypt加密密码',
     `email` VARCHAR(100) DEFAULT NULL COMMENT '邮箱',
     `role` VARCHAR(10) DEFAULT 'user' COMMENT '角色: user-普通用户, admin-管理员',
+    `token_version` INT NOT NULL DEFAULT 0 COMMENT 'JWT会话版本，用于吊销旧会话',
     `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
     `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
     `deleted_at` TIMESTAMP NULL DEFAULT NULL COMMENT '软删除时间',
@@ -56,6 +57,20 @@ SET @preparedStatement = (SELECT IF(
        AND COLUMN_NAME = @columnname) > 0,
     'SELECT 1',
     CONCAT('ALTER TABLE `', @tablename, '` ADD COLUMN `', @columnname, '` VARCHAR(10) DEFAULT ''user'' COMMENT ''角色: user-普通用户, admin-管理员'' AFTER `email`')
+));
+PREPARE alterIfNotExists FROM @preparedStatement;
+EXECUTE alterIfNotExists;
+DEALLOCATE PREPARE alterIfNotExists;
+
+-- 添加token_version字段
+SET @columnname = 'token_version';
+SET @preparedStatement = (SELECT IF(
+    (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS
+     WHERE TABLE_SCHEMA = @dbname
+       AND TABLE_NAME = @tablename
+       AND COLUMN_NAME = @columnname) > 0,
+    'SELECT 1',
+    CONCAT('ALTER TABLE `', @tablename, '` ADD COLUMN `', @columnname, '` INT NOT NULL DEFAULT 0 COMMENT ''JWT会话版本，用于吊销旧会话'' AFTER `role`')
 ));
 PREPARE alterIfNotExists FROM @preparedStatement;
 EXECUTE alterIfNotExists;

@@ -65,6 +65,7 @@ data:
         `password` VARCHAR(255) NOT NULL COMMENT 'bcrypt加密密码',
         `email` VARCHAR(100) DEFAULT NULL COMMENT '邮箱',
         `role` VARCHAR(10) DEFAULT 'user' COMMENT '角色: user-普通用户, admin-管理员',
+        `token_version` INT NOT NULL DEFAULT 0 COMMENT 'JWT会话版本，用于吊销旧会话',
         `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
         `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
         `deleted_at` TIMESTAMP NULL DEFAULT NULL COMMENT '软删除时间',
@@ -98,6 +99,20 @@ data:
            AND COLUMN_NAME = @columnname) > 0,
         'SELECT 1',
         CONCAT('ALTER TABLE `', @tablename, '` ADD COLUMN `', @columnname, '` VARCHAR(10) DEFAULT ''user'' COMMENT ''角色: user-普通用户, admin-管理员'' AFTER `email`')
+    ));
+    PREPARE alterIfNotExists FROM @preparedStatement;
+    EXECUTE alterIfNotExists;
+    DEALLOCATE PREPARE alterIfNotExists;
+
+    -- 添加token_version字段
+    SET @columnname = 'token_version';
+    SET @preparedStatement = (SELECT IF(
+        (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS
+         WHERE TABLE_SCHEMA = @dbname
+           AND TABLE_NAME = @tablename
+           AND COLUMN_NAME = @columnname) > 0,
+        'SELECT 1',
+        CONCAT('ALTER TABLE `', @tablename, '` ADD COLUMN `', @columnname, '` INT NOT NULL DEFAULT 0 COMMENT ''JWT会话版本，用于吊销旧会话'' AFTER `role`')
     ));
     PREPARE alterIfNotExists FROM @preparedStatement;
     EXECUTE alterIfNotExists;
@@ -1264,12 +1279,25 @@ spec:
       labels:
         app: backend-api
     spec:
+      securityContext:
+        runAsUser: 100
+        runAsGroup: 100
+        fsGroup: 100
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: api
-          image: caiyun-api:latest
+          image: caiyun-api:2.1.0
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8080
+          securityContext:
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
           envFrom:
             - configMapRef:
                 name: caiyun-config
@@ -1294,12 +1322,35 @@ spec:
                 secretKeyRef:
                   name: caiyun-secrets
                   key: smtp-password
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
           readinessProbe:
             httpGet:
               path: /health
               port: 8080
             initialDelaySeconds: 10
             periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 30
+            periodSeconds: 20
+            timeoutSeconds: 3
+            failureThreshold: 3
+          volumeMounts:
+            - name: api-tmp
+              mountPath: /tmp
+      volumes:
+        - name: api-tmp
+          emptyDir: {}
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -1316,12 +1367,25 @@ spec:
       labels:
         app: backend-worker
     spec:
+      securityContext:
+        runAsUser: 100
+        runAsGroup: 100
+        fsGroup: 100
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: worker
-          image: caiyun-worker:latest
+          image: caiyun-worker:2.1.0
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8081
+          securityContext:
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
           envFrom:
             - configMapRef:
                 name: caiyun-config
@@ -1341,6 +1405,35 @@ spec:
                 secretKeyRef:
                   name: caiyun-secrets
                   key: worker-monitor-token
+          resources:
+            requests:
+              cpu: 250m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8081
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8081
+            initialDelaySeconds: 30
+            periodSeconds: 20
+            timeoutSeconds: 3
+            failureThreshold: 3
+          volumeMounts:
+            - name: worker-tmp
+              mountPath: /tmp
+      volumes:
+        - name: worker-tmp
+          emptyDir: {}
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -1357,12 +1450,66 @@ spec:
       labels:
         app: frontend
     spec:
+      securityContext:
+        runAsUser: 101
+        runAsGroup: 101
+        fsGroup: 101
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: frontend
-          image: caiyun-frontend:latest
+          image: caiyun-frontend:2.1.0
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8080
+          securityContext:
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 250m
+              memory: 256Mi
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 8080
+            initialDelaySeconds: 20
+            periodSeconds: 20
+            timeoutSeconds: 3
+            failureThreshold: 3
+          volumeMounts:
+            - name: nginx-cache
+              mountPath: /var/cache/nginx
+            - name: nginx-run
+              mountPath: /var/run
+            - name: nginx-log
+              mountPath: /var/log/nginx
+            - name: nginx-tmp
+              mountPath: /tmp
+      volumes:
+        - name: nginx-cache
+          emptyDir: {}
+        - name: nginx-run
+          emptyDir: {}
+        - name: nginx-log
+          emptyDir: {}
+        - name: nginx-tmp
+          emptyDir: {}
 ---
 apiVersion: v1
 kind: Service

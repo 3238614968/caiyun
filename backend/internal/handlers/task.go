@@ -266,8 +266,9 @@ func (h *TaskHandler) TriggerAllTasks(c *gin.Context) {
 
 	// 过滤今日未执行的账号
 	var toExecute []*models.Account
+	dailyTaskTypes := h.taskService.DailyTaskTypes()
 	for _, account := range accounts {
-		if !h.taskService.HasExecutedToday(account.ID) {
+		if !h.taskService.HasExecutedTodayForTaskTypes(account.ID, dailyTaskTypes) {
 			toExecute = append(toExecute, account)
 		}
 	}

@@ -364,7 +364,13 @@ func (c *Config) Reload(envFile string) error {
 		return err
 	}
 
-	*c = *newCfg
+	c.Server = newCfg.Server
+	c.Database = newCfg.Database
+	c.Redis = newCfg.Redis
+	c.JWT = newCfg.JWT
+	c.Task = newCfg.Task
+	c.Exchange = newCfg.Exchange
+	c.Log = newCfg.Log
 	return nil
 }
 

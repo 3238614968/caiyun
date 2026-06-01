@@ -29,8 +29,6 @@ export const useStatsStore = defineStore('stats', () => {
       const data = await getDashboard()
       dashboard.value = data
       return data
-    } catch (error) {
-      throw error
     } finally {
       loading.value = false
     }
@@ -43,8 +41,6 @@ export const useStatsStore = defineStore('stats', () => {
       const data = await getTaskLogs(accountId, page, pageSize)
       taskLogs.value = data.task_logs
       return data
-    } catch (error) {
-      throw error
     } finally {
       loading.value = false
     }
@@ -57,8 +53,6 @@ export const useStatsStore = defineStore('stats', () => {
       const data = await getCloudStats(accountId, page, pageSize)
       cloudStats.value = data.cloud_stats
       return data
-    } catch (error) {
-      throw error
     } finally {
       loading.value = false
     }
@@ -71,8 +65,6 @@ export const useStatsStore = defineStore('stats', () => {
       const data = await getTrendData(days)
       trendData.value = data.trend_data
       return data.trend_data
-    } catch (error) {
-      throw error
     } finally {
       loading.value = false
     }
@@ -84,8 +76,6 @@ export const useStatsStore = defineStore('stats', () => {
     try {
       const result = await triggerAllTasks()
       return result
-    } catch (error) {
-      throw error
     } finally {
       loading.value = false
     }
@@ -97,8 +87,6 @@ export const useStatsStore = defineStore('stats', () => {
     try {
       const result = await calculateStats()
       return result
-    } catch (error) {
-      throw error
     } finally {
       loading.value = false
     }
@@ -111,8 +99,6 @@ export const useStatsStore = defineStore('stats', () => {
       const data = await getTotalCloudCount()
       totalCloud.value = data.total_cloud
       return data.total_cloud
-    } catch (error) {
-      throw error
     } finally {
       loading.value = false
     }

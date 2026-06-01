@@ -167,11 +167,12 @@ func DefaultRateLimitConfig() *RateLimitConfig {
 	}
 }
 
-// AdvancedRateLimitMiddleware 高级限流中间件（支持不同API不同限流策略）
+// AdvancedRateLimitMiddleware 高级限流中间件（认证前使用）。
+// 认证前只执行全局 IP 限流和显式 IP 维度接口限流；需要用户维度的接口由
+// AuthenticatedRateLimitMiddleware 在认证后处理，避免 user_id 尚未写入上下文时退化为 IP 限流。
 func AdvancedRateLimitMiddleware(config *RateLimitConfig) gin.HandlerFunc {
 	// 创建多个限流器
 	globalLimiter := NewRateLimiter(config.GlobalRate, config.GlobalBurst)
-	userLimiter := NewRateLimiter(config.UserRate, config.UserBurst)
 	apiLimiters := make(map[string]*RateLimiter)
 
 	for path, rateConfig := range config.APIRates {
@@ -192,23 +193,14 @@ func AdvancedRateLimitMiddleware(config *RateLimitConfig) gin.HandlerFunc {
 			return
 		}
 
-		// 2. 特定API限流
+		// 2. 认证前仅处理 IP 维度的特定 API 限流。
 		if apiLimit, exists := config.APIRates[path]; exists {
-			limiter := apiLimiters[path]
-			var key string
-
 			if apiLimit.ByUser {
-				// 基于用户限流
-				if userID, exists := c.Get("user_id"); exists {
-					key = fmt.Sprintf("user_%d_%s", userID.(uint), path)
-				} else {
-					// 未登录用户使用IP
-					key = fmt.Sprintf("ip_%s_%s", clientIP, path)
-				}
-			} else {
-				// 基于IP限流
-				key = fmt.Sprintf("ip_%s_%s", clientIP, path)
+				c.Next()
+				return
 			}
+			limiter := apiLimiters[path]
+			key := fmt.Sprintf("ip_%s_%s", clientIP, path)
 
 			if !limiter.Allow(key) {
 				c.JSON(http.StatusTooManyRequests, gin.H{
@@ -219,19 +211,56 @@ func AdvancedRateLimitMiddleware(config *RateLimitConfig) gin.HandlerFunc {
 				c.Abort()
 				return
 			}
-		} else {
-			// 3. 默认用户限流（针对已登录用户）
-			if userID, exists := c.Get("user_id"); exists {
-				key := fmt.Sprintf("user_default_%d", userID.(uint))
-				if !userLimiter.Allow(key) {
-					c.JSON(http.StatusTooManyRequests, gin.H{
-						"error": "您的请求过于频繁，请稍后再试",
-						"code":  "USER_RATE_LIMIT",
-					})
-					c.Abort()
-					return
-				}
+		}
+
+		c.Next()
+	}
+}
+
+// AuthenticatedRateLimitMiddleware 认证后用户维度限流中间件。
+func AuthenticatedRateLimitMiddleware(config *RateLimitConfig) gin.HandlerFunc {
+	userLimiter := NewRateLimiter(config.UserRate, config.UserBurst)
+	apiLimiters := make(map[string]*RateLimiter)
+
+	for path, rateConfig := range config.APIRates {
+		if rateConfig.ByUser {
+			apiLimiters[path] = NewRateLimiter(rateConfig.Rate, rateConfig.Burst)
+		}
+	}
+
+	return func(c *gin.Context) {
+		path := c.Request.URL.Path
+		userID, exists := c.Get("user_id")
+		if !exists {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "未授权"})
+			c.Abort()
+			return
+		}
+
+		if apiLimit, exists := config.APIRates[path]; exists && apiLimit.ByUser {
+			limiter := apiLimiters[path]
+			key := fmt.Sprintf("user_%d_%s", userID.(uint), path)
+			if !limiter.Allow(key) {
+				c.JSON(http.StatusTooManyRequests, gin.H{
+					"error": "该接口请求过于频繁，请稍后再试",
+					"code":  "API_RATE_LIMIT",
+					"path":  path,
+				})
+				c.Abort()
+				return
 			}
+			c.Next()
+			return
+		}
+
+		key := fmt.Sprintf("user_default_%d", userID.(uint))
+		if !userLimiter.Allow(key) {
+			c.JSON(http.StatusTooManyRequests, gin.H{
+				"error": "您的请求过于频繁，请稍后再试",
+				"code":  "USER_RATE_LIMIT",
+			})
+			c.Abort()
+			return
 		}
 
 		c.Next()
@@ -289,6 +318,11 @@ func AuthMiddlewareWithUser(jwtManager *jwt.Manager, userRepo *repository.UserRe
 			user, err := userRepo.FindByID(claims.UserID)
 			if err != nil {
 				c.JSON(http.StatusUnauthorized, gin.H{"error": "用户不存在或已失效"})
+				c.Abort()
+				return
+			}
+			if claims.TokenVersion != user.TokenVersion {
+				c.JSON(http.StatusUnauthorized, gin.H{"error": "会话已失效，请重新登录"})
 				c.Abort()
 				return
 			}

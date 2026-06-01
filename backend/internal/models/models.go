@@ -8,15 +8,16 @@ import (
 
 // User 用户模型
 type User struct {
-	ID        uint           `gorm:"primarykey" json:"id"`
-	Username  string         `gorm:"uniqueIndex;size:50;not null" json:"username"`
-	Password  string         `gorm:"size:255;not null" json:"-"`
-	Email     string         `gorm:"size:100" json:"email"`
-	Role      string         `gorm:"default:'user';size:10" json:"role"` // user, admin
-	CreatedAt time.Time      `json:"created_at"`
-	UpdatedAt time.Time      `json:"updated_at"`
-	DeletedAt gorm.DeletedAt `gorm:"index" json:"-"`
-	Accounts  []Account      `gorm:"foreignKey:UserID" json:"accounts,omitempty"`
+	ID           uint           `gorm:"primarykey" json:"id"`
+	Username     string         `gorm:"uniqueIndex;size:50;not null" json:"username"`
+	Password     string         `gorm:"size:255;not null" json:"-"`
+	Email        string         `gorm:"size:100" json:"email"`
+	Role         string         `gorm:"default:'user';size:10" json:"role"` // user, admin
+	TokenVersion int            `gorm:"not null;default:0" json:"-"`
+	CreatedAt    time.Time      `json:"created_at"`
+	UpdatedAt    time.Time      `json:"updated_at"`
+	DeletedAt    gorm.DeletedAt `gorm:"index" json:"-"`
+	Accounts     []Account      `gorm:"foreignKey:UserID" json:"accounts,omitempty"`
 }
 
 // Account 云盘账号模型

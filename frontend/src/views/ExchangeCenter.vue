@@ -116,7 +116,7 @@
                       :src="getProductImageUrl(product)" 
                       :alt="product.prize_name"
                       class="product-img"
-                      @error="$event.target.style.display='none'"
+                      @error="handleProductImageError"
                     />
                     <div class="product-image-fallback">
                       <el-icon :size="isMobile ? 36 : 48" color="#409EFF"><Present /></el-icon>
@@ -598,6 +598,13 @@ const {
   loadLocalImageMap,
   getProductImageUrl
 } = useExchangeMedia()
+
+const handleProductImageError = (event: Event) => {
+  const image = event.target as HTMLImageElement | null
+  if (image) {
+    image.style.display = 'none'
+  }
+}
 
 const {
   taskDialogVisible,

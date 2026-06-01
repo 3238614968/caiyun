@@ -20,7 +20,7 @@
 - [目录结构](#目录结构)
 - [快速开始](#快速开始)
 - [构建与部署](#构建与部署)
-- [文档索引](#文档索引)
+- [安全与质量检查](#安全与质量检查)
 - [运行机制](#运行机制)
 - [仓库说明](#仓库说明)
 - [Roadmap](#roadmap)
@@ -53,6 +53,7 @@
 - 登录、注册、HttpOnly Cookie 会话
 - 用户可通过“用户名 + 注册邮箱 + 邮箱验证码”自助重置密码
 - 管理员可在后台为用户重置密码，用于未绑定邮箱账号的兜底恢复
+- 密码变更会递增会话版本，旧 JWT / Cookie 会话会立即失效
 
 ### 2) 账号管理
 
@@ -132,6 +133,9 @@
   - 密码找回改为邮箱验证码流程，验证码存入 Redis 并设置 TTL
   - 发送验证码、重置密码的错误响应做统一处理，降低账号邮箱枚举风险
   - Cookie 会话场景补充 CSRF 校验，登录态异常时前端会同步清理本地状态
+  - 密码重置、管理员重置密码会递增会话版本，已签发 JWT 立即失效
+  - 用户维度限流移动到认证后执行，避免退化为 IP 限流
+  - 外部 HTTP 响应体读取增加大小限制，并避免短信认证响应明文落日志
 - **优化首页公告与统计展示**
   - 首页展示公告列表，不再新增用户侧公告菜单
   - 仅置顶弹窗公告会弹出，其余公告仅展示在列表中
@@ -147,6 +151,8 @@
   - Docker Compose 使用 Redis 密码、独立数据库应用用户，并补充 Grafana 示例服务
   - 新增 K8s 示例清单，内置 MySQL 初始化 SQL ConfigMap 与 MySQL PVC
   - API / Worker / 前端容器以非 root 用户运行
+  - Nginx 补充安全响应头与 HTTP 到 HTTPS 跳转
+  - K8s 应用镜像固定版本，并补充 securityContext、资源限制与健康探针
 - **统一默认调度配置**
   - `backend/configs/.env.example` 中的 `TASK_SCHEDULE` 已调整为 `0 8 * * *`
   - 与 Worker 内部默认回退值保持一致，避免环境配置漂移
@@ -395,8 +401,9 @@ kubectl apply -f k8s/caiyun.yaml
 
 - `k8s/caiyun.yaml` 已内置 `caiyun-mysql-init-sql` ConfigMap，首次启动 MySQL 空 PVC 时会自动执行初始化 SQL。
 - MySQL 使用 `mysql-data` PVC，请根据集群 StorageClass 调整容量、回收策略和备份方案。
-- 示例镜像名为 `caiyun-api:latest`、`caiyun-worker:latest`、`caiyun-frontend:latest`，实际部署前请替换为你的镜像仓库地址。
+- 示例镜像名固定为 `caiyun-api:2.1.0`、`caiyun-worker:2.1.0`、`caiyun-frontend:2.1.0`，实际部署前请替换为你的镜像仓库地址、不可变版本号或镜像 digest。
 - `ALLOWED_ORIGINS` 默认是占位域名，请改为浏览器实际访问前端的完整 Origin。
+- API、Worker、Frontend 示例已配置非 root、只读根文件系统、能力收敛、资源 requests/limits 和健康探针；如镜像运行用户变化，请同步调整 `securityContext`。
 - 如果使用外部 MySQL，可移除清单中的 MySQL Deployment/PVC/Service，并确保外部库已执行初始化 SQL。
 
 ### 宝塔面板部署
@@ -423,12 +430,31 @@ scp -r dist root@server:/www/wwwroot/caiyun/frontend/
 
 ---
 
-## 文档索引
+## 安全与质量检查
 
-- API 文档：[`backend/docs/api.md`](backend/docs/api.md)
-- 兑换接口说明：[`backend/docs/exchange_api.md`](backend/docs/exchange_api.md)
-- 宝塔部署文档：[`backend/docs/DEPLOY_BT_PANEL.md`](backend/docs/DEPLOY_BT_PANEL.md)
-- 历史改进记录：[`backend/docs/IMPROVEMENTS.md`](backend/docs/IMPROVEMENTS.md)
+提交或部署前建议执行以下本地检查：
+
+```bash
+# 后端
+cd backend
+go test ./...
+go vet ./...
+
+# 前端
+cd ../frontend
+npm run typecheck
+npm run lint -- --quiet
+npm run build
+```
+
+当前安全基线包括：
+
+- JWT 带 `token_version`，用户改密、找回密码、管理员重置密码后旧会话立即失效
+- Cookie 登录态启用 CSRF 校验
+- 用户维度限流在认证后执行，兑换和导出等接口按用户隔离限流
+- 外部 HTTP 响应体读取设置大小上限，短信认证响应日志只记录摘要
+- Nginx 示例包含 HTTPS 跳转、HSTS、CSP、`X-Content-Type-Options`、`X-Frame-Options`、`Referrer-Policy` 等安全头
+- K8s 示例固定镜像版本，并配置 `securityContext`、资源限制和健康探针
 
 ---
 
@@ -537,9 +563,12 @@ scp -r dist root@server:/www/wwwroot/caiyun/frontend/
 # 后端
 cd backend
 go test ./...
+go vet ./...
 
 # 前端
 cd ../frontend
+npm run typecheck
+npm run lint -- --quiet
 npm run build
 ```
 

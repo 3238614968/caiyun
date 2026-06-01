@@ -2,6 +2,7 @@ package http
 
 import (
 	"bytes"
+	"caiyun/internal/utils"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -291,7 +292,7 @@ func (c *Client) ParseJSONResponse(resp *http.Response, result interface{}) erro
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := utils.ReadLimitedBody(resp.Body, utils.DefaultMaxResponseBodyBytes)
 	if err != nil {
 		return fmt.Errorf("读取响应体失败: %w", err)
 	}
@@ -310,7 +311,7 @@ func (c *Client) ReadResponseBody(resp *http.Response) (string, error) {
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := utils.ReadLimitedBody(resp.Body, utils.DefaultMaxResponseBodyBytes)
 	if err != nil {
 		return "", fmt.Errorf("读取响应体失败: %w", err)
 	}

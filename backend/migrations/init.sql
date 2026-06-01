@@ -120,6 +120,7 @@ CREATE TABLE `users` (
     `password` VARCHAR(255) NOT NULL COMMENT ''bcrypt哈希'',
     `email` VARCHAR(100),
     `role` VARCHAR(10) DEFAULT ''user'' COMMENT ''user, admin'',
+    `token_version` INT NOT NULL DEFAULT 0 COMMENT ''JWT会话版本，用于吊销旧会话'',
     `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     `deleted_at` TIMESTAMP NULL,
@@ -405,6 +406,9 @@ CREATE TABLE `announcements` (
 -- ============================================
 -- 添加可能缺失的字段（兼容旧版本）
 -- ============================================
+
+-- users 表字段补充
+CALL AddColumnIfNotExists('users', 'token_version', 'INT NOT NULL DEFAULT 0 COMMENT ''JWT会话版本，用于吊销旧会话'' AFTER `role`');
 
 -- products 表字段补充
 CALL AddColumnIfNotExists('products', 'daily_limit_count', 'INT DEFAULT 0 COMMENT ''每日限购数量'' AFTER `daily_remainder_count`');

@@ -177,7 +177,8 @@ func main() {
 	r.Use(middleware.BodySizeLimitMiddleware(10 << 20)) // 10 MiB
 	r.Use(middleware.CORSMiddleware())
 	// 使用高级限流中间件保护接口。
-	r.Use(middleware.AdvancedRateLimitMiddleware(middleware.DefaultRateLimitConfig()))
+	rateLimitConfig := middleware.DefaultRateLimitConfig()
+	r.Use(middleware.AdvancedRateLimitMiddleware(rateLimitConfig))
 
 	r.GET("/health", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
@@ -195,6 +196,7 @@ func main() {
 	protected := r.Group("/api")
 	protected.Use(middleware.AuthMiddlewareWithUser(jwtManager, userRepo))
 	protected.Use(middleware.CSRFMiddleware())
+	protected.Use(middleware.AuthenticatedRateLimitMiddleware(rateLimitConfig))
 	{
 		protected.GET("/auth/me", authHandler.GetCurrentUser)
 		protected.POST("/auth/refresh", authHandler.RefreshToken)
@@ -270,6 +272,7 @@ func main() {
 	admin.Use(
 		middleware.AuthMiddlewareWithUser(jwtManager, userRepo),
 		middleware.CSRFMiddleware(),
+		middleware.AuthenticatedRateLimitMiddleware(rateLimitConfig),
 		middleware.AdminMiddleware(),
 		middleware.AuditMiddlewareWithFilter(auditLogRepo, auditFilter),
 	)
@@ -324,6 +327,10 @@ func main() {
 		user, err := userRepo.FindByID(claims.UserID)
 		if err != nil {
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "user not found"})
+			return
+		}
+		if claims.TokenVersion != user.TokenVersion {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "session revoked"})
 			return
 		}
 

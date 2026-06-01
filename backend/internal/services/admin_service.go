@@ -173,8 +173,7 @@ func (s *AdminService) ResetUserPassword(userID uint, req *ResetUserPasswordRequ
 	if err != nil {
 		return err
 	}
-	user.Password = string(hashedPassword)
-	return s.userRepo.Update(user)
+	return s.userRepo.UpdatePasswordAndRevokeSessions(user.ID, string(hashedPassword))
 }
 
 // UpdateAccountStatusRequest 更新账号状态请求

@@ -593,9 +593,7 @@ import {
   updateTaskConfig,
   updateUserRole,
   resetUserPassword,
-  updateAccountStatus,
   deleteUser,
-  deleteAdminAccount,
   getStatsOverview
 } from '../api/account'
 import {
@@ -608,7 +606,6 @@ import {
   deleteAnnouncement as apiDeleteAnnouncement
 } from '../api/announcement'
 import {
-  type ExchangeConfig,
   getExchangeConfig,
   updateExchangeConfig,
   updateProducts as apiUpdateProducts,

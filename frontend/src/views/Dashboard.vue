@@ -153,7 +153,7 @@ import { ref, reactive, onMounted, onUnmounted, computed } from 'vue'
 import { ElMessage } from 'element-plus'
 import { getDashboard, getTrendData, type DashboardData } from '../api/task'
 import TaskStatusMonitor from '../components/TaskStatusMonitor.vue'
-import { wsClient, type WsMessage } from '../api/websocket'
+import { wsClient } from '../api/websocket'
 import { getAdminDashboard, type AdminDashboardData } from '../api/account'
 import { useAuthStore } from '../store/auth'
 import { getAnnouncements, type Announcement } from '../api/announcement'
@@ -525,7 +525,7 @@ const handleResize = () => {
 }
 
 // WebSocket推送：任务汇总到达时自动刷新仪表盘数据
-const handleSummaryRefresh = (msg: WsMessage) => {
+const handleSummaryRefresh = () => {
   // 延迟1秒刷新，等数据库写入完成
   setTimeout(() => {
     loadDashboardData()

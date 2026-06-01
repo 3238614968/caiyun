@@ -1062,14 +1062,26 @@ func (s *TaskService) GetTaskLogs(userID uint, accountID *uint, page, pageSize i
 	return s.taskLogRepo.FindByUserID(userID, (page-1)*pageSize, pageSize)
 }
 
-// HasExecutedToday 检查账号今日是否已执行过任务
+// DailyTaskTypes 返回当前配置下参与“每日已执行”判断的日常任务类型。
+func (s *TaskService) DailyTaskTypes() []string {
+	return resolveConfiguredTaskCodes(s.taskConfigRepo)
+}
+
+// HasExecutedToday 检查账号今日是否已执行过日常任务。
 func (s *TaskService) HasExecutedToday(accountID uint) bool {
+	return s.HasExecutedTodayForTaskTypes(accountID, s.DailyTaskTypes())
+}
+
+// HasExecutedTodayForTaskTypes 检查账号今日是否已执行过指定日常任务类型。
+// 只统计当前日常任务注册表中的任务类型，避免兑换、健康检查等系统日志误判为“今日已执行”。
+func (s *TaskService) HasExecutedTodayForTaskTypes(accountID uint, taskTypes []string) bool {
 	// 使用北京时间
 	cstZone := time.FixedZone("CST", 8*3600)
 	now := time.Now().In(cstZone)
 	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, cstZone)
 	tomorrow := today.Add(24 * time.Hour)
+
 	var count int64
-	s.taskLogRepo.CountByAccountIDAndDateRange(accountID, today, tomorrow, &count)
+	s.taskLogRepo.CountByAccountIDTaskTypesAndDateRange(accountID, taskTypes, today, tomorrow, &count)
 	return count > 0
 }

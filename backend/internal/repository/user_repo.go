@@ -1,4 +1,4 @@
-﻿package repository
+package repository
 
 import (
 	"caiyun/internal/models"
@@ -52,6 +52,16 @@ func (r *UserRepository) FindByEmail(email string) (*models.User, error) {
 // Update 更新用户
 func (r *UserRepository) Update(user *models.User) error {
 	return r.db.Save(user).Error
+}
+
+// UpdatePasswordAndRevokeSessions 更新用户密码并递增会话版本，使旧 JWT 立即失效。
+func (r *UserRepository) UpdatePasswordAndRevokeSessions(userID uint, hashedPassword string) error {
+	return r.db.Model(&models.User{}).
+		Where("id = ?", userID).
+		Updates(map[string]interface{}{
+			"password":      hashedPassword,
+			"token_version": gorm.Expr("token_version + ?", 1),
+		}).Error
 }
 
 // Delete 删除用户
