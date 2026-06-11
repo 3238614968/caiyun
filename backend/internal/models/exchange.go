@@ -94,6 +94,9 @@ type ExchangeRecord struct {
 	Message           string    `gorm:"type:text" json:"message"`                  // 抢兑结果消息
 	ExecutionTimeMs   int       `gorm:"default:0" json:"execution_time_ms"`        // 执行时长 (毫秒)
 	CreatedAt         time.Time `gorm:"index" json:"created_at"`
+
+	ExchangeAccount *ExchangeAccount `gorm:"foreignKey:ExchangeAccountID" json:"exchange_account,omitempty"`
+	Product         *Product         `gorm:"foreignKey:ProductID" json:"product,omitempty"`
 }
 
 // ExchangeTaskStatus 抢兑任务状态枚举

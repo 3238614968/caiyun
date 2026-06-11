@@ -236,6 +236,12 @@ func (s *ExchangeScheduler) executeTask(task *models.ExchangeTask) (bool, string
 		return false, "任务已被其他实例执行或状态不再是待执行", -1
 	}
 
+	if skip, reason := s.monthlySeriesSkipReason(task); skip {
+		_ = s.exchangeTaskRepo.UpdateLastResult(task.ID, reason)
+		_ = s.exchangeTaskRepo.UpdateStatus(task.ID, string(models.ExchangeTaskPending))
+		return false, reason, -1
+	}
+
 	// Product snapshots loaded before the refresh window may be stale.
 	// Keep the snapshot for diagnostics, but always call the real exchange API.
 	if task.Product.ID > 0 && (!task.Product.IsActive || task.Product.StockStatus != "available" || task.Product.DailyRemainderCount <= 0) {

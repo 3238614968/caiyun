@@ -21,7 +21,6 @@ const (
 
 var taskListRandomCloudTaskIDs = map[int]bool{
 	478: true,
-	481: true,
 }
 
 // 这些任务在 Go 版本中已有独立模块或仍需专门接口，不适合在通用 clickTask 流程里盲点。
@@ -89,19 +88,33 @@ func (t *TaskListTask) Run() error {
 	// 1. 先尝试领取已完成未领取的任务奖励
 	t.receiveCompletedTaskRewards()
 
-	// 2. 自动执行可安全点击的常规任务
+	// 2. 注册新版任务中心所需 deviceId，避免部分 taskListV2 任务点击失败。
+	t.registerTaskDevice()
+
+	// 3. 自动执行可安全点击的常规任务
 	t.runAutomaticTasks()
 
-	// 3. 再次领取任务奖励（覆盖刚执行完成的任务）
+	// 4. 再次领取任务奖励（覆盖刚执行完成的任务）
 	t.receiveCompletedTaskRewards()
 
-	// 4. 清理临时上传/分享文件，避免堆积
+	// 5. 清理临时上传/分享文件，避免堆积
 	t.cleanupTemporaryFiles()
 
-	// 5. 输出仍未完成的任务提示
+	// 6. 输出仍未完成的任务提示
 	t.checkIncompleteTasks()
 
 	return nil
+}
+
+func (t *TaskListTask) registerTaskDevice() {
+	resp, err := t.api.DoTaskPost()
+	if err != nil {
+		t.logger.Debug("新版任务中心 deviceId 注册失败", err)
+		return
+	}
+	if resp != nil && !resp.IsSuccess() {
+		t.logger.Debug(fmt.Sprintf("新版任务中心 deviceId 注册返回异常: code=%v msg=%s", resp.Code, resp.MessageText()))
+	}
 }
 
 // receiveTaskExpansion 领取翻倍奖励（参考原版 taskExpansionTask，支持一次自动备份重试）
@@ -818,21 +831,27 @@ func getTaskName(taskID int) string {
 }
 
 func (t *TaskListTask) getTaskClickKeys(task api.Task) []string {
-	if taskListRandomCloudTaskIDs[task.ID] {
-		return []string{"randomCloudTask"}
-	}
 	if task.ID == 409 {
 		if task.CurrStep > 0 {
 			return []string{"task2"}
 		}
 		return []string{"task", "task2"}
 	}
+	if taskListRandomCloudTaskIDs[task.ID] {
+		if task.CurrStep == 0 {
+			return []string{"randomCloudTask"}
+		}
+		return []string{"task"}
+	}
 	for _, stepType := range task.StepTypeSet {
-		if strings.EqualFold(stepType, "click") {
+		if strings.EqualFold(stepType, "click") && task.CurrStep == 0 {
 			return []string{"task"}
 		}
 	}
-	return []string{"task"}
+	if !strings.EqualFold(strings.TrimSpace(task.MarketName), "sign_in_3") {
+		return []string{"task"}
+	}
+	return nil
 }
 
 func (t *TaskListTask) queryTaskV2ByGroup(group string, taskID int) (*api.Task, error) {

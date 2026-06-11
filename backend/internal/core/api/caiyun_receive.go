@@ -138,9 +138,11 @@ func (api *CaiyunAPI) Receive() (*CaiyunResponse, error) {
 
 // GetTaskExpansion 获取备份翻倍奖励信息
 func (api *CaiyunAPI) GetTaskExpansion() (*CaiyunResponse, error) {
+	api.prepareSignInCenterSession(false)
+
 	resp, err := api.client.Get(
-		fmt.Sprintf("%s/signin/page/taskExpansion", MarketURL),
-		nil,
+		fmt.Sprintf("%s/signin/page/taskExpansion", MobileMarketURL),
+		api.buildReceiveHeaders(""),
 	)
 	if err != nil {
 		return nil, err
@@ -160,10 +162,12 @@ func (api *CaiyunAPI) GetTaskExpansion() (*CaiyunResponse, error) {
 
 // ReceiveTaskExpansion 领取翻倍奖励
 func (api *CaiyunAPI) ReceiveTaskExpansion(acceptDate string) (*CaiyunResponse, error) {
+	api.prepareSignInCenterSession(true)
+
 	resp, err := api.client.Get(
 		fmt.Sprintf("%s/signin/page/receiveTaskExpansion?acceptDate=%s",
-			MarketURL, url.QueryEscape(acceptDate)),
-		nil,
+			MobileMarketURL, url.QueryEscape(acceptDate)),
+		api.buildReceiveHeaders(""),
 	)
 	if err != nil {
 		return nil, err

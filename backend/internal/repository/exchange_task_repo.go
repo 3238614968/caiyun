@@ -117,6 +117,14 @@ func (r *ExchangeTaskRepository) UpdateStatus(id uint, status string) error {
 		Update("status", status).Error
 }
 
+// UpdateLastResult 更新任务最近结果说明，但不增加尝试次数。
+// 用于调度层跳过本月同系列任务时给前端展示原因，同时避免生成新的抢兑记录。
+func (r *ExchangeTaskRepository) UpdateLastResult(id uint, result string) error {
+	return r.db.Model(&models.ExchangeTask{}).
+		Where("id = ?", id).
+		Update("last_result", result).Error
+}
+
 // TryMarkRunning 以条件更新方式抢占任务执行权。
 // 多 Worker/多副本同时拿到同一任务时，只有一个实例能从 pending 更新为 running。
 func (r *ExchangeTaskRepository) TryMarkRunning(id uint) (bool, error) {
@@ -265,6 +273,7 @@ func (r *ExchangeTaskRepository) GetTasksByTime(hour, minute int) ([]*models.Exc
 		Preload("ExchangeAccount").
 		Preload("ExchangeAccount.Account").
 		Preload("Product").
+		Order("exchange_tasks.priority DESC, exchange_tasks.created_at ASC").
 		Find(&tasks).Error
 
 	return tasks, err

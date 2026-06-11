@@ -8,7 +8,7 @@ import (
 // Shake 摇一摇
 func (api *CaiyunAPI) Shake() (*ShakeResponse, error) {
 	resp, err := api.client.Post(
-		fmt.Sprintf("%s/shake-server/shake/shakeIt?flag=1", MarketURL),
+		fmt.Sprintf("%s/shake-server/shake/shakeIt?flag=1", Market7071URL),
 		nil,
 		nil,
 	)
@@ -142,7 +142,7 @@ func (api *CaiyunAPI) ObtainMsgPushOn() (*CaiyunResponse, error) {
 // GetBackupGift 获取备份好礼状态
 func (api *CaiyunAPI) GetBackupGift() (*CaiyunResponse, error) {
 	resp, err := api.client.Get(
-		fmt.Sprintf("%s/backupgift/info", MarketURL),
+		fmt.Sprintf("%s/backupgift/info", Market7071URL),
 		nil,
 	)
 	if err != nil {
@@ -164,8 +164,32 @@ func (api *CaiyunAPI) GetBackupGift() (*CaiyunResponse, error) {
 // ReceiveBackupGift 领取备份好礼
 func (api *CaiyunAPI) ReceiveBackupGift() (*CaiyunResponse, error) {
 	resp, err := api.client.Get(
-		fmt.Sprintf("%s/backupgift/receive", MarketURL),
+		fmt.Sprintf("%s/backupgift/receive", Market7071URL),
 		nil,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	body, err := api.client.ReadResponseBody(resp)
+	if err != nil {
+		return nil, err
+	}
+
+	var result CaiyunResponse
+	if err := json.Unmarshal([]byte(body), &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+// CloudMultiple 领取新版签到页云朵翻倍奖励。
+func (api *CaiyunAPI) CloudMultiple() (*CaiyunResponse, error) {
+	api.prepareSignInCenterSession(false)
+
+	resp, err := api.client.Get(
+		fmt.Sprintf("%s/signin/page/multiple", MobileMarketURL),
+		api.buildReceiveHeaders(""),
 	)
 	if err != nil {
 		return nil, err

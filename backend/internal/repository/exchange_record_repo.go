@@ -1,4 +1,4 @@
-﻿package repository
+package repository
 
 import (
 	"caiyun/internal/models"
@@ -69,6 +69,17 @@ func (r *ExchangeRecordRepository) FindByAccountID(accountID uint, offset, limit
 		Offset(offset).Limit(limit).
 		Find(&records).Error
 	return records, total, err
+}
+
+// FindByAccountInPeriod 获取同一兑换账号在指定时间段内的抢兑记录。
+func (r *ExchangeRecordRepository) FindByAccountInPeriod(userID uint, exchangeAccountID uint, startTime, endTime time.Time) ([]*models.ExchangeRecord, error) {
+	var records []*models.ExchangeRecord
+	err := r.db.Where("user_id = ? AND exchange_account_id = ? AND created_at >= ? AND created_at < ?",
+		userID, exchangeAccountID, startTime, endTime).
+		Preload("Product").
+		Order("created_at DESC").
+		Find(&records).Error
+	return records, err
 }
 
 // GetStats 获取统计数据

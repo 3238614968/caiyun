@@ -55,6 +55,18 @@ func NewTaskCatalog() *TaskCatalog {
 			},
 		},
 		{
+			Code:           "cloud_multiple",
+			Name:           "云朵翻倍",
+			Description:    "领取新版签到页云朵翻倍奖励",
+			SortOrder:      25,
+			DefaultEnabled: true,
+			RunInBatch:     true,
+			Aliases:        []string{"cloudmultiple", "multiple"},
+			execute: func(r *TaskRunner) *TaskResult {
+				return r.runCloudMultipleTask()
+			},
+		},
+		{
 			Code:           "wechat",
 			Name:           "微信签到",
 			Description:    "执行微信公众号签到任务",

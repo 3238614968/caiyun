@@ -127,10 +127,14 @@ func (api *CaiyunAPI) GetTaskList(marketName string) (*TaskListResponse, error) 
 func (api *CaiyunAPI) GetTaskListV2(group string) (*TaskListResponse, error) {
 	api.prepareSignInCenterSession(false)
 
-	urlStr := fmt.Sprintf("%s/signin/task/taskListV2?marketname=sign_in_3&clientVersion=%s&group=%s",
-		MobileMarketURL, url.QueryEscape(MarketClientVersion), url.QueryEscape(group))
+	urlStr := fmt.Sprintf("%s/signin/task/taskListV2", MobileMarketURL)
+	payload := map[string]interface{}{
+		"marketname":    "sign_in_3",
+		"clientVersion": MarketClientVersion,
+		"group":         group,
+	}
 
-	resp, err := api.client.Get(urlStr, api.buildReceiveHeaders(""))
+	resp, err := api.client.Post(urlStr, api.buildReceiveHeaders(""), payload)
 	if err != nil {
 		return nil, err
 	}
@@ -141,6 +145,40 @@ func (api *CaiyunAPI) GetTaskListV2(group string) (*TaskListResponse, error) {
 	}
 
 	var result TaskListResponse
+	if err := json.Unmarshal([]byte(body), &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+// DoTaskPost 注册新版云朵中心任务所需 deviceId。
+func (api *CaiyunAPI) DoTaskPost() (*CaiyunResponse, error) {
+	api.prepareSignInCenterSession(false)
+
+	deviceID := strings.TrimSpace(api.client.GetDeviceID())
+	if deviceID == "" {
+		api.ensureMarketDeviceID()
+		deviceID = strings.TrimSpace(api.client.GetDeviceID())
+	}
+
+	resp, err := api.client.Post(
+		fmt.Sprintf("%s/signin/page/doTaskPost", MobileMarketURL),
+		api.buildReceiveHeaders(""),
+		map[string]interface{}{
+			"client":   "app",
+			"deviceId": deviceID,
+		},
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	body, err := api.client.ReadResponseBody(resp)
+	if err != nil {
+		return nil, err
+	}
+
+	var result CaiyunResponse
 	if err := json.Unmarshal([]byte(body), &result); err != nil {
 		return nil, err
 	}

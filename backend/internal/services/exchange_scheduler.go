@@ -161,6 +161,12 @@ func (s *ExchangeScheduler) prepareQueueByTime(hour, minute int) {
 		return
 	}
 
+	tasks = s.filterTasksByMonthlySeriesGuard(slot, tasks)
+	if len(tasks) == 0 {
+		log.Printf("【抢兑调度器】%s 所有任务已被本月同系列保护跳过，本次不加入抢兑队列", slot)
+		return
+	}
+
 	s.logQueuedTasks(slot, tasks)
 	readyAccounts := s.preheatAccountsForTasks(slot, tasks)
 	tasks = filterTasksByReadyAccounts(slot, tasks, readyAccounts)
@@ -220,6 +226,13 @@ func (s *ExchangeScheduler) executeExchangeByTime(hour, minute int) {
 			return
 		}
 	}
+
+	tasksToExecute = s.filterTasksByMonthlySeriesGuard(slot, tasksToExecute)
+	if len(tasksToExecute) == 0 {
+		log.Printf("【抢兑调度器】%s 所有任务已被本月同系列保护跳过，本次不执行", slot)
+		return
+	}
+
 	if !fromPreparedQueue {
 		readyAccounts := s.preheatAccountsForTasks(slot, tasksToExecute)
 		tasksToExecute = filterTasksByReadyAccounts(slot, tasksToExecute, readyAccounts)

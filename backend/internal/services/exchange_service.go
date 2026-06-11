@@ -265,6 +265,20 @@ func (s *ExchangeService) CreateExchangeTask(userID uint, exchangeAccountID uint
 		return nil, fmt.Errorf("无权操作该账号")
 	}
 
+	candidateTask := &models.ExchangeTask{
+		UserID:            userID,
+		ExchangeAccountID: exchangeAccountID,
+		ProductID:         productID,
+		PrizeID:           product.PrizeID,
+		PrizeName:         product.PrizedName,
+		Product:           *product,
+	}
+	if skip, reason, err := shouldSkipExchangeMonthlySeries(s.exchangeRecordRepo, s.productRepo, candidateTask, time.Now()); err != nil {
+		log.Printf("【抢兑月度保护】创建任务时查询本月同系列记录失败，继续创建: %v", err)
+	} else if skip {
+		return nil, fmt.Errorf(reason)
+	}
+
 	// 检查任务是否已存在
 	if s.exchangeTaskRepo.CheckTaskExists(userID, exchangeAccountID, product.PrizeID) {
 		return nil, fmt.Errorf("该账号已存在该商品的抢兑任务")
@@ -406,6 +420,22 @@ func (s *ExchangeService) BatchExecuteExchangeTasks(taskIDs []uint, userID uint)
 
 // executeSingleTask 执行单个抢兑任务（带重试机制）
 func (s *ExchangeService) executeSingleTask(task *models.ExchangeTask) {
+	if skip, reason := s.monthlySeriesSkipReason(task); skip {
+		_ = s.exchangeTaskRepo.UpdateLastResult(task.ID, reason)
+		log.Printf("【抢兑月度保护】任务 %d 跳过执行: %s", task.ID, reason)
+		s.hub.SendToUser(task.UserID, ws.Message{
+			Type: "exchange_skipped",
+			Data: map[string]interface{}{
+				"task_id":      task.ID,
+				"account_name": exchangeAccountName(&task.ExchangeAccount),
+				"product_name": task.PrizeName,
+				"success":      false,
+				"message":      reason,
+			},
+		})
+		return
+	}
+
 	// 更新任务状态为运行中
 	s.exchangeTaskRepo.UpdateStatus(task.ID, string(models.ExchangeTaskRunning))
 

@@ -9,7 +9,8 @@ import (
 
 const (
 	MarketURL            = "https://caiyun.feixin.10086.cn/market"
-	MobileMarketURL      = "https://m.mcloud.139.com/market"
+	Market7071URL        = "https://caiyun.feixin.10086.cn:7071/market"
+	MobileMarketURL      = "https://m.mcloud.139.com/ycloud"
 	AIYunURL             = "https://ai.yun.139.com"
 	MarketClientVersion  = "12.5.4"
 	MarketSourceID       = "1097"

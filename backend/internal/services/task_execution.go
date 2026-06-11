@@ -148,6 +148,30 @@ func (r *TaskRunner) runTaskExpansionRewardTask() *TaskResult {
 	return result
 }
 
+func (r *TaskRunner) runCloudMultipleTask() *TaskResult {
+	startTime := time.Now()
+	task := coretasks.NewCloudMultipleTask(r.httpClient, r.logger)
+	err := task.Run()
+	duration := time.Since(startTime).Milliseconds()
+
+	result := &TaskResult{
+		TaskType:      "cloud_multiple",
+		ExecutionTime: int(duration),
+	}
+	if err != nil {
+		result.Status = "failed"
+		result.Message = err.Error()
+		return result
+	}
+
+	result.Status = "success"
+	result.Message = task.Message()
+	if strings.TrimSpace(result.Message) == "" {
+		result.Message = "云朵翻倍执行成功"
+	}
+	return result
+}
+
 func (r *TaskRunner) runAfterTaskTask() *TaskResult {
 	startTime := time.Now()
 	err := r.runAfterTaskCleanup()
