@@ -4,6 +4,7 @@ import (
 	"caiyun/internal/cache"
 	"caiyun/internal/core/auth"
 	"caiyun/internal/models"
+	"caiyun/internal/queue"
 	"caiyun/internal/repository"
 	"encoding/json"
 	"errors"
@@ -21,6 +22,7 @@ type AccountService struct {
 	userRepo    *repository.UserRepository
 	cache       *cache.RedisCache
 	authMgr     *auth.Auth
+	taskQueue   queue.ReliableTaskQueue
 }
 
 func NewAccountService(
@@ -35,6 +37,10 @@ func NewAccountService(
 		cache:       cache,
 		authMgr:     authMgr,
 	}
+}
+
+func (s *AccountService) SetTaskQueue(taskQueue queue.ReliableTaskQueue) {
+	s.taskQueue = taskQueue
 }
 
 // CreateAccountRequest 创建账号请求
@@ -350,13 +356,17 @@ func (s *AccountService) EnqueueTask(accountID uint, taskType string) error {
 		return err
 	}
 
+	if s.taskQueue != nil {
+		return s.taskQueue.Enqueue(account.ID, account.UserID, taskType)
+	}
+
 	// 使用Redis List实现队列
-	cacheKey := fmt.Sprintf("task:queue:pending")
 	message := map[string]interface{}{
-		"account_id": accountID,
-		"user_id":    account.UserID,
-		"task_type":  taskType,
-		"created_at": time.Now().Unix(),
+		"account_id":  accountID,
+		"user_id":     account.UserID,
+		"task_type":   taskType,
+		"created_at":  time.Now().Unix(),
+		"retry_count": 0,
 	}
 
 	// 序列化消息
@@ -366,5 +376,5 @@ func (s *AccountService) EnqueueTask(accountID uint, taskType string) error {
 	}
 
 	// 推入队列
-	return s.cache.LPush(cacheKey, string(data))
+	return s.cache.LPush(queue.TaskQueueKey, string(data))
 }

@@ -3,7 +3,9 @@ package handlers
 import (
 	"caiyun/internal/models"
 	"caiyun/internal/monitor"
+	"caiyun/internal/queue"
 	"caiyun/internal/services"
+	"caiyun/pkg/response"
 	"fmt"
 	"net/http"
 	"runtime/debug"
@@ -17,7 +19,10 @@ type TaskHandler struct {
 	taskService    *services.TaskService
 	cloudService   *services.CloudService
 	accountService *services.AccountService
-	redisCache     interface{ LLen(key string) int64 }
+	redisCache     interface {
+		LLen(key string) int64
+		ZCard(key string) int64
+	}
 }
 
 func NewTaskHandler(taskService *services.TaskService, cloudService *services.CloudService, accountService *services.AccountService) *TaskHandler {
@@ -29,7 +34,10 @@ func NewTaskHandler(taskService *services.TaskService, cloudService *services.Cl
 }
 
 // SetRedisCache 设置Redis缓存（用于获取队列状态）
-func (h *TaskHandler) SetRedisCache(cache interface{ LLen(key string) int64 }) {
+func (h *TaskHandler) SetRedisCache(cache interface {
+	LLen(key string) int64
+	ZCard(key string) int64
+}) {
 	h.redisCache = cache
 }
 
@@ -89,7 +97,7 @@ func (h *TaskHandler) GetTaskLogs(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, TaskLogsResponse{
+	response.Success(c, TaskLogsResponse{
 		TaskLogs: taskLogs,
 		Total:    total,
 		Page:     page,
@@ -124,7 +132,7 @@ func (h *TaskHandler) GetDashboard(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, DashboardDataResponse{Data: dashboard})
+	response.Success(c, dashboard)
 }
 
 // CloudStatsResponse 云朵统计响应
@@ -188,7 +196,7 @@ func (h *TaskHandler) GetCloudStats(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, CloudStatsResponse{
+	response.Success(c, CloudStatsResponse{
 		CloudStats: cloudStats,
 		Total:      total,
 		Page:       page,
@@ -231,7 +239,7 @@ func (h *TaskHandler) GetTrendData(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"trend_data": trendData})
+	response.Success(c, gin.H{"trend_data": trendData})
 }
 
 // TrendDataResponse 趋势数据响应
@@ -274,7 +282,7 @@ func (h *TaskHandler) TriggerAllTasks(c *gin.Context) {
 	}
 
 	if len(toExecute) == 0 {
-		c.JSON(http.StatusOK, SuccessResponse{Message: "所有账号今日已执行过任务"})
+		response.Message(c, "所有账号今日已执行过任务")
 		return
 	}
 
@@ -334,9 +342,7 @@ func (h *TaskHandler) TriggerAllTasks(c *gin.Context) {
 		fmt.Printf("[TriggerAll] 全部 %d 个账号执行完成\n", len(toExecute))
 	}()
 
-	c.JSON(http.StatusOK, SuccessResponse{
-		Message: fmt.Sprintf("已开始执行 %d 个账号的任务（%d 个已跳过），并发限制 3", len(toExecute), len(accounts)-len(toExecute)),
-	})
+	response.Message(c, fmt.Sprintf("已开始执行 %d 个账号的任务（%d 个已跳过），并发限制 3", len(toExecute), len(accounts)-len(toExecute)))
 }
 
 // CalculateStats 手动计算统计数据
@@ -375,7 +381,7 @@ func (h *TaskHandler) CalculateStats(c *gin.Context) {
 		}
 	}
 
-	c.JSON(http.StatusOK, SuccessResponse{Message: "统计数据计算完成"})
+	response.Message(c, "统计数据计算完成")
 }
 
 // GetTotalCloudCount 获取总云朵数
@@ -400,7 +406,7 @@ func (h *TaskHandler) GetTotalCloudCount(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"total_cloud": total})
+	response.Success(c, gin.H{"total_cloud": total})
 }
 
 // TotalCloudCountResponse 总云朵数响应
@@ -410,12 +416,19 @@ type TotalCloudCountResponse struct {
 
 // QueueStatusResponse 队列状态响应
 type QueueStatusResponse struct {
-	QueueLength     int64 `json:"queue_length"`
-	ActiveWorkers   int32 `json:"active_workers"`
-	PendingTasks    int   `json:"pending_tasks"`
-	CompletedTasks  int32 `json:"completed_tasks"`
-	SuccessfulTasks int32 `json:"successful_tasks"`
-	FailedTasks     int32 `json:"failed_tasks"`
+	QueueLength     int64                   `json:"queue_length"`
+	ProcessingCount int64                   `json:"processing_count"`
+	DelayedCount    int64                   `json:"delayed_count"`
+	DeadLetterCount int64                   `json:"dead_letter_count"`
+	ActiveWorkers   int32                   `json:"active_workers"`
+	PendingTasks    int                     `json:"pending_tasks"`
+	CompletedTasks  int32                   `json:"completed_tasks"`
+	SuccessfulTasks int32                   `json:"successful_tasks"`
+	FailedTasks     int32                   `json:"failed_tasks"`
+	Backend         string                  `json:"backend"`
+	BackendMeta     queue.TaskQueueMetadata `json:"backend_meta"`
+	IsHealthy       bool                    `json:"is_healthy"`
+	Errors          []string                `json:"errors,omitempty"`
 }
 
 // GetQueueStatus 获取队列状态
@@ -428,17 +441,35 @@ type QueueStatusResponse struct {
 // @Router /api/tasks/queue-status [get]
 func (h *TaskHandler) GetQueueStatus(c *gin.Context) {
 	var queueLength int64
+	var processingLength int64
+	var delayedLength int64
+	var deadLetterLength int64
 	if h.redisCache != nil {
-		queueLength = h.redisCache.LLen("task:queue:pending")
+		queueLength = h.redisCache.LLen(queue.TaskQueueKey)
+		processingLength = h.redisCache.LLen(queue.TaskProcessingKey)
+		delayedLength = h.redisCache.ZCard(queue.TaskDelayedKey)
+		deadLetterLength = h.redisCache.LLen(queue.TaskDeadLetterKey)
 	}
 
-	c.JSON(http.StatusOK, QueueStatusResponse{
+	response.Success(c, QueueStatusResponse{
 		QueueLength:     queueLength,
+		ProcessingCount: processingLength,
+		DelayedCount:    delayedLength,
+		DeadLetterCount: deadLetterLength,
 		ActiveWorkers:   0,
-		PendingTasks:    int(queueLength),
+		PendingTasks:    int(queueLength + processingLength + delayedLength),
 		CompletedTasks:  0,
 		SuccessfulTasks: 0,
 		FailedTasks:     0,
+		Backend:         queue.TaskQueueBackendList,
+		BackendMeta: queue.TaskQueueMetadata{
+			Backend:       queue.TaskQueueBackendList,
+			PendingKey:    queue.TaskQueueKey,
+			ProcessingKey: queue.TaskProcessingKey,
+			DelayedKey:    queue.TaskDelayedKey,
+			DeadLetterKey: queue.TaskDeadLetterKey,
+		},
+		IsHealthy: true,
 	})
 }
 
@@ -478,7 +509,7 @@ func (h *TaskHandler) GetTaskStatus(c *gin.Context) {
 	// 获取最近的任务日志作为任务状态
 	logs, _, err := h.taskService.GetTaskLogs(userID.(uint), nil, 1, 20)
 	if err != nil {
-		c.JSON(http.StatusOK, TaskStatusResponse{Tasks: []TaskStatusItem{}})
+		response.Success(c, TaskStatusResponse{Tasks: []TaskStatusItem{}})
 		return
 	}
 
@@ -500,5 +531,5 @@ func (h *TaskHandler) GetTaskStatus(c *gin.Context) {
 		})
 	}
 
-	c.JSON(http.StatusOK, TaskStatusResponse{Tasks: items})
+	response.Success(c, TaskStatusResponse{Tasks: items})
 }

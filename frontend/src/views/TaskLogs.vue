@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <div class="task-logs-container">
     <el-card shadow="hover">
       <template #header>
@@ -154,6 +154,7 @@
 </template>
 
 <script setup lang="ts">
+import '@/styles/element/logs'
 import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { getTaskLogs, type TaskLog } from '../api/task'

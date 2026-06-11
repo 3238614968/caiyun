@@ -1,4 +1,5 @@
 ﻿import request from './axios'
+import { unwrapApiData, type ApiResponse } from './response'
 
 // 用户接口
 export interface User {
@@ -40,22 +41,28 @@ export interface AuthResponse {
   user: User
 }
 
+function unwrapRequired<T>(value: T | ApiResponse<T>, fallback: T): T {
+  return unwrapApiData(value, fallback)
+}
+
 // 登录
 export function login(data: LoginRequest): Promise<AuthResponse> {
-  return request({
+  const fallback: AuthResponse = { expires_at: 0, user: {} as User }
+  return request<AuthResponse | ApiResponse<AuthResponse>>({
     url: '/api/auth/login',
     method: 'post',
     data
-  })
+  }).then((res) => unwrapRequired(res, fallback))
 }
 
 // 注册
 export function register(data: RegisterRequest): Promise<AuthResponse> {
-  return request({
+  const fallback: AuthResponse = { expires_at: 0, user: {} as User }
+  return request<AuthResponse | ApiResponse<AuthResponse>>({
     url: '/api/auth/register',
     method: 'post',
     data
-  })
+  }).then((res) => unwrapRequired(res, fallback))
 }
 
 // 发送密码重置邮箱验证码
@@ -78,10 +85,11 @@ export function resetPassword(data: ResetPasswordRequest): Promise<{ message: st
 
 // 刷新Token
 export function refreshToken(): Promise<{ expires_at: number }> {
-  return request({
+  const fallback = { expires_at: 0 }
+  return request<typeof fallback | ApiResponse<typeof fallback>>({
     url: '/api/auth/refresh',
     method: 'post'
-  })
+  }).then((res) => unwrapRequired(res, fallback))
 }
 
 // 退出登录
@@ -94,8 +102,8 @@ export function logout(): Promise<{ message: string }> {
 
 // 获取当前用户信息
 export function getCurrentUser(): Promise<User> {
-  return request({
+  return request<User | ApiResponse<User>>({
     url: '/api/auth/me',
     method: 'get'
-  })
+  }).then((res) => unwrapRequired(res, {} as User))
 }

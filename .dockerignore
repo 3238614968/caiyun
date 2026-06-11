@@ -8,6 +8,10 @@ caiyun-api
 caiyun-worker
 caiyun-api-linux
 caiyun-worker-linux
+backend/api-linux
+backend/worker-linux
+backend/caiyun-api
+backend/caiyun-worker
 
 # Test files
 *_test.go

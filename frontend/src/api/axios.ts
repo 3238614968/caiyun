@@ -1,6 +1,13 @@
 import axios, { type AxiosInstance, type AxiosRequestConfig, type AxiosResponse } from 'axios'
 import { ElMessage } from 'element-plus'
 
+function appPath(path: string): string {
+  const base = import.meta.env.BASE_URL || '/'
+  const normalizedBase = base.endsWith('/') ? base.slice(0, -1) : base
+  const normalizedPath = path.startsWith('/') ? path : `/${path}`
+  return `${normalizedBase}${normalizedPath}` || normalizedPath
+}
+
 // 创建 axios 实例
 const service: AxiosInstance = axios.create({
   // 注意：本项目各接口 `url` 已包含 `/api/...` 前缀，因此这里默认不再追加 `/api`，
@@ -61,7 +68,7 @@ service.interceptors.response.use(
           // 清除登录状态并跳转到登录页
           localStorage.removeItem('user')
           window.dispatchEvent(new Event('auth:clear'))
-          window.location.href = '/login'
+          window.location.assign(appPath('/login'))
           break
         case 403:
           ElMessage.error('没有权限执行此操作')

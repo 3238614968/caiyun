@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <el-container class="layout-container">
     <!-- 侧边栏 -->
     <el-aside :width="asideWidth" class="sidebar">
@@ -169,6 +169,7 @@
 </template>
 
 <script setup lang="ts">
+import '@/styles/element/layout'
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -812,5 +813,3 @@ onUnmounted(() => {
 }
 
 </style>
-
-

@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <div class="exchange-records">
     <!-- 页面标题 -->
     <page-header 
@@ -170,6 +170,7 @@
 </template>
 
 <script setup lang="ts">
+import '@/styles/element/records'
 import { ref, computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import PageHeader from '@/components/PageHeader.vue'

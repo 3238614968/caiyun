@@ -10,11 +10,41 @@
       </div>
     </template>
 
+    <!-- 队列后端元数据 -->
+    <div class="queue-meta">
+      <div class="meta-item">
+        <span class="meta-label">队列后端</span>
+        <el-tag type="primary" effect="plain">{{ backendName }}</el-tag>
+      </div>
+      <div class="meta-item" v-if="queueStatus.backend_meta?.consumer_group">
+        <span class="meta-label">消费组</span>
+        <span class="meta-value">{{ queueStatus.backend_meta.consumer_group }}</span>
+      </div>
+      <div class="meta-item">
+        <span class="meta-label">健康状态</span>
+        <el-tag :type="queueStatus.is_healthy === false ? 'danger' : 'success'" effect="plain">
+          {{ queueStatus.is_healthy === false ? '异常' : '健康' }}
+        </el-tag>
+      </div>
+    </div>
+
+    <div v-if="queueErrors.length > 0" class="queue-errors">
+      <div v-for="item in queueErrors" :key="item" class="queue-error-item">{{ item }}</div>
+    </div>
+
     <!-- 队列状态 -->
     <div class="queue-status">
       <div class="status-item">
         <div class="status-label">队列长度</div>
         <div class="status-value queue-length">{{ queueStatus.queue_length }}</div>
+      </div>
+      <div class="status-item">
+        <div class="status-label">处理中</div>
+        <div class="status-value processing-count">{{ queueStatus.processing_count || 0 }}</div>
+      </div>
+      <div class="status-item">
+        <div class="status-label">延迟重试</div>
+        <div class="status-value delayed-count">{{ queueStatus.delayed_count || 0 }}</div>
       </div>
       <div class="status-item">
         <div class="status-label">活跃Worker</div>
@@ -23,6 +53,10 @@
       <div class="status-item">
         <div class="status-label">待处理任务</div>
         <div class="status-value">{{ queueStatus.pending_tasks }}</div>
+      </div>
+      <div class="status-item">
+        <div class="status-label">死信</div>
+        <div class="status-value dead-letter-count">{{ queueStatus.dead_letter_count || 0 }}</div>
       </div>
       <div class="status-item">
         <div class="status-label">成功率</div>
@@ -65,6 +99,9 @@ import { getTaskTypeName } from '../utils/task-types'
 
 const queueStatus = ref<QueueStatus>({
   queue_length: 0,
+  processing_count: 0,
+  delayed_count: 0,
+  dead_letter_count: 0,
   active_workers: 0,
   pending_tasks: 0,
   completed_tasks: 0,
@@ -73,6 +110,9 @@ const queueStatus = ref<QueueStatus>({
 })
 
 const taskStatuses = ref<TaskStatus[]>([])
+
+const backendName = computed(() => queueStatus.value.backend || queueStatus.value.backend_meta?.backend || 'unknown')
+const queueErrors = computed(() => queueStatus.value.errors || [])
 
 // 执行中的任务
 const activeTasks = computed(() => {
@@ -184,12 +224,55 @@ onUnmounted(() => {
 
 .queue-status {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(7, 1fr);
   gap: 20px;
   margin-bottom: 24px;
   padding: 20px;
   background: rgba(59, 130, 246, 0.05);
   border-radius: 12px;
+}
+
+.queue-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 14px;
+  padding: 12px 14px;
+  background: rgba(15, 23, 42, 0.04);
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  border-radius: 12px;
+}
+
+.meta-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.meta-label {
+  font-size: 13px;
+  color: #64748b;
+  font-weight: 600;
+}
+
+.meta-value {
+  font-size: 13px;
+  color: #334155;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace;
+}
+
+.queue-errors {
+  margin-bottom: 14px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: rgba(239, 68, 68, 0.08);
+  color: #b91c1c;
+  font-size: 13px;
+}
+
+.queue-error-item + .queue-error-item {
+  margin-top: 4px;
 }
 
 .status-item {
@@ -210,6 +293,18 @@ onUnmounted(() => {
 
 .queue-length {
   color: #3b82f6;
+}
+
+.processing-count {
+  color: #f59e0b;
+}
+
+.delayed-count {
+  color: #8b5cf6;
+}
+
+.dead-letter-count {
+  color: #ef4444;
 }
 
 .success-rate {

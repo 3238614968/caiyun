@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <div class="login-container">
     <div class="login-card glass-effect">
       <div class="card-header">
@@ -70,6 +70,7 @@
 </template>
 
 <script setup lang="ts">
+import '@/styles/element/auth'
 import { ref, reactive } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'

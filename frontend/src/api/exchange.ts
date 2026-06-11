@@ -1,4 +1,5 @@
 import request from './axios'
+import { unwrapApiData, type ApiResponse } from './response'
 
 // ==================== 类型定义 ====================
 
@@ -261,19 +262,21 @@ export interface ExportExchangeRecordsParams {
 
 // 搜索商品。
 export function searchProducts(keyword: string, limit?: number): Promise<SearchProductsResponse> {
-  return request<SearchProductsResponse>({
+  const fallback: SearchProductsResponse = { products: [], total: 0 }
+  return request<SearchProductsResponse | ApiResponse<SearchProductsResponse>>({
     url: '/api/products/search',
     method: 'get',
     params: { keyword, limit }
-  })
+  }).then((res) => unwrapApiData(res, fallback))
 }
 
 // 获取商品分类。
 export function getProductCategories(): Promise<GetProductCategoriesResponse> {
-  return request<GetProductCategoriesResponse>({
+  const fallback: GetProductCategoriesResponse = { categories: [] }
+  return request<GetProductCategoriesResponse | ApiResponse<GetProductCategoriesResponse>>({
     url: '/api/products/categories',
     method: 'get'
-  })
+  }).then((res) => unwrapApiData(res, fallback))
 }
 
 // 手动更新商品。
@@ -287,19 +290,21 @@ export function updateProducts(accountId?: number): Promise<UpdateProductsRespon
 
 // 获取兑换账号列表。
 export function getExchangeAccounts(): Promise<GetExchangeAccountsResponse> {
-  return request<GetExchangeAccountsResponse>({
+  const fallback: GetExchangeAccountsResponse = { accounts: [], total: 0 }
+  return request<GetExchangeAccountsResponse | ApiResponse<GetExchangeAccountsResponse>>({
     url: '/api/exchange/accounts',
     method: 'get'
-  })
+  }).then((res) => unwrapApiData(res, fallback))
 }
 
 // 添加兑换账号。
 export function addExchangeAccount(data: AddExchangeAccountRequest): Promise<AddExchangeAccountResponse> {
-  return request<AddExchangeAccountResponse>({
+  const fallback: AddExchangeAccountResponse = { account: {} as ExchangeAccount }
+  return request<AddExchangeAccountResponse | ApiResponse<AddExchangeAccountResponse>>({
     url: '/api/exchange/accounts',
     method: 'post',
     data
-  })
+  }).then((res) => unwrapApiData(res, fallback))
 }
 
 // 更新兑换账号。
@@ -321,19 +326,21 @@ export function deleteExchangeAccount(id: number): Promise<SuccessResponse> {
 
 // 创建抢兑任务。
 export function createExchangeTask(data: CreateExchangeTaskRequest): Promise<CreateExchangeTaskResponse> {
-  return request<CreateExchangeTaskResponse>({
+  const fallback: CreateExchangeTaskResponse = { task: {} as ExchangeTask }
+  return request<CreateExchangeTaskResponse | ApiResponse<CreateExchangeTaskResponse>>({
     url: '/api/exchange/tasks',
     method: 'post',
     data
-  })
+  }).then((res) => unwrapApiData(res, fallback))
 }
 
 // 获取抢兑任务列表。
 export function getExchangeTasks(): Promise<GetExchangeTasksResponse> {
-  return request<GetExchangeTasksResponse>({
+  const fallback: GetExchangeTasksResponse = { tasks: [], total: 0 }
+  return request<GetExchangeTasksResponse | ApiResponse<GetExchangeTasksResponse>>({
     url: '/api/exchange/tasks',
     method: 'get'
-  })
+  }).then((res) => unwrapApiData(res, fallback))
 }
 
 // 更新抢兑任务。
@@ -363,27 +370,38 @@ export function executeExchangeTask(id: number): Promise<SuccessResponse> {
 
 // 批量执行抢兑任务。
 export function batchExecuteExchangeTasks(taskIds: number[]): Promise<BatchExecuteExchangeTasksResponse> {
-  return request<BatchExecuteExchangeTasksResponse>({
+  const fallback: BatchExecuteExchangeTasksResponse = { message: '', results: [] }
+  return request<BatchExecuteExchangeTasksResponse | ApiResponse<BatchExecuteExchangeTasksResponse>>({
     url: '/api/exchange/tasks/batch-execute',
     method: 'post',
     data: { task_ids: taskIds }
-  })
+  }).then((res) => unwrapApiData(res, fallback))
 }
 
 // 获取抢兑配置（管理员）。
 export function getExchangeConfig(): Promise<ExchangeConfig> {
-  return request<ExchangeConfig>({
+  const fallback: ExchangeConfig = {
+    auto_update_products: false,
+    concurrency: 10,
+    enabled: true,
+    exchange_monthly_enabled: false,
+    exchange_time: '10:00',
+    monthly_prize_id: '1001',
+    immediate_exchange_enabled: false
+  }
+  return request<ExchangeConfig | ApiResponse<ExchangeConfig>>({
     url: '/api/admin/exchange/config',
     method: 'get'
-  })
+  }).then((res) => unwrapApiData(res, fallback))
 }
 
 // 获取抢兑配置（公开，普通用户可访问）。
 export function getExchangeConfigPublic(): Promise<{ enabled: boolean; immediate_exchange_enabled: boolean }> {
-  return request<{ enabled: boolean; immediate_exchange_enabled: boolean }>({
+  const fallback = { enabled: true, immediate_exchange_enabled: false }
+  return request<typeof fallback | ApiResponse<typeof fallback>>({
     url: '/api/exchange/config',
     method: 'get'
-  })
+  }).then((res) => unwrapApiData(res, fallback))
 }
 
 // 更新抢兑配置（管理员）。
@@ -405,11 +423,12 @@ export function executeMonthlyExchange(): Promise<SuccessResponse> {
 
 // 查询抢兑记录。
 export function getExchangeRecords(params: GetExchangeRecordsParams): Promise<GetExchangeRecordsResponse> {
-  return request<GetExchangeRecordsResponse>({
+  const fallback: GetExchangeRecordsResponse = { records: [], total: 0, stats: { success: 0, failed: 0 } }
+  return request<GetExchangeRecordsResponse | ApiResponse<GetExchangeRecordsResponse>>({
     url: '/api/exchange/records',
     method: 'get',
     params
-  })
+  }).then((res) => unwrapApiData(res, fallback))
 }
 
 // 导出抢兑记录。
@@ -436,9 +455,10 @@ export interface ImmediateExchangeResponse {
 
 // 立即兑换（无需创建任务）。
 export function immediateExchange(data: ImmediateExchangeRequest): Promise<ImmediateExchangeResponse> {
-  return request<ImmediateExchangeResponse>({
+  const fallback: ImmediateExchangeResponse = { success: false, message: '' }
+  return request<ImmediateExchangeResponse | ApiResponse<ImmediateExchangeResponse>>({
     url: '/api/exchange/immediate',
     method: 'post',
     data
-  })
+  }).then((res) => unwrapApiData(res, fallback))
 }

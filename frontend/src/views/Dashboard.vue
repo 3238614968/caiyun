@@ -25,50 +25,14 @@
     <el-row :gutter="20" style="margin-top: 20px">
       <!-- 首页公告列表 -->
       <el-col :span="24">
-        <el-card shadow="hover" class="announcement-card">
-          <template #header>
-            <div class="card-header">
-              <div class="announcement-title">
-                <el-icon><Bell /></el-icon>
-                <span>公告</span>
-                <el-tag v-if="unreadAnnouncementCount > 0" type="danger" size="small">
-                  {{ unreadAnnouncementCount }} 条未读
-                </el-tag>
-              </div>
-              <el-button
-                v-if="announcements.length > 0"
-                type="primary"
-                size="small"
-                class="announcement-read-all-btn"
-                @click="markAllAnnouncementsRead"
-              >
-                全部标为已读
-              </el-button>
-            </div>
-          </template>
-
-          <div v-loading="announcementLoading" class="announcement-list">
-            <el-empty v-if="!announcementLoading && announcements.length === 0" description="暂无公告" :image-size="80" />
-            <div
-              v-for="item in announcements"
-              :key="item.id"
-              class="announcement-item"
-              :class="{ unread: !isAnnouncementRead(item.id), top: item.is_top }"
-              @click="openAnnouncement(item)"
-            >
-              <div class="announcement-main">
-                <div class="announcement-line">
-                  <el-tag v-if="item.is_top" type="danger" size="small">置顶</el-tag>
-                  <el-tag v-if="item.is_popup" type="warning" size="small">弹窗</el-tag>
-                  <el-tag v-if="!isAnnouncementRead(item.id)" type="success" size="small">未读</el-tag>
-                  <span class="announcement-name">{{ item.title }}</span>
-                </div>
-                <div class="announcement-preview">{{ item.content }}</div>
-              </div>
-              <div class="announcement-date">{{ formatDateTime(item.created_at) }}</div>
-            </div>
-          </div>
-        </el-card>
+        <AnnouncementPanel
+          :announcements="announcements"
+          :loading="announcementLoading"
+          :unread-count="unreadAnnouncementCount"
+          :is-read="isAnnouncementRead"
+          @mark-all-read="markAllAnnouncementsRead"
+          @open="openAnnouncement"
+        />
       </el-col>
     </el-row>
 
@@ -149,15 +113,22 @@
 </template>
 
 <script setup lang="ts">
+import '@/styles/element/dashboard'
 import { ref, reactive, onMounted, onUnmounted, computed } from 'vue'
 import { ElMessage } from 'element-plus'
 import { getDashboard, getTrendData, type DashboardData } from '../api/task'
+import AnnouncementPanel from '../components/dashboard/AnnouncementPanel.vue'
 import TaskStatusMonitor from '../components/TaskStatusMonitor.vue'
 import { wsClient } from '../api/websocket'
 import { getAdminDashboard, type AdminDashboardData } from '../api/account'
 import { useAuthStore } from '../store/auth'
 import { getAnnouncements, type Announcement } from '../api/announcement'
-import * as echarts from 'echarts'
+import * as echarts from 'echarts/core'
+import { LineChart } from 'echarts/charts'
+import { GridComponent, TooltipComponent } from 'echarts/components'
+import { CanvasRenderer } from 'echarts/renderers'
+
+echarts.use([LineChart, GridComponent, TooltipComponent, CanvasRenderer])
 
 const authStore = useAuthStore()
 const isAdmin = computed(() => authStore.user?.role === 'admin')
@@ -698,107 +669,6 @@ onUnmounted(() => {
 .ranking-wrapper {
   height: 350px;
   overflow-y: auto;
-}
-
-.announcement-card :deep(.el-card__body) {
-  padding: 0;
-}
-
-.announcement-title {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  color: #1e3a8a;
-  font-size: 18px;
-  font-weight: 700;
-}
-
-.announcement-read-all-btn {
-  color: #ffffff;
-  font-weight: 700;
-  background: #2563eb;
-  border-color: #2563eb;
-  box-shadow: 0 8px 18px rgba(37, 99, 235, 0.24);
-}
-
-.announcement-read-all-btn:hover,
-.announcement-read-all-btn:focus {
-  color: #ffffff;
-  background: #1d4ed8;
-  border-color: #1d4ed8;
-}
-
-.announcement-list {
-  min-height: 96px;
-  max-height: 280px;
-  overflow-y: auto;
-}
-
-.announcement-item {
-  display: flex;
-  justify-content: space-between;
-  gap: 16px;
-  padding: 14px 18px;
-  border-bottom: 1px solid rgba(148, 163, 184, 0.16);
-  cursor: pointer;
-  transition: background 0.2s ease, transform 0.2s ease;
-}
-
-.announcement-item:last-child {
-  border-bottom: none;
-}
-
-.announcement-item:hover {
-  background: rgba(239, 246, 255, 0.72);
-}
-
-.announcement-item.unread {
-  background: rgba(236, 253, 245, 0.52);
-}
-
-.announcement-item.top {
-  border-left: 3px solid #ef4444;
-}
-
-.announcement-main {
-  min-width: 0;
-  flex: 1;
-}
-
-.announcement-line {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-}
-
-.announcement-name {
-  font-size: 15px;
-  font-weight: 700;
-  color: #1e3a8a;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.announcement-preview {
-  margin-top: 6px;
-  color: #334155;
-  font-size: 14px;
-  font-weight: 500;
-  line-height: 1.55;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.announcement-date {
-  flex-shrink: 0;
-  color: #475569;
-  font-size: 13px;
-  font-weight: 500;
-  white-space: nowrap;
-  padding-top: 2px;
 }
 
 .announcement-detail-title {

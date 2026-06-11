@@ -1,4 +1,5 @@
-﻿import request from './axios'
+import request from './axios'
+import { unwrapApiData, type ApiResponse } from './response'
 
 // 任务日志接口
 export interface TaskLog {
@@ -75,50 +76,57 @@ export interface CloudStatsResponse {
 
 // 获取任务日志
 export function getTaskLogs(accountId?: number, page: number = 1, pageSize: number = 20): Promise<TaskLogsResponse> {
-  return request({
+  const fallback: TaskLogsResponse = { task_logs: [], total: 0, page, page_size: pageSize }
+  return request<TaskLogsResponse | ApiResponse<TaskLogsResponse>>({
     url: '/api/tasks/logs',
     method: 'get',
     params: { account_id: accountId, page, page_size: pageSize }
-  })
+  }).then((res) => unwrapApiData(res, fallback))
 }
 
 // 获取仪表盘数据
 export function getDashboard(): Promise<DashboardData> {
-  // 后端返回: { data: DashboardData }
-  return request<{ data: DashboardData }>({
+  const fallback: DashboardData = {
+    total_cloud: 0,
+    account_count: 0,
+    today_gained: 0,
+    yesterday_diff: 0,
+    week_diff: 0,
+    success_rate: 0,
+    trend_data: [],
+    account_ranking: []
+  }
+
+  return request<{ data: DashboardData } | ApiResponse<DashboardData>>({
     url: '/api/stats/dashboard',
     method: 'get'
   }).then((res) => {
-    // 防御：后端异常/被代理返回 HTML 等情况下，避免前端崩溃
-    return res?.data ?? {
-      total_cloud: 0,
-      account_count: 0,
-      today_gained: 0,
-      yesterday_diff: 0,
-      week_diff: 0,
-      success_rate: 0,
-      trend_data: [],
-      account_ranking: []
+    const unified = unwrapApiData(res as ApiResponse<DashboardData>, fallback)
+    if ('total_cloud' in unified) {
+      return unified
     }
+    return res?.data ?? fallback
   })
 }
 
 // 获取云朵统计
 export function getCloudStats(accountId?: number, page: number = 1, pageSize: number = 10): Promise<CloudStatsResponse> {
-  return request({
+  const fallback: CloudStatsResponse = { cloud_stats: [], total: 0, page, page_size: pageSize }
+  return request<CloudStatsResponse | ApiResponse<CloudStatsResponse>>({
     url: '/api/stats/cloud',
     method: 'get',
     params: { account_id: accountId, page, page_size: pageSize }
-  })
+  }).then((res) => unwrapApiData(res, fallback))
 }
 
 // 获取趋势数据
 export function getTrendData(days: number = 7): Promise<{ trend_data: TrendPoint[] }> {
-  return request({
+  const fallback = { trend_data: [] as TrendPoint[] }
+  return request<typeof fallback | ApiResponse<typeof fallback>>({
     url: '/api/stats/trend',
     method: 'get',
     params: { days }
-  })
+  }).then((res) => unwrapApiData(res, fallback))
 }
 
 // 触发所有账号的任务
@@ -139,10 +147,11 @@ export function calculateStats(): Promise<{ message: string }> {
 
 // 获取总云朵数
 export function getTotalCloudCount(): Promise<{ total_cloud: number }> {
-  return request({
+  const fallback = { total_cloud: 0 }
+  return request<typeof fallback | ApiResponse<typeof fallback>>({
     url: '/api/stats/total-cloud',
     method: 'get'
-  })
+  }).then((res) => unwrapApiData(res, fallback))
 }
 
 // 任务状态接口
@@ -158,7 +167,25 @@ export interface TaskStatus {
 
 // 队列状态接口
 export interface QueueStatus {
+  backend?: string
+  backend_meta?: {
+    backend?: string
+    pending_key?: string
+    processing_key?: string
+    delayed_key?: string
+    dead_letter_key?: string
+    stream_key?: string
+    consumer_group?: string
+    consumer_name?: string
+    max_len_approx?: number | string
+    labels?: Record<string, string>
+  }
+  is_healthy?: boolean
+  errors?: string[]
   queue_length: number
+  processing_count?: number
+  delayed_count?: number
+  dead_letter_count?: number
   active_workers: number
   pending_tasks: number
   completed_tasks: number
@@ -168,18 +195,35 @@ export interface QueueStatus {
 
 // 获取队列状态
 export function getQueueStatus(): Promise<QueueStatus> {
-  return request({
+  const fallback: QueueStatus = {
+    backend: 'unknown',
+    backend_meta: undefined,
+    is_healthy: false,
+    errors: [],
+    queue_length: 0,
+    processing_count: 0,
+    delayed_count: 0,
+    dead_letter_count: 0,
+    active_workers: 0,
+    pending_tasks: 0,
+    completed_tasks: 0,
+    successful_tasks: 0,
+    failed_tasks: 0
+  }
+
+  return request<QueueStatus | ApiResponse<QueueStatus>>({
     url: '/api/tasks/queue-status',
     method: 'get'
-  })
+  }).then((res) => unwrapApiData(res, fallback))
 }
 
 // 获取任务状态
 export function getTaskStatus(accountId?: number): Promise<TaskStatus[]> {
   // 后端返回: { tasks: TaskStatus[] }
-  return request<{ tasks: TaskStatus[] }>({
+  const fallback = { tasks: [] as TaskStatus[] }
+  return request<typeof fallback | ApiResponse<typeof fallback>>({
     url: '/api/tasks/status',
     method: 'get',
     params: { account_id: accountId }
-  }).then((res) => (Array.isArray(res?.tasks) ? res.tasks : []))
+  }).then((res) => unwrapApiData(res, fallback).tasks)
 }

@@ -9,6 +9,7 @@ import (
 
 	"caiyun/internal/services"
 	"caiyun/pkg/jwt"
+	apiresponse "caiyun/pkg/response"
 	"github.com/gin-gonic/gin"
 )
 
@@ -99,7 +100,7 @@ func (h *AuthHandler) Register(c *gin.Context) {
 	}
 
 	setAuthCookies(c, resp.Token, time.Until(time.Unix(resp.ExpiresAt, 0)))
-	c.JSON(http.StatusCreated, AuthResponse{
+	apiresponse.SuccessCreated(c, AuthResponse{
 		ExpiresAt: resp.ExpiresAt,
 		User: UserResponse{
 			ID:       resp.User.ID,
@@ -139,7 +140,7 @@ func (h *AuthHandler) Login(c *gin.Context) {
 	}
 
 	setAuthCookies(c, resp.Token, time.Until(time.Unix(resp.ExpiresAt, 0)))
-	c.JSON(http.StatusOK, AuthResponse{
+	apiresponse.Success(c, AuthResponse{
 		ExpiresAt: resp.ExpiresAt,
 		User: UserResponse{
 			ID:       resp.User.ID,
@@ -164,14 +165,14 @@ func (h *AuthHandler) SendPasswordResetCode(c *gin.Context) {
 			c.JSON(http.StatusServiceUnavailable, ErrorResponse{Message: "邮箱服务未配置，请联系管理员重置密码"})
 		case errors.Is(err, services.ErrResetCodeTooFrequent):
 			// 与无效用户名/邮箱组合保持相同响应，避免通过冷却状态枚举账号邮箱关联。
-			c.JSON(http.StatusOK, SuccessResponse{Message: "如果用户名和邮箱匹配，验证码将发送到该邮箱"})
+			apiresponse.Message(c, "如果用户名和邮箱匹配，验证码将发送到该邮箱")
 		default:
 			c.JSON(http.StatusInternalServerError, InternalServerErrorResponse())
 		}
 		return
 	}
 
-	c.JSON(http.StatusOK, SuccessResponse{Message: "如果用户名和邮箱匹配，验证码将发送到该邮箱"})
+	apiresponse.Message(c, "如果用户名和邮箱匹配，验证码将发送到该邮箱")
 }
 
 // ResetPassword 通过邮箱验证码重置密码。
@@ -196,7 +197,7 @@ func (h *AuthHandler) ResetPassword(c *gin.Context) {
 	}
 
 	clearAuthCookie(c)
-	c.JSON(http.StatusOK, SuccessResponse{Message: "密码已重置，请使用新密码登录"})
+	apiresponse.Message(c, "密码已重置，请使用新密码登录")
 }
 
 // RefreshToken 刷新Token
@@ -217,7 +218,7 @@ func (h *AuthHandler) RefreshToken(c *gin.Context) {
 	}
 
 	setAuthCookies(c, resp.Token, time.Until(time.Unix(resp.ExpiresAt, 0)))
-	c.JSON(http.StatusOK, TokenResponse{
+	apiresponse.Success(c, TokenResponse{
 		ExpiresAt: resp.ExpiresAt,
 	})
 }
@@ -225,7 +226,7 @@ func (h *AuthHandler) RefreshToken(c *gin.Context) {
 // Logout 清除认证 Cookie。
 func (h *AuthHandler) Logout(c *gin.Context) {
 	clearAuthCookie(c)
-	c.JSON(http.StatusOK, SuccessResponse{Message: "退出成功"})
+	apiresponse.Message(c, "退出成功")
 }
 
 // GetCurrentUser 获取当前用户信息
@@ -245,7 +246,7 @@ func (h *AuthHandler) GetCurrentUser(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, UserResponse{
+	apiresponse.Success(c, UserResponse{
 		ID:       user.ID,
 		Username: user.Username,
 		Email:    user.Email,

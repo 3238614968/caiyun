@@ -342,6 +342,9 @@ MYSQL_PASSWORD=replace_with_strong_app_password
 REDIS_PASSWORD=replace_with_strong_redis_password
 JWT_SECRET=replace_with_32_chars_random_secret
 WORKER_MONITOR_TOKEN=replace_with_random_monitor_token
+WORKER_MONITOR_HOST=0.0.0.0
+WORKER_MONITOR_PORT=8081
+WORKER_MONITOR_ALLOW_PLAINTEXT=true
 GRAFANA_ADMIN_PASSWORD=replace_with_strong_grafana_password
 # 逗号分隔。必须包含浏览器实际访问前端的 Origin，例如域名、局域网 IP 或非 80 端口。
 ALLOWED_ORIGINS=http://localhost,http://127.0.0.1,http://your-domain.com
@@ -368,7 +371,7 @@ Compose 会启动以下核心服务：
 - `mysql`：初始化并持久化业务数据库
 - `redis`：启用 `requirepass`，用于队列、缓存和密码找回验证码
 - `backend-api`：仅绑定到宿主机 `127.0.0.1:8080`
-- `backend-worker`：仅绑定到宿主机 `127.0.0.1:8081`，监控接口需要 `WORKER_MONITOR_TOKEN`
+- `backend-worker`：Compose 中仅发布到宿主机 `127.0.0.1:8081`；应用默认只监听本机，Compose/K8s 显式设置 `WORKER_MONITOR_HOST=0.0.0.0` 和 `WORKER_MONITOR_ALLOW_PLAINTEXT=true` 供本地端口映射/探针访问，监控接口需要 `WORKER_MONITOR_TOKEN`
 - `frontend`：对外暴露 Web 页面，并代理 `/api`、`/ws`
 - `grafana`：示例监控面板，仅绑定到宿主机 `127.0.0.1:3000`
 
@@ -445,7 +448,36 @@ cd ../frontend
 npm run typecheck
 npm run lint -- --quiet
 npm run build
+npm run e2e
 ```
+
+Windows/PowerShell 环境可直接使用本地 CI 等价脚本：
+
+```powershell
+.\scripts\ci-local.ps1 -SkipInstall
+```
+
+如需同时验证真实 Redis 队列集成测试：
+
+```powershell
+.\scripts\ci-local.ps1 -SkipInstall -WithRedisIntegration -RedisAddr 127.0.0.1:6379 -RedisDB 15
+```
+
+可选真实 Redis 队列集成测试默认跳过，如需验证生产 Redis 行为：
+
+```bash
+cd backend
+CAIYUN_REDIS_INTEGRATION=1 \
+CAIYUN_TEST_REDIS_ADDR=127.0.0.1:6379 \
+CAIYUN_TEST_REDIS_DB=15 \
+go test ./internal/queue -run RedisIntegration -count=1
+```
+
+更多说明：
+
+- 前端 E2E：[`frontend/docs/E2E_TESTING.md`](frontend/docs/E2E_TESTING.md)
+- Redis 队列集成测试：[`backend/docs/REDIS_QUEUE_INTEGRATION_TESTS.md`](backend/docs/REDIS_QUEUE_INTEGRATION_TESTS.md)
+- Redis Streams 迁移评估：[`backend/docs/REDIS_STREAMS_QUEUE_MIGRATION.md`](backend/docs/REDIS_STREAMS_QUEUE_MIGRATION.md)
 
 当前安全基线包括：
 

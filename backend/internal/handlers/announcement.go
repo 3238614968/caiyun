@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"caiyun/internal/services"
+	apiresponse "caiyun/pkg/response"
 	"net/http"
 	"strconv"
 
@@ -42,10 +43,7 @@ func (h *AnnouncementHandler) CreateAnnouncement(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"message":      "创建成功",
-		"announcement": announcement,
-	})
+	apiresponse.SuccessWithMessage(c, "创建成功", gin.H{"announcement": announcement})
 }
 
 // UpdateAnnouncementRequest 更新公告请求
@@ -78,10 +76,7 @@ func (h *AnnouncementHandler) UpdateAnnouncement(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"message":      "更新成功",
-		"announcement": announcement,
-	})
+	apiresponse.SuccessWithMessage(c, "更新成功", gin.H{"announcement": announcement})
 }
 
 // DeleteAnnouncement 删除公告
@@ -98,9 +93,7 @@ func (h *AnnouncementHandler) DeleteAnnouncement(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"message": "删除成功",
-	})
+	apiresponse.Message(c, "删除成功")
 }
 
 // GetAnnouncement 获取公告详情
@@ -118,7 +111,7 @@ func (h *AnnouncementHandler) GetAnnouncement(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
+	apiresponse.Success(c, gin.H{
 		"announcement": announcement,
 	})
 }
@@ -131,7 +124,7 @@ func (h *AnnouncementHandler) GetAllAnnouncements(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
+	apiresponse.Success(c, gin.H{
 		"announcements": announcements,
 		"total":         len(announcements),
 	})
@@ -145,7 +138,7 @@ func (h *AnnouncementHandler) GetPublishedAnnouncements(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
+	apiresponse.Success(c, gin.H{
 		"announcements": announcements,
 		"total":         len(announcements),
 	})
@@ -155,14 +148,14 @@ func (h *AnnouncementHandler) GetPublishedAnnouncements(c *gin.Context) {
 func (h *AnnouncementHandler) GetPopupAnnouncement(c *gin.Context) {
 	announcements, err := h.announcementService.GetPopupAnnouncements()
 	if err != nil || len(announcements) == 0 {
-		c.JSON(http.StatusOK, gin.H{
+		apiresponse.Success(c, gin.H{
 			"has_popup":     false,
 			"announcements": []interface{}{},
 		})
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
+	apiresponse.Success(c, gin.H{
 		"has_popup":     true,
 		"announcements": announcements,
 	})

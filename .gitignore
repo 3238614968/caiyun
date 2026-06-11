@@ -21,6 +21,11 @@ gopath/pkg/mod/
 # Build output
 dist/
 build/
+backend/bin/
+backend/api-linux
+backend/worker-linux
+backend/caiyun-api
+backend/caiyun-worker
 
 # Environment files
 .env
@@ -60,6 +65,8 @@ temp/
 
 # Node modules (frontend)
 node_modules/
+frontend/test-results/
+frontend/playwright-report/
 
 # Package files
 *.tar.gz

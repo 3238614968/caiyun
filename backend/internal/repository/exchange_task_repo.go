@@ -117,6 +117,18 @@ func (r *ExchangeTaskRepository) UpdateStatus(id uint, status string) error {
 		Update("status", status).Error
 }
 
+// TryMarkRunning 以条件更新方式抢占任务执行权。
+// 多 Worker/多副本同时拿到同一任务时，只有一个实例能从 pending 更新为 running。
+func (r *ExchangeTaskRepository) TryMarkRunning(id uint) (bool, error) {
+	result := r.db.Model(&models.ExchangeTask{}).
+		Where("id = ? AND status = ?", id, string(models.ExchangeTaskPending)).
+		Update("status", string(models.ExchangeTaskRunning))
+	if result.Error != nil {
+		return false, result.Error
+	}
+	return result.RowsAffected > 0, nil
+}
+
 // UpdateAttempt 更新任务抢兑尝试
 func (r *ExchangeTaskRepository) UpdateAttempt(id uint, success bool, result string) error {
 	updates := map[string]interface{}{
@@ -228,6 +240,7 @@ func (r *ExchangeTaskRepository) GetRecordsWithFilter(userID uint, accountID uin
 // 参数：
 //   - hour: 小时（0-23）
 //   - minute: 分钟（0-59）
+//
 // 返回：该时间段需要执行的抢兑任务列表
 func (r *ExchangeTaskRepository) GetTasksByTime(hour, minute int) ([]*models.ExchangeTask, error) {
 	var tasks []*models.ExchangeTask

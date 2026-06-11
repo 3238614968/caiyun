@@ -417,11 +417,24 @@ func CORSMiddleware() gin.HandlerFunc {
 func isAllowedOrigin(origin string) bool {
 	allowedOrigins := strings.TrimSpace(os.Getenv("ALLOWED_ORIGINS"))
 	if allowedOrigins == "" {
+		if isProductionEnv() {
+			return false
+		}
 		allowedOrigins = "http://localhost:3000,http://localhost:5173,http://127.0.0.1:3000,http://127.0.0.1:5173"
 	}
 	for _, allowed := range strings.Split(allowedOrigins, ",") {
 		allowed = strings.TrimSpace(allowed)
 		if allowed != "" && allowed == origin {
+			return true
+		}
+	}
+	return false
+}
+
+func isProductionEnv() bool {
+	for _, key := range []string{"APP_ENV", "GO_ENV", "GIN_MODE"} {
+		value := strings.ToLower(strings.TrimSpace(os.Getenv(key)))
+		if value == "production" || value == "prod" || value == "release" {
 			return true
 		}
 	}

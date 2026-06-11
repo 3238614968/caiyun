@@ -206,11 +206,15 @@ func (h *Hub) SendToUser(userID uint, msg Message) {
 
 	h.mu.RLock()
 	conns := h.clients[userID]
+	clients := make([]*Client, 0, len(conns))
+	for client := range conns {
+		clients = append(clients, client)
+	}
 	wsRepo := h.wsRepo
 	h.mu.RUnlock()
 
 	// 检查用户是否在线
-	isOnline := len(conns) > 0
+	isOnline := len(clients) > 0
 
 	// 如果用户不在线且启用了持久化，保存消息到数据库
 	if !isOnline && wsRepo != nil {
@@ -225,7 +229,7 @@ func (h *Hub) SendToUser(userID uint, msg Message) {
 
 	// 发送给所有连接
 	delivered := false
-	for client := range conns {
+	for _, client := range clients {
 		select {
 		case client.send <- data:
 			delivered = true

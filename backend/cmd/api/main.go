@@ -9,20 +9,16 @@ import (
 	"syscall"
 	"time"
 
-	"caiyun/internal/cache"
-	"caiyun/internal/core/auth"
-	corehttp "caiyun/internal/core/http"
+	"caiyun/internal/bootstrap"
 	"caiyun/internal/handlers"
 	"caiyun/internal/middleware"
 	"caiyun/internal/monitor"
-	"caiyun/internal/repository"
+	"caiyun/internal/queue"
 	"caiyun/internal/services"
 	"caiyun/internal/ws"
-	"caiyun/pkg/database"
 	"caiyun/pkg/jwt"
 
 	"github.com/gin-gonic/gin"
-	"github.com/joho/godotenv"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
@@ -30,90 +26,49 @@ func main() {
 	// 标准库 log 默认写 stderr，会导致运行日志全部落到错误日志文件。
 	log.SetOutput(os.Stdout)
 
-	// 加载环境变量文件，缺失时继续使用环境变量和默认值。
-	if err := godotenv.Load(); err != nil {
-		log.Println("未找到 .env 文件，使用环境变量和默认配置")
-	}
+	bootstrap.LoadEnvFile()
 
-	// 初始化 MySQL。
-	dbConfig := database.Config{
-		Host:     getEnv("DB_HOST", "localhost"),
-		Port:     getEnv("DB_PORT", "3306"),
-		User:     getEnv("DB_USER", "caiyun_app"),
-		Password: getSecretEnv("DB_PASSWORD", "local-development-password"),
-		DBName:   getEnv("DB_NAME", "caiyun"),
-	}
-	db, err := database.NewMySQL(dbConfig)
+	core, err := bootstrap.InitCore()
 	if err != nil {
-		log.Printf("数据库连接失败: %v", err)
-		os.Exit(1)
-	}
-
-	// 初始化 Redis。
-	redisConfig := cache.RedisConfig{
-		Host:     getEnv("REDIS_HOST", "localhost"),
-		Port:     getEnv("REDIS_PORT", "6379"),
-		Password: getEnv("REDIS_PASSWORD", ""),
-		DB:       0,
-	}
-	redisCache, err := cache.NewRedisCache(redisConfig)
-	if err != nil {
-		log.Printf("Redis 连接失败: %v", err)
+		log.Printf("基础依赖初始化失败: %v", err)
 		os.Exit(1)
 	}
 
 	// 初始化认证与仓储依赖。
-	jwtSecret := getSecretEnv("JWT_SECRET", "your-secret-key-change-in-production")
+	jwtSecret := bootstrap.GetSecretEnv("JWT_SECRET", "your-secret-key-change-in-production")
 	jwtExpiry := 7 * 24 * time.Hour
 	jwtManager := jwt.NewManager(jwtSecret)
-	authMgr := auth.NewAuth(corehttp.NewClient())
-
-	userRepo := repository.NewUserRepository(db)
-	accountRepo := repository.NewAccountRepository(db)
-	taskLogRepo := repository.NewTaskLogRepository(db)
-	cloudStatsRepo := repository.NewCloudStatsRepository(db)
-	taskConfigRepo := repository.NewTaskConfigRepository(db)
-	productRepo := repository.NewProductRepository(db)
-	exchangeAccountRepo := repository.NewExchangeAccountRepository(db)
-	exchangeTaskRepo := repository.NewExchangeTaskRepository(db)
-	exchangeRecordRepo := repository.NewExchangeRecordRepository(db)
-	configRepo := repository.NewSystemConfigRepository(db)
-	auditLogRepo := repository.NewAuditLogRepository(db)
-	redisStorage := cache.NewRedisStorage(redisCache, "caiyun:task")
-	schemaRepo := repository.NewSchemaRepository(db)
-
-	// 显式校验数据库结构，避免依赖运行时 AutoMigrate 造成代码与 schema 漂移。
-	if err := schemaRepo.ValidateCriticalSchema(); err != nil {
-		log.Printf("数据库结构校验失败: %v", err)
-		os.Exit(1)
-	}
-	if err := taskConfigRepo.SyncDefinitions(services.DefaultTaskConfigs()); err != nil {
-		log.Printf("任务配置同步失败: %v", err)
-		os.Exit(1)
-	}
+	repos := core.Repository
 
 	// 初始化服务层。
 	passwordResetConfig := services.PasswordResetConfig{
 		SMTP: services.SMTPConfig{
-			Host:     getEnv("SMTP_HOST", ""),
-			Port:     getEnv("SMTP_PORT", "587"),
-			Username: getEnv("SMTP_USERNAME", ""),
-			Password: getEnv("SMTP_PASSWORD", ""),
-			From:     getEnv("SMTP_FROM", ""),
-			FromName: getEnv("SMTP_FROM_NAME", "移动云盘"),
-			UseTLS:   getBoolEnv("SMTP_USE_TLS", false),
+			Host:     bootstrap.GetEnv("SMTP_HOST", ""),
+			Port:     bootstrap.GetEnv("SMTP_PORT", "587"),
+			Username: bootstrap.GetEnv("SMTP_USERNAME", ""),
+			Password: bootstrap.GetEnv("SMTP_PASSWORD", ""),
+			From:     bootstrap.GetEnv("SMTP_FROM", ""),
+			FromName: bootstrap.GetEnv("SMTP_FROM_NAME", "移动云盘"),
+			UseTLS:   bootstrap.GetBoolEnv("SMTP_USE_TLS", false),
 		},
 	}
-	authService := services.NewAuthServiceWithPasswordResetCache(userRepo, jwtManager, jwtExpiry, passwordResetConfig, redisCache)
-	accountService := services.NewAccountService(accountRepo, userRepo, redisCache, authMgr)
-	taskService := services.NewTaskService(accountRepo, taskLogRepo, redisStorage, authMgr, taskConfigRepo)
-	cloudService := services.NewCloudService(accountRepo, cloudStatsRepo, taskLogRepo)
-	adminService := services.NewAdminService(userRepo, accountRepo, taskLogRepo, taskConfigRepo)
-	tokenManager := services.NewTokenManager(accountRepo, exchangeAccountRepo, authMgr)
-	exchangeService := services.NewExchangeService(productRepo, exchangeAccountRepo, exchangeTaskRepo, accountRepo, configRepo, exchangeRecordRepo, taskLogRepo, authMgr, tokenManager)
-	productService := services.NewProductService(productRepo, accountRepo)
-	announcementRepo := repository.NewAnnouncementRepository(db)
-	announcementService := services.NewAnnouncementService(announcementRepo)
+	authService := services.NewAuthServiceWithPasswordResetCache(repos.User, jwtManager, jwtExpiry, passwordResetConfig, core.Redis)
+	accountService := services.NewAccountService(repos.Account, repos.User, core.Redis, core.Auth)
+	taskQueue, err := queue.NewConfiguredTaskQueue(core.Redis)
+	if err != nil {
+		log.Printf("初始化任务队列失败: %v", err)
+		os.Exit(1)
+	}
+	accountService.SetTaskQueue(taskQueue)
+	log.Printf("任务队列后端: %s", queue.TaskQueueBackendFromEnv())
+	taskService := services.NewTaskService(repos.Account, repos.TaskLog, core.TaskStore, core.Auth, repos.TaskConfig, repos.CloudStats)
+	cloudService := services.NewCloudService(repos.Account, repos.CloudStats, repos.TaskLog)
+	adminService := services.NewAdminService(repos.User, repos.Account, repos.TaskLog, repos.TaskConfig)
+	tokenManager := services.NewTokenManager(repos.Account, repos.ExchangeAccount, core.Auth)
+	tokenManager.SetDistributedLockCache(core.Redis)
+	exchangeService := services.NewExchangeService(repos.Product, repos.ExchangeAccount, repos.ExchangeTask, repos.Account, repos.SystemConfig, repos.ExchangeRecord, repos.TaskLog, core.Auth, tokenManager)
+	productService := services.NewProductService(repos.Product, repos.Account)
+	announcementService := services.NewAnnouncementService(repos.Announcement)
 	taskService.SetTokenManager(tokenManager)
 
 	// 初始化任务监控器，并注册为 API 进程可见的全局实例。
@@ -131,16 +86,16 @@ func main() {
 
 		updateMetrics := func() {
 			taskStats := taskMonitor.GetStats()
-			running := toInt(taskStats["active_tasks"])
-			completed := toInt(taskStats["completed_tasks"])
-			total := toInt(taskStats["total_tasks"])
+			running := bootstrap.ToInt(taskStats["active_tasks"])
+			completed := bootstrap.ToInt(taskStats["completed_tasks"])
+			total := bootstrap.ToInt(taskStats["total_tasks"])
 			metricsCollector.SetTaskStats(total, 0, running, completed)
 
 			tokenStats := tokenManager.GetTokenStats()
 			metricsCollector.SetTokenStats(
-				toInt(tokenStats["total"]),
-				toInt(tokenStats["healthy"]),
-				toInt(tokenStats["error"]),
+				bootstrap.ToInt(tokenStats["total"]),
+				bootstrap.ToInt(tokenStats["healthy"]),
+				bootstrap.ToInt(tokenStats["error"]),
 			)
 		}
 
@@ -163,8 +118,8 @@ func main() {
 	authHandler := handlers.NewAuthHandler(authService, jwtManager)
 	accountHandler := handlers.NewAccountHandler(accountService, taskService)
 	taskHandler := handlers.NewTaskHandler(taskService, cloudService, accountService)
-	taskHandler.SetRedisCache(redisCache)
-	queueStatusHandler := handlers.NewQueueStatusHandler(redisCache)
+	taskHandler.SetRedisCache(core.Redis)
+	queueStatusHandler := handlers.NewQueueStatusHandler(taskQueue)
 	adminHandler := handlers.NewAdminHandler(adminService)
 	exchangeHandler := handlers.NewExchangeHandler(exchangeService, productService)
 	announcementHandler := handlers.NewAnnouncementHandler(announcementService)
@@ -183,7 +138,7 @@ func main() {
 	r.GET("/health", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
 	})
-	r.GET("/metrics", middleware.AuthMiddlewareWithUser(jwtManager, userRepo), middleware.AdminMiddleware(), gin.WrapH(promhttp.HandlerFor(metricsCollector.Registry(), promhttp.HandlerOpts{})))
+	r.GET("/metrics", middleware.AuthMiddlewareWithUser(jwtManager, repos.User), middleware.AdminMiddleware(), gin.WrapH(promhttp.HandlerFor(metricsCollector.Registry(), promhttp.HandlerOpts{})))
 
 	public := r.Group("/api/auth")
 	{
@@ -194,7 +149,7 @@ func main() {
 	}
 
 	protected := r.Group("/api")
-	protected.Use(middleware.AuthMiddlewareWithUser(jwtManager, userRepo))
+	protected.Use(middleware.AuthMiddlewareWithUser(jwtManager, repos.User))
 	protected.Use(middleware.CSRFMiddleware())
 	protected.Use(middleware.AuthenticatedRateLimitMiddleware(rateLimitConfig))
 	{
@@ -270,11 +225,11 @@ func main() {
 
 	admin := r.Group("/api/admin")
 	admin.Use(
-		middleware.AuthMiddlewareWithUser(jwtManager, userRepo),
+		middleware.AuthMiddlewareWithUser(jwtManager, repos.User),
 		middleware.CSRFMiddleware(),
 		middleware.AuthenticatedRateLimitMiddleware(rateLimitConfig),
 		middleware.AdminMiddleware(),
-		middleware.AuditMiddlewareWithFilter(auditLogRepo, auditFilter),
+		middleware.AuditMiddlewareWithFilter(repos.AuditLog, auditFilter),
 	)
 	{
 		admin.GET("/users", adminHandler.GetAllUsers)
@@ -306,8 +261,7 @@ func main() {
 
 	// 初始化 WebSocket Hub 与离线消息存储。
 	wsHub := ws.GetHub()
-	wsMessageRepo := repository.NewWSMessageRepository(db)
-	wsHub.SetWSMessageRepository(wsMessageRepo)
+	wsHub.SetWSMessageRepository(repos.WSMessage)
 
 	r.GET("/ws", func(c *gin.Context) {
 		token := ""
@@ -324,7 +278,7 @@ func main() {
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid token"})
 			return
 		}
-		user, err := userRepo.FindByID(claims.UserID)
+		user, err := repos.User.FindByID(claims.UserID)
 		if err != nil {
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "user not found"})
 			return
@@ -337,7 +291,7 @@ func main() {
 		wsHub.HandleWebSocket(c.Writer, c.Request, user.ID)
 	})
 
-	port := getEnv("PORT", "8080")
+	port := bootstrap.GetEnv("PORT", "8080")
 	srv := &http.Server{
 		Addr:         ":" + port,
 		Handler:      r,
@@ -364,65 +318,10 @@ func main() {
 	if err := srv.Shutdown(ctx); err != nil {
 		log.Printf("强制关闭服务失败: %v", err)
 	}
-	if err := redisCache.Close(); err != nil {
+	tokenManager.Stop()
+	if err := core.Redis.Close(); err != nil {
 		log.Printf("关闭 Redis 连接失败: %v", err)
 	}
 	taskMonitor.Stop()
 	log.Println("服务已停止")
-}
-
-func getEnv(key, defaultValue string) string {
-	if value, exists := os.LookupEnv(key); exists {
-		return value
-	}
-	return defaultValue
-}
-
-func getBoolEnv(key string, defaultValue bool) bool {
-	value, exists := os.LookupEnv(key)
-	if !exists || value == "" {
-		return defaultValue
-	}
-	return value == "true" || value == "1" || value == "yes"
-}
-
-func getSecretEnv(key, insecureDefault string) string {
-	value, exists := os.LookupEnv(key)
-	if !exists || value == "" {
-		if os.Getenv("ALLOW_INSECURE_DEFAULTS") == "true" {
-			log.Printf("警告：%s 使用不安全默认值，仅允许本地调试", key)
-			return insecureDefault
-		}
-		log.Fatalf("缺少必需环境变量 %s；如仅本地调试可设置 ALLOW_INSECURE_DEFAULTS=true", key)
-	}
-	if value == insecureDefault || len(value) < 16 {
-		if os.Getenv("ALLOW_INSECURE_DEFAULTS") == "true" {
-			log.Printf("警告：%s 使用弱值，仅允许本地调试", key)
-			return value
-		}
-		log.Fatalf("%s 使用弱值或默认值，请更换为强随机值", key)
-	}
-	return value
-}
-
-// toInt 将常见数值类型安全转换为 int。
-func toInt(value interface{}) int {
-	switch v := value.(type) {
-	case int:
-		return v
-	case int32:
-		return int(v)
-	case int64:
-		return int(v)
-	case uint:
-		return int(v)
-	case uint32:
-		return int(v)
-	case uint64:
-		return int(v)
-	case float64:
-		return int(v)
-	default:
-		return 0
-	}
 }

@@ -14,6 +14,7 @@ import (
 	"caiyun/internal/core/sms"
 	"caiyun/internal/models"
 	"caiyun/internal/services"
+	apiresponse "caiyun/pkg/response"
 
 	"github.com/gin-gonic/gin"
 )
@@ -203,7 +204,7 @@ func (h *AccountHandler) CreateAccount(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, account)
+	apiresponse.Success(c, account)
 }
 
 // ListAccounts 获取账号列表
@@ -243,7 +244,7 @@ func (h *AccountHandler) ListAccounts(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, ListAccountsResponse{
+	apiresponse.Success(c, ListAccountsResponse{
 		Accounts: accounts,
 		Total:    total,
 		Page:     page,
@@ -286,7 +287,7 @@ func (h *AccountHandler) GetAccount(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, account)
+	apiresponse.Success(c, account)
 }
 
 // UpdateAccount 更新账号
@@ -336,7 +337,7 @@ func (h *AccountHandler) UpdateAccount(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, account)
+	apiresponse.Success(c, account)
 }
 
 // DeleteAccount 删除账号
@@ -373,7 +374,7 @@ func (h *AccountHandler) DeleteAccount(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, SuccessResponse{Message: "删除成功"})
+	apiresponse.Message(c, "删除成功")
 }
 
 // SetAccountStatus 设置账号状态
@@ -415,7 +416,7 @@ func (h *AccountHandler) SetAccountStatus(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, SuccessResponse{Message: "状态更新成功"})
+	apiresponse.Message(c, "状态更新成功")
 }
 
 // RefreshToken 刷新账号Token
@@ -469,7 +470,7 @@ func (h *AccountHandler) RefreshToken(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, updatedAccount)
+	apiresponse.Success(c, updatedAccount)
 }
 
 // TriggerTask 手动触发任务执行
@@ -535,7 +536,7 @@ func (h *AccountHandler) TriggerTask(c *gin.Context) {
 		}
 	}()
 
-	c.JSON(http.StatusOK, SuccessResponse{Message: "任务已开始执行"})
+	apiresponse.Message(c, "任务已开始执行")
 }
 
 // SendSmsCodeRequest 发送短信验证码请求
@@ -611,13 +612,9 @@ func (h *AccountHandler) SendSmsCode(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, map[string]interface{}{
-		"code":    0,
-		"message": "验证码已发送",
-		"data": map[string]string{
-			"phone":   req.Phone,
-			"task_id": taskID,
-		},
+	apiresponse.SuccessWithMessage(c, "验证码已发送", map[string]string{
+		"phone":   req.Phone,
+		"task_id": taskID,
 	})
 }
 
@@ -648,16 +645,12 @@ func (h *AccountHandler) GetSmsStatus(c *gin.Context) {
 		if retryable {
 			h.smsRateLimiter.Reset(phone)
 		}
-		c.JSON(http.StatusOK, map[string]interface{}{
-			"code":    0,
-			"message": "success",
-			"data": map[string]interface{}{
-				"phone":     phone,
-				"status":    "failed",
-				"task_id":   "",
-				"retryable": retryable,
-				"message":   errMsg,
-			},
+		apiresponse.Success(c, map[string]interface{}{
+			"phone":     phone,
+			"status":    "failed",
+			"task_id":   "",
+			"retryable": retryable,
+			"message":   errMsg,
 		})
 		return
 	}
@@ -678,16 +671,12 @@ func (h *AccountHandler) GetSmsStatus(c *gin.Context) {
 		h.smsRateLimiter.Reset(phone)
 	}
 
-	c.JSON(http.StatusOK, map[string]interface{}{
-		"code":    0,
-		"message": "success",
-		"data": map[string]interface{}{
-			"phone":     phone,
-			"task_id":   statusInfo.TaskID,
-			"status":    statusInfo.Status,
-			"retryable": retryable,
-			"message":   statusMessage,
-		},
+	apiresponse.Success(c, map[string]interface{}{
+		"phone":     phone,
+		"task_id":   statusInfo.TaskID,
+		"status":    statusInfo.Status,
+		"retryable": retryable,
+		"message":   statusMessage,
 	})
 }
 
@@ -761,5 +750,5 @@ func (h *AccountHandler) SmsLogin(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, account)
+	apiresponse.Success(c, account)
 }

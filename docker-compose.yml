@@ -48,6 +48,7 @@ services:
       REDIS_HOST: redis
       REDIS_PORT: 6379
       REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD is required}
+      TASK_QUEUE_BACKEND: ${TASK_QUEUE_BACKEND:-list}
       JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required}
       SMTP_HOST: ${SMTP_HOST:-}
       SMTP_PORT: ${SMTP_PORT:-587}
@@ -80,10 +81,13 @@ services:
       REDIS_HOST: redis
       REDIS_PORT: 6379
       REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD is required}
+      TASK_QUEUE_BACKEND: ${TASK_QUEUE_BACKEND:-list}
       WORKER_MONITOR_TOKEN: ${WORKER_MONITOR_TOKEN:?WORKER_MONITOR_TOKEN is required}
       TASK_CONCURRENCY: 10
       TASK_SCHEDULE: "0 8 * * *"
+      WORKER_MONITOR_HOST: 0.0.0.0
       WORKER_MONITOR_PORT: 8081
+      WORKER_MONITOR_ALLOW_PLAINTEXT: "true"
     networks:
       - caiyun-network
 

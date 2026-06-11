@@ -1,9 +1,13 @@
 package services
 
 import (
+	"caiyun/internal/cache"
 	"caiyun/internal/core/auth"
 	corehttp "caiyun/internal/core/http"
 	"caiyun/internal/repository"
+	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"log"
 	"strings"
@@ -18,8 +22,11 @@ type TokenManager struct {
 	authMgr      *auth.Auth
 
 	tokenCache     sync.Map // map[uint]*TokenInfo
+	accountLocks   sync.Map // map[uint]*sync.Mutex
 	preRefreshChan chan uint
-	mu             sync.RWMutex
+	lockCache      *cache.RedisCache
+	ctx            context.Context
+	cancel         context.CancelFunc
 }
 
 // TokenInfo 描述账号当前 Token 状态。
@@ -37,6 +44,10 @@ const (
 	tokenRefreshErrorTTL    = 2 * time.Minute
 	maxJWTRefreshFailures   = 3
 	tokenRefreshHealthySkew = 2 * time.Minute
+	tokenPreRefreshSkew     = 5 * time.Minute
+	tokenRefreshLockTTL     = 30 * time.Second
+	tokenRefreshLockWait    = 10 * time.Second
+	tokenRefreshPollDelay   = 500 * time.Millisecond
 )
 
 // NewTokenManager 创建 Token 管理器，并启动后台维护协程。
@@ -45,11 +56,14 @@ func NewTokenManager(
 	exchangeRepo *repository.ExchangeAccountRepository,
 	authMgr *auth.Auth,
 ) *TokenManager {
+	ctx, cancel := context.WithCancel(context.Background())
 	tm := &TokenManager{
 		accountRepo:    accountRepo,
 		exchangeRepo:   exchangeRepo,
 		authMgr:        authMgr,
 		preRefreshChan: make(chan uint, 100),
+		ctx:            ctx,
+		cancel:         cancel,
 	}
 
 	// 启动预刷新协程（包含扫描与消费预刷新队列）。
@@ -60,14 +74,26 @@ func NewTokenManager(
 	return tm
 }
 
+// SetDistributedLockCache 启用 Redis 分布式刷新锁，避免多副本同时刷新同一账号 Token。
+func (tm *TokenManager) SetDistributedLockCache(redisCache *cache.RedisCache) {
+	if tm == nil {
+		return
+	}
+	tm.lockCache = redisCache
+}
+
+// Stop 停止 TokenManager 后台维护协程。
+func (tm *TokenManager) Stop() {
+	if tm == nil || tm.cancel == nil {
+		return
+	}
+	tm.cancel()
+}
+
 // GetToken 获取有效 Token（优先走缓存）。
 func (tm *TokenManager) GetToken(accountID uint) (*TokenInfo, error) {
-	if info, ok := tm.tokenCache.Load(accountID); ok {
-		tokenInfo := info.(*TokenInfo)
-		// 提前 2 分钟视为即将过期，需要刷新（JWT Token 有效期只有 20-30 分钟）
-		if tokenInfo.JWTToken != "" && tokenInfo.HealthStatus == "healthy" && time.Now().Add(tokenRefreshHealthySkew).Before(tokenInfo.ExpiresAt) {
-			return tokenInfo, nil
-		}
+	if tokenInfo, err, ok := tm.cachedToken(accountID); ok {
+		return tokenInfo, err
 	}
 
 	return tm.refreshToken(accountID)
@@ -75,15 +101,35 @@ func (tm *TokenManager) GetToken(accountID uint) (*TokenInfo, error) {
 
 // refreshToken 刷新指定账号 Token，并更新缓存与数据库。
 func (tm *TokenManager) refreshToken(accountID uint) (*TokenInfo, error) {
-	tm.mu.Lock()
-	defer tm.mu.Unlock()
+	lock := tm.accountLock(accountID)
+	lock.Lock()
+	defer lock.Unlock()
 
 	// 双重检查，避免并发重复刷新。
-	if info, ok := tm.tokenCache.Load(accountID); ok {
-		tokenInfo := info.(*TokenInfo)
-		if tokenInfo.JWTToken != "" && tokenInfo.HealthStatus == "healthy" && time.Now().Add(tokenRefreshHealthySkew).Before(tokenInfo.ExpiresAt) {
+	if tokenInfo, err, ok := tm.cachedToken(accountID); ok {
+		return tokenInfo, err
+	}
+
+	refreshStartedAt := time.Now()
+	lockValue, locked, lockErr := tm.acquireRefreshLock(accountID)
+	if lockErr != nil {
+		log.Printf("[TokenManager] 获取账号 %d 分布式刷新锁失败，降级为进程内锁: %v", accountID, lockErr)
+	} else if tm.lockCache != nil && !locked {
+		if tokenInfo, err := tm.waitForExternalRefresh(accountID, refreshStartedAt); err == nil {
 			return tokenInfo, nil
+		} else {
+			log.Printf("[TokenManager] 等待账号 %d 外部刷新失败，尝试重新抢锁: %v", accountID, err)
 		}
+
+		lockValue, locked, lockErr = tm.acquireRefreshLock(accountID)
+		if lockErr != nil {
+			log.Printf("[TokenManager] 重新获取账号 %d 分布式刷新锁失败，降级为进程内锁: %v", accountID, lockErr)
+		} else if !locked {
+			return nil, fmt.Errorf("账号 %d Token 正在其他实例刷新，请稍后重试", accountID)
+		}
+	}
+	if locked {
+		defer tm.releaseRefreshLock(accountID, lockValue)
 	}
 
 	account, err := tm.accountRepo.GetByID(accountID)
@@ -148,13 +194,121 @@ func (tm *TokenManager) refreshToken(accountID uint) (*TokenInfo, error) {
 	return tokenInfo, nil
 }
 
-// preRefreshLoop 定时扫描即将过期 Token，并消费预刷新队列执行刷新。
-func (tm *TokenManager) preRefreshLoop() {
-	ticker := time.NewTicker(30 * time.Minute)
+func (tm *TokenManager) cachedToken(accountID uint) (*TokenInfo, error, bool) {
+	info, ok := tm.tokenCache.Load(accountID)
+	if !ok {
+		return nil, nil, false
+	}
+	tokenInfo, ok := info.(*TokenInfo)
+	if !ok || tokenInfo == nil {
+		tm.tokenCache.Delete(accountID)
+		return nil, nil, false
+	}
+
+	now := time.Now()
+	if tokenInfo.JWTToken != "" && tokenInfo.HealthStatus == "healthy" && now.Add(tokenRefreshHealthySkew).Before(tokenInfo.ExpiresAt) {
+		return tokenInfo, nil, true
+	}
+	if tokenInfo.HealthStatus == "error" && now.Before(tokenInfo.ExpiresAt) {
+		if tokenInfo.ErrorMsg == "" {
+			tokenInfo.ErrorMsg = "Token 暂时不可用"
+		}
+		return tokenInfo, fmt.Errorf("%s", tokenInfo.ErrorMsg), true
+	}
+
+	return nil, nil, false
+}
+
+func (tm *TokenManager) accountLock(accountID uint) *sync.Mutex {
+	lock, _ := tm.accountLocks.LoadOrStore(accountID, &sync.Mutex{})
+	return lock.(*sync.Mutex)
+}
+
+func (tm *TokenManager) acquireRefreshLock(accountID uint) (string, bool, error) {
+	if tm == nil || tm.lockCache == nil {
+		return "", false, nil
+	}
+
+	value := randomLockValue(accountID)
+	ok, err := tm.lockCache.SetNX(tokenRefreshLockKey(accountID), value, tokenRefreshLockTTL)
+	if err != nil {
+		return "", false, err
+	}
+	return value, ok, nil
+}
+
+func (tm *TokenManager) releaseRefreshLock(accountID uint, value string) {
+	if tm == nil || tm.lockCache == nil || value == "" {
+		return
+	}
+	if _, err := tm.lockCache.DelIfValue(tokenRefreshLockKey(accountID), value); err != nil {
+		log.Printf("[TokenManager] 释放账号 %d 分布式刷新锁失败: %v", accountID, err)
+	}
+}
+
+func (tm *TokenManager) waitForExternalRefresh(accountID uint, since time.Time) (*TokenInfo, error) {
+	if tm == nil {
+		return nil, fmt.Errorf("TokenManager 为空")
+	}
+
+	deadline := time.NewTimer(tokenRefreshLockWait)
+	defer deadline.Stop()
+	ticker := time.NewTicker(tokenRefreshPollDelay)
 	defer ticker.Stop()
 
 	for {
 		select {
+		case <-tm.ctx.Done():
+			return nil, fmt.Errorf("TokenManager 已停止")
+		case <-deadline.C:
+			return nil, fmt.Errorf("等待刷新超时")
+		case <-ticker.C:
+			if tokenInfo, err, ok := tm.cachedToken(accountID); ok && err == nil && tokenInfo.JWTToken != "" {
+				return tokenInfo, nil
+			}
+
+			account, err := tm.accountRepo.GetByID(accountID)
+			if err != nil {
+				continue
+			}
+			if account.JWTToken == "" || account.UpdatedAt.Before(since.Add(-1*time.Second)) {
+				continue
+			}
+
+			tokenInfo := &TokenInfo{
+				JWTToken:     account.JWTToken,
+				Auth:         sanitizeAuthValue(account.Auth),
+				ExpiresAt:    time.Now().Add(15 * time.Minute),
+				LastRefresh:  account.UpdatedAt,
+				HealthStatus: "healthy",
+			}
+			tm.tokenCache.Store(accountID, tokenInfo)
+			return tokenInfo, nil
+		}
+	}
+}
+
+func tokenRefreshLockKey(accountID uint) string {
+	return fmt.Sprintf("token:refresh:lock:%d", accountID)
+}
+
+func randomLockValue(accountID uint) string {
+	var buf [16]byte
+	if _, err := rand.Read(buf[:]); err != nil {
+		return fmt.Sprintf("%d:%d", accountID, time.Now().UnixNano())
+	}
+	return fmt.Sprintf("%d:%s", accountID, hex.EncodeToString(buf[:]))
+}
+
+// preRefreshLoop 定时扫描即将过期 Token，并消费预刷新队列执行刷新。
+func (tm *TokenManager) preRefreshLoop() {
+	ticker := time.NewTicker(2 * time.Minute)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-tm.ctx.Done():
+			return
 		case <-ticker.C:
 			tm.preRefreshExpiredTokens()
 		case accountID := <-tm.preRefreshChan:
@@ -175,8 +329,8 @@ func (tm *TokenManager) preRefreshExpiredTokens() {
 			return true
 		}
 
-		// Token 在 1 小时内过期时提前刷新。
-		if time.Now().Add(1 * time.Hour).After(tokenInfo.ExpiresAt) {
+		// Token 即将过期时提前刷新。
+		if time.Now().Add(tokenPreRefreshSkew).After(tokenInfo.ExpiresAt) {
 			select {
 			case tm.preRefreshChan <- accountID:
 			default:
@@ -192,8 +346,13 @@ func (tm *TokenManager) healthCheckLoop() {
 	ticker := time.NewTicker(5 * time.Minute)
 	defer ticker.Stop()
 
-	for range ticker.C {
-		tm.checkAllTokensHealth()
+	for {
+		select {
+		case <-tm.ctx.Done():
+			return
+		case <-ticker.C:
+			tm.checkAllTokensHealth()
+		}
 	}
 }
 
@@ -209,7 +368,7 @@ func (tm *TokenManager) checkAllTokensHealth() {
 		} else if time.Now().After(tokenInfo.ExpiresAt) {
 			tokenInfo.HealthStatus = "error"
 			tokenInfo.ErrorMsg = "Token 已过期"
-		} else if time.Now().Add(1 * time.Hour).After(tokenInfo.ExpiresAt) {
+		} else if time.Now().Add(tokenRefreshHealthySkew).After(tokenInfo.ExpiresAt) {
 			tokenInfo.HealthStatus = "warning"
 			tokenInfo.ErrorMsg = "Token 即将过期"
 		} else {

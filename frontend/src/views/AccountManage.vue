@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <div class="account-manage-container">
     <el-card shadow="hover">
       <template #header>
@@ -170,6 +170,7 @@
 </template>
 
 <script setup lang="ts">
+import '@/styles/element/account'
 import { ref, reactive, onMounted, onUnmounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import type { FormInstance, FormRules } from 'element-plus'
@@ -602,9 +603,3 @@ onUnmounted(() => {
   margin-bottom: 16px;
 }
 </style>
-
-
-
-
-
-

@@ -3,6 +3,7 @@ package handlers
 import (
 	"caiyun/internal/models"
 	"caiyun/internal/services"
+	apiresponse "caiyun/pkg/response"
 	"encoding/csv"
 	"fmt"
 	"net/http"
@@ -47,7 +48,7 @@ func (h *ExchangeHandler) SearchProducts(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, SearchProductsResponse{
+	apiresponse.Success(c, SearchProductsResponse{
 		Products: products,
 		Total:    int64(len(products)),
 	})
@@ -66,7 +67,7 @@ func (h *ExchangeHandler) GetCategories(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, GetCategoriesResponse{
+	apiresponse.Success(c, GetCategoriesResponse{
 		Categories: categories,
 	})
 }
@@ -106,13 +107,9 @@ func (h *ExchangeHandler) UpdateProducts(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, map[string]interface{}{
-		"code":    0,
-		"message": fmt.Sprintf("成功更新 %d 个商品", count),
-		"data": map[string]interface{}{
-			"account_id": req.AccountID,
-			"count":      count,
-		},
+	apiresponse.SuccessWithMessage(c, fmt.Sprintf("成功更新 %d 个商品", count), map[string]interface{}{
+		"account_id": req.AccountID,
+		"count":      count,
 	})
 }
 
@@ -140,19 +137,23 @@ func (h *ExchangeHandler) AddExchangeAccount(c *gin.Context) {
 	}
 
 	// 设置默认时间
-	if req.ExchangeTime1 == "" {
-		req.ExchangeTime1 = "10:00:00"
+	exchangeTime1, err := normalizeExchangeTime(req.ExchangeTime1, "10:00:00")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, ErrorResponse{Message: "第一次抢兑时间" + err.Error()})
+		return
 	}
-	if req.ExchangeTime2 == "" {
-		req.ExchangeTime2 = "16:00:00"
+	exchangeTime2, err := normalizeExchangeTime(req.ExchangeTime2, "16:00:00")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, ErrorResponse{Message: "第二次抢兑时间" + err.Error()})
+		return
 	}
 
 	account, err := h.exchangeService.AddExchangeAccount(
 		userID.(uint),
 		req.AccountID,
 		req.Remark,
-		req.ExchangeTime1,
-		req.ExchangeTime2,
+		exchangeTime1,
+		exchangeTime2,
 		req.ProductID,
 	)
 	if err != nil {
@@ -160,7 +161,7 @@ func (h *ExchangeHandler) AddExchangeAccount(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"account": account})
+	apiresponse.Success(c, gin.H{"account": account})
 }
 
 // ExchangeAccountWithProduct 兑换账号及当前商品信息
@@ -209,7 +210,7 @@ func (h *ExchangeHandler) GetExchangeAccounts(c *gin.Context) {
 		accountsWithProduct = append(accountsWithProduct, accWithProd)
 	}
 
-	c.JSON(http.StatusOK, GetExchangeAccountsResponse{
+	apiresponse.Success(c, GetExchangeAccountsResponse{
 		Accounts: accountsWithProduct,
 		Total:    len(accountsWithProduct),
 	})
@@ -241,17 +242,28 @@ func (h *ExchangeHandler) UpdateExchangeAccount(c *gin.Context) {
 		return
 	}
 
+	exchangeTime1, err := normalizeExchangeTime(req.ExchangeTime1, "10:00:00")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, ErrorResponse{Message: "第一次抢兑时间" + err.Error()})
+		return
+	}
+	exchangeTime2, err := normalizeExchangeTime(req.ExchangeTime2, "16:00:00")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, ErrorResponse{Message: "第二次抢兑时间" + err.Error()})
+		return
+	}
+
 	// 检查是否为管理员
 	role, _ := c.Get("role")
 	isAdmin := role == "admin"
 
-	err := h.exchangeService.UpdateExchangeAccount(
+	err = h.exchangeService.UpdateExchangeAccount(
 		uint(id),
 		userID.(uint),
 		isAdmin,
 		req.Remark,
-		req.ExchangeTime1,
-		req.ExchangeTime2,
+		exchangeTime1,
+		exchangeTime2,
 		req.IsActive,
 		req.ProductID,
 	)
@@ -260,7 +272,7 @@ func (h *ExchangeHandler) UpdateExchangeAccount(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, SuccessResponse{Message: "更新成功"})
+	apiresponse.Message(c, "更新成功")
 }
 
 // DeleteExchangeAccount 删除兑换账号
@@ -280,7 +292,7 @@ func (h *ExchangeHandler) DeleteExchangeAccount(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, SuccessResponse{Message: "删除成功"})
+	apiresponse.Message(c, "删除成功")
 }
 
 // CreateExchangeTaskRequest 创建抢兑任务请求
@@ -306,26 +318,30 @@ func (h *ExchangeHandler) CreateExchangeTask(c *gin.Context) {
 	}
 
 	// 设置默认值
-	if req.TaskType == "" {
-		req.TaskType = "fixed"
+	taskType, err := normalizeExchangeTaskType(req.TaskType)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, ErrorResponse{Message: err.Error()})
+		return
 	}
-	if req.MaxAttempts <= 0 {
-		req.MaxAttempts = 1
+	maxAttempts, err := normalizeMaxAttempts(req.MaxAttempts)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, ErrorResponse{Message: err.Error()})
+		return
 	}
 
 	task, err := h.exchangeService.CreateExchangeTask(
 		userID.(uint),
 		req.ExchangeAccountID,
 		req.ProductID,
-		req.TaskType,
-		req.MaxAttempts,
+		taskType,
+		maxAttempts,
 	)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, ErrorResponse{Message: err.Error()})
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"task": task})
+	apiresponse.Success(c, gin.H{"task": task})
 }
 
 // GetExchangeTasksResponse 获取抢兑任务列表响应
@@ -352,7 +368,7 @@ func (h *ExchangeHandler) GetExchangeTasks(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, GetExchangeTasksResponse{
+	apiresponse.Success(c, GetExchangeTasksResponse{
 		Tasks: tasks,
 		Total: len(tasks),
 	})
@@ -379,14 +395,19 @@ func (h *ExchangeHandler) UpdateExchangeTask(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, ErrorResponse{Message: err.Error()})
 		return
 	}
-
-	err := h.exchangeService.UpdateExchangeTask(uint(id), userID.(uint), req.MaxAttempts)
+	maxAttempts, err := normalizeMaxAttempts(req.MaxAttempts)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, ErrorResponse{Message: err.Error()})
 		return
 	}
 
-	c.JSON(http.StatusOK, SuccessResponse{Message: "更新成功"})
+	err = h.exchangeService.UpdateExchangeTask(uint(id), userID.(uint), maxAttempts)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, ErrorResponse{Message: err.Error()})
+		return
+	}
+
+	apiresponse.Message(c, "更新成功")
 }
 
 // DeleteExchangeTask 删除抢兑任务
@@ -406,7 +427,7 @@ func (h *ExchangeHandler) DeleteExchangeTask(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, SuccessResponse{Message: "删除成功"})
+	apiresponse.Message(c, "删除成功")
 }
 
 // ExecuteExchangeTask 立即执行抢兑任务
@@ -426,7 +447,7 @@ func (h *ExchangeHandler) ExecuteExchangeTask(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, SuccessResponse{Message: "已开始执行抢兑任务"})
+	apiresponse.Message(c, "已开始执行抢兑任务")
 }
 
 // BatchExecuteExchangeTasksRequest 批量执行抢兑任务请求
@@ -451,7 +472,7 @@ func (h *ExchangeHandler) BatchExecuteExchangeTasks(c *gin.Context) {
 	// 批量执行任务
 	results := h.exchangeService.BatchExecuteExchangeTasks(req.TaskIDs, userID.(uint))
 
-	c.JSON(http.StatusOK, gin.H{
+	apiresponse.Success(c, gin.H{
 		"message": "批量执行完成",
 		"results": results,
 	})
@@ -514,7 +535,7 @@ func (h *ExchangeHandler) GetExchangeConfig(c *gin.Context) {
 		immediateExchangeEnabled = config.KeyValue == "true" || config.KeyValue == "1" || config.KeyValue == "yes"
 	}
 
-	c.JSON(http.StatusOK, GetExchangeConfigResponse{
+	apiresponse.Success(c, GetExchangeConfigResponse{
 		AutoUpdateProducts:       autoUpdate,
 		Concurrency:              concurrency,
 		Enabled:                  enabled,
@@ -541,7 +562,7 @@ func (h *ExchangeHandler) GetExchangeConfigPublic(c *gin.Context) {
 		immediateExchangeEnabled = config.KeyValue == "true" || config.KeyValue == "1" || config.KeyValue == "yes"
 	}
 
-	c.JSON(http.StatusOK, gin.H{
+	apiresponse.Success(c, gin.H{
 		"enabled":                    enabled,
 		"immediate_exchange_enabled": immediateExchangeEnabled,
 	})
@@ -572,6 +593,10 @@ func (h *ExchangeHandler) UpdateExchangeConfig(c *gin.Context) {
 		return
 	}
 
+	if req.Concurrency <= 0 || req.Concurrency > 1000 {
+		c.JSON(http.StatusBadRequest, ErrorResponse{Message: "并发数必须在 1 到 1000 之间"})
+		return
+	}
 	// 更新并发数配置
 	if err := h.exchangeService.SetSystemConfig("exchange_concurrency", fmt.Sprintf("%d", req.Concurrency), "抢兑任务并发数量"); err != nil {
 		c.JSON(http.StatusInternalServerError, InternalServerErrorResponse())
@@ -592,7 +617,12 @@ func (h *ExchangeHandler) UpdateExchangeConfig(c *gin.Context) {
 
 	// 更新兑换月卡时间
 	if req.ExchangeTime != "" {
-		if err := h.exchangeService.SetSystemConfig("exchange_monthly_time", req.ExchangeTime, "自动兑换月卡时间"); err != nil {
+		exchangeTime, err := normalizeExchangeTime(req.ExchangeTime, "")
+		if err != nil {
+			c.JSON(http.StatusBadRequest, ErrorResponse{Message: "自动兑换月卡时间" + err.Error()})
+			return
+		}
+		if err := h.exchangeService.SetSystemConfig("exchange_monthly_time", exchangeTime[:5], "自动兑换月卡时间"); err != nil {
 			c.JSON(http.StatusInternalServerError, InternalServerErrorResponse())
 			return
 		}
@@ -612,7 +642,7 @@ func (h *ExchangeHandler) UpdateExchangeConfig(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, SuccessResponse{Message: "更新成功"})
+	apiresponse.Message(c, "更新成功")
 }
 
 // ExecuteMonthlyExchange 立即执行兑换月卡（管理员）
@@ -620,7 +650,7 @@ func (h *ExchangeHandler) ExecuteMonthlyExchange(c *gin.Context) {
 	// 异步执行月卡兑换
 	go h.exchangeService.ExecuteMonthlyExchange()
 
-	c.JSON(http.StatusOK, SuccessResponse{Message: "已开始执行月卡兑换任务"})
+	apiresponse.Message(c, "已开始执行月卡兑换任务")
 }
 
 // GetExchangeRecordsResponse 获取抢兑记录响应
@@ -646,6 +676,7 @@ func (h *ExchangeHandler) GetExchangeRecords(c *gin.Context) {
 	// 获取筛选参数
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "20"))
+	page, limit = normalizePageLimit(page, limit, 20, 100)
 	accountID, _ := strconv.ParseUint(c.Query("account_id"), 10, 32)
 	productName := c.Query("product_name")
 	status := c.Query("status")
@@ -676,7 +707,7 @@ func (h *ExchangeHandler) GetExchangeRecords(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, GetExchangeRecordsResponse{
+	apiresponse.Success(c, GetExchangeRecordsResponse{
 		Records: records,
 		Total:   total,
 		Stats: RecordStats{
@@ -773,6 +804,57 @@ func escapeCSVFormula(value string) string {
 	}
 }
 
+func normalizeExchangeTime(value, fallback string) (string, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return fallback, nil
+	}
+
+	for _, layout := range []string{"15:04:05", "15:04"} {
+		parsed, err := time.Parse(layout, value)
+		if err == nil {
+			return parsed.Format("15:04:05"), nil
+		}
+	}
+	return "", fmt.Errorf("格式错误，应为 HH:MM 或 HH:MM:SS")
+}
+
+func normalizeExchangeTaskType(taskType string) (string, error) {
+	taskType = strings.TrimSpace(taskType)
+	if taskType == "" {
+		return string(models.ExchangeTaskFixed), nil
+	}
+	switch taskType {
+	case string(models.ExchangeTaskFixed), string(models.ExchangeTaskLongTerm):
+		return taskType, nil
+	default:
+		return "", fmt.Errorf("任务类型不合法")
+	}
+}
+
+func normalizeMaxAttempts(maxAttempts int) (int, error) {
+	if maxAttempts <= 0 {
+		return 1, nil
+	}
+	if maxAttempts > 100 {
+		return 0, fmt.Errorf("最大抢兑次数不能超过 100")
+	}
+	return maxAttempts, nil
+}
+
+func normalizePageLimit(page, limit, defaultLimit, maxLimit int) (int, int) {
+	if page < 1 {
+		page = 1
+	}
+	if limit < 1 {
+		limit = defaultLimit
+	}
+	if limit > maxLimit {
+		limit = maxLimit
+	}
+	return page, limit
+}
+
 // ImmediateExchangeRequest 立即兑换请求
 type ImmediateExchangeRequest struct {
 	ExchangeAccountID uint `json:"exchange_account_id" binding:"required"`
@@ -826,7 +908,7 @@ func (h *ExchangeHandler) ImmediateExchange(c *gin.Context) {
 	// 立即执行任务
 	go h.exchangeService.ExecuteExchangeTask(task.ID, userID.(uint))
 
-	c.JSON(http.StatusOK, ImmediateExchangeResponse{
+	apiresponse.Success(c, ImmediateExchangeResponse{
 		Success: true,
 		Message: "兑换任务已启动",
 	})

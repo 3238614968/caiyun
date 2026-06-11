@@ -11,110 +11,15 @@
         <!-- 账号概况 -->
         <el-tab-pane label="账号概况" name="summaries">
           <div class="tab-content">
-            <div class="responsive-data-shell" v-loading="summaryLoading">
-<el-table v-if="!isMobile" :data="summaryList" stripe style="width: 100%">
-              <el-table-column prop="phone" label="手机号" width="130" />
-              <el-table-column prop="owner_username" label="所属用户" width="100" />
-              <el-table-column prop="cloud_count" label="当前云朵" width="100">
-                <template #default="{ row }">
-                  <span style="font-weight: 600; color: #3b82f6">{{ row.cloud_count }}</span>
-                </template>
-              </el-table-column>
-              <el-table-column prop="today_gained" label="今日获得" width="100">
-                <template #default="{ row }">
-                  <span v-if="row.today_gained > 0" style="color: #10b981">+{{ row.today_gained }}</span>
-                  <span v-else>0</span>
-                </template>
-              </el-table-column>
-              <el-table-column prop="yesterday_gained" label="昨日获得" width="100">
-                <template #default="{ row }">
-                  <span v-if="row.yesterday_gained > 0" style="color: #10b981">+{{ row.yesterday_gained }}</span>
-                  <span v-else>0</span>
-                </template>
-              </el-table-column>
-              <el-table-column label="今日任务" width="140">
-                <template #default="{ row }">
-                  <el-tag type="success" size="small">成功 {{ row.success_count }}</el-tag>
-                  <el-tag v-if="row.failed_count > 0" type="danger" size="small" style="margin-left: 4px">
-                    失败 {{ row.failed_count }}
-                  </el-tag>
-                </template>
-              </el-table-column>
-              <el-table-column label="状态" width="80">
-                <template #default="{ row }">
-                  <el-tag :type="row.is_active ? 'success' : 'info'" size="small">
-                    {{ row.is_active ? '激活' : '停用' }}
-                  </el-tag>
-                </template>
-              </el-table-column>
-              <el-table-column prop="last_executed_at" label="最后执行" width="160">
-                <template #default="{ row }">
-                  {{ row.last_executed_at || '-' }}
-                </template>
-              </el-table-column>
-              <el-table-column prop="remark" label="备注" />
-              <el-table-column prop="created_at" label="添加时间" width="160" />
-            </el-table>
-
-              <div v-else class="mobile-admin-list">
-                <el-empty v-if="summaryList.length === 0" description="暂无账号概况" />
-                <template v-else>
-                  <el-card
-                    v-for="row in summaryList"
-                    :key="`${row.phone}-${row.owner_username}-${row.created_at}`"
-                    class="mobile-admin-card mobile-summary-card"
-                    shadow="never"
-                  >
-                    <div class="mobile-admin-card-head">
-                      <div>
-                        <div class="mobile-admin-card-title">{{ row.phone }}</div>
-                        <div class="mobile-admin-card-meta">{{ row.owner_username || '-' }}</div>
-                      </div>
-                      <el-tag :type="row.is_active ? 'success' : 'info'" effect="light">{{ row.is_active ? '激活' : '停用' }}</el-tag>
-                    </div>
-                    <div class="mobile-admin-card-grid">
-                      <div class="mobile-admin-card-row">
-                        <span class="mobile-admin-card-label">当前云朵</span>
-                        <span class="mobile-admin-card-value strong">{{ row.cloud_count }}</span>
-                      </div>
-                      <div class="mobile-admin-card-row">
-                        <span class="mobile-admin-card-label">今日获得</span>
-                        <span class="mobile-admin-card-value success">{{ row.today_gained > 0 ? `+${row.today_gained}` : '0' }}</span>
-                      </div>
-                      <div class="mobile-admin-card-row">
-                        <span class="mobile-admin-card-label">昨日获得</span>
-                        <span class="mobile-admin-card-value">{{ row.yesterday_gained > 0 ? `+${row.yesterday_gained}` : '0' }}</span>
-                      </div>
-                      <div class="mobile-admin-card-row">
-                        <span class="mobile-admin-card-label">最后执行</span>
-                        <span class="mobile-admin-card-value">{{ row.last_executed_at || '-' }}</span>
-                      </div>
-                      <div class="mobile-admin-card-row">
-                        <span class="mobile-admin-card-label">备注</span>
-                        <span class="mobile-admin-card-value">{{ row.remark || '-' }}</span>
-                      </div>
-                      <div class="mobile-admin-card-row">
-                        <span class="mobile-admin-card-label">添加时间</span>
-                        <span class="mobile-admin-card-value">{{ row.created_at }}</span>
-                      </div>
-                    </div>
-                    <div class="mobile-admin-inline-tags">
-                      <el-tag type="success" size="small">成功 {{ row.success_count }}</el-tag>
-                      <el-tag v-if="row.failed_count > 0" type="danger" size="small">失败 {{ row.failed_count }}</el-tag>
-                    </div>
-                  </el-card>
-                </template>
-              </div>
-            </div>
-            <el-pagination
-              v-model:current-page="summaryPagination.page"
-              v-model:page-size="summaryPagination.pageSize"
-              :page-sizes="[20, 50, 100]"
+            <AdminSummaryList
+              :is-mobile="isMobile"
+              :loading="summaryLoading"
+              :summaries="summaryList"
+              :page="summaryPagination.page"
+              :page-size="summaryPagination.pageSize"
               :total="summaryPagination.total"
-              layout="total, sizes, prev, pager, next"
-              @size-change="(s: number) => { summaryPagination.pageSize = s; loadSummaries() }"
-              @current-change="(p: number) => { summaryPagination.page = p; loadSummaries() }"
-              style="margin-top: 20px"
+              @size-change="handleSummarySizeChange"
+              @page-change="handleSummaryPageChange"
             />
           </div>
         </el-tab-pane>
@@ -125,263 +30,49 @@
             <p style="color: #666; margin-bottom: 16px">
               下架的任务将不会被手动执行和定时任务执行。
             </p>
-            <div class="responsive-data-shell" v-loading="taskConfigLoading">
-<el-table v-if="!isMobile" :data="taskConfigs" stripe style="width: 100%">
-              <el-table-column prop="sort_order" label="序号" width="70" />
-              <el-table-column prop="task_name" label="任务名称" width="120" />
-              <el-table-column prop="task_type" label="任务类型" width="140">
-                <template #default="{ row }">
-                  <el-tag size="small">{{ getTaskTypeName(row.task_type, row.task_name) }}</el-tag>
-                </template>
-              </el-table-column>
-              <el-table-column label="状态" width="160">
-                <template #default="{ row }">
-                  <div class="task-status-cell">
-                    <el-switch
-                      v-model="row.is_enabled"
-                      @change="handleTaskConfigChange(row)"
-                    />
-                    <span :class="row.is_enabled ? 'status-on' : 'status-off'">
-                      {{ row.is_enabled ? '已上架' : '已下架' }}
-                    </span>
-                  </div>
-                </template>
-              </el-table-column>
-              <el-table-column prop="updated_at" label="更新时间" min-width="180">
-                <template #default="{ row }">
-                  {{ formatDate(row.updated_at) }}
-                </template>
-              </el-table-column>
-            </el-table>
-
-              <div v-else class="mobile-admin-list">
-                <el-empty v-if="taskConfigs.length === 0" description="暂无任务配置" />
-                <template v-else>
-                  <el-card
-                    v-for="row in taskConfigs"
-                    :key="row.task_type"
-                    class="mobile-admin-card"
-                    shadow="never"
-                  >
-                    <div class="mobile-admin-card-head">
-                      <div>
-                        <div class="mobile-admin-card-title">{{ row.task_name }}</div>
-                        <div class="mobile-admin-card-meta">#{{ row.sort_order }}</div>
-                      </div>
-                      <el-tag size="small">{{ getTaskTypeName(row.task_type, row.task_name) }}</el-tag>
-                    </div>
-                    <div class="mobile-admin-card-grid">
-                      <div class="mobile-admin-card-row">
-                        <span class="mobile-admin-card-label">任务类型</span>
-                        <span class="mobile-admin-card-value">{{ getTaskTypeName(row.task_type, row.task_name) }}</span>
-                      </div>
-                      <div class="mobile-admin-card-row">
-                        <span class="mobile-admin-card-label">更新时间</span>
-                        <span class="mobile-admin-card-value">{{ formatDate(row.updated_at) }}</span>
-                      </div>
-                    </div>
-                    <div class="mobile-admin-card-footer">
-                      <div class="task-status-cell">
-                        <el-switch v-model="row.is_enabled" @change="handleTaskConfigChange(row)" />
-                        <span :class="row.is_enabled ? 'status-on' : 'status-off'">{{ row.is_enabled ? '已上架' : '已下架' }}</span>
-                      </div>
-                    </div>
-                  </el-card>
-                </template>
-              </div>
-            </div>
+            <AdminTaskConfigList
+              :is-mobile="isMobile"
+              :loading="taskConfigLoading"
+              :configs="taskConfigs"
+              :format-date="formatDate"
+              @toggle="handleTaskConfigToggle"
+            />
           </div>
         </el-tab-pane>
 
         <!-- 抢兑配置 -->
         <el-tab-pane label="抢兑配置" name="exchange">
           <div class="tab-content">
-            <el-row :gutter="20">
-              <!-- 抢兑基础配置 -->
-              <el-col :span="12">
-                <el-card shadow="hover" class="config-card">
-                  <template #header>
-                    <div class="config-header">
-                      <span>基础配置</span>
-                    </div>
-                  </template>
-                  <el-form :model="exchangeConfig" label-width="150px">
-                    <el-form-item label="抢兑功能开关">
-                      <el-switch v-model="exchangeConfig.enabled" />
-                    </el-form-item>
-                    <el-form-item label="自动更新商品库">
-                      <el-switch v-model="exchangeConfig.auto_update_products" />
-                      <span style="margin-left: 10px; font-size: 12px; color: #999;">每天早上 8 点自动更新</span>
-                    </el-form-item>
-                    <el-form-item label="抢兑并发数" required>
-                      <el-input-number v-model="exchangeConfig.concurrency" :min="1" :max="50" />
-                      <span style="margin-left: 10px; font-size: 12px; color: #999;">同时执行的抢兑任务数</span>
-                    </el-form-item>
-                    <el-form-item label="立即兑换功能">
-                      <el-switch v-model="exchangeConfig.immediate_exchange_enabled" />
-                      <span style="margin-left: 10px; font-size: 12px; color: #999;">启用后用户可直接兑换，无需创建任务</span>
-                    </el-form-item>
-                    <el-form-item>
-                      <el-button type="primary" @click="saveExchangeConfig">保存配置</el-button>
-                    </el-form-item>
-                  </el-form>
-                </el-card>
-              </el-col>
-
-              <!-- 兑换月卡配置 -->
-              <el-col :span="12">
-                <el-card shadow="hover" class="config-card">
-                  <template #header>
-                    <div class="config-header">
-                      <span>兑换月卡配置</span>
-                      <el-tag v-if="exchangeConfig.exchange_monthly_enabled" type="success">已启用</el-tag>
-                      <el-tag v-else type="info">已禁用</el-tag>
-                    </div>
-                  </template>
-                  <el-form :model="exchangeConfig" label-width="150px">
-                    <el-form-item label="兑换月卡开关">
-                      <el-switch v-model="exchangeConfig.exchange_monthly_enabled" />
-                      <span style="margin-left: 10px; font-size: 12px; color: #999;">启用后自动兑换月卡</span>
-                    </el-form-item>
-                    <el-form-item label="自动兑换时间">
-                      <el-time-picker
-                        v-model="exchangeConfig.exchange_time"
-                        format="HH:mm"
-                        value-format="HH:mm"
-                        placeholder="选择时间"
-                        style="width: 100%;"
-                      />
-                    </el-form-item>
-                    <el-form-item label="月卡商品ID">
-                      <el-input
-                        v-model="exchangeConfig.monthly_prize_id"
-                        placeholder="请输入月卡商品ID"
-                        style="width: 100%;"
-                      />
-                      <span style="font-size: 12px; color: #999;">默认1001，可从商品中心查看</span>
-                    </el-form-item>
-                    <el-form-item>
-                      <el-button type="primary" @click="saveExchangeConfig">保存配置</el-button>
-                      <el-button type="success" @click="executeMonthlyExchange" :loading="monthlyExchangeLoading">
-                        立即执行兑换
-                      </el-button>
-                    </el-form-item>
-                  </el-form>
-                </el-card>
-              </el-col>
-            </el-row>
-
-            <!-- 商品中心管理 -->
-            <el-card shadow="hover" class="config-card" style="margin-top: 20px;">
-              <template #header>
-                <div class="config-header">
-                  <span>商品中心管理</span>
-                </div>
-              </template>
-              <div class="product-management">
-                <p style="color: #666; margin-bottom: 16px;">
-                  手动更新商品中心数据，需要选择一个有效的云盘账号作为数据获取源。
-                </p>
-                <el-form :inline="true">
-                  <el-form-item label="选择账号">
-                    <el-select
-                      v-model="selectedAccountId"
-                      placeholder="请选择云盘账号"
-                      style="width: 250px;"
-                      :disabled="availableProductSourceAccounts.length === 0"
-                    >
-                      <el-option
-                        v-for="acc in availableProductSourceAccounts"
-                        :key="acc.id"
-                        :label="acc.remark ? `${acc.remark} (${acc.phone})` : acc.phone"
-                        :value="acc.id"
-                      />
-                    </el-select>
-                  </el-form-item>
-                  <el-form-item>
-                    <el-button type="primary" @click="handleUpdateProducts" :loading="updateProductsLoading">
-                      <el-icon><Refresh /></el-icon>
-                      更新商品数据
-                    </el-button>
-                  </el-form-item>
-                </el-form>
-              </div>
-            </el-card>
+            <AdminExchangeConfig
+              :config="exchangeConfig"
+              :source-accounts="availableProductSourceAccounts"
+              v-model:selected-account-id="selectedAccountId"
+              :update-products-loading="updateProductsLoading"
+              :monthly-exchange-loading="monthlyExchangeLoading"
+              @change="patchExchangeConfig"
+              @save="saveExchangeConfig"
+              @execute-monthly="executeMonthlyExchange"
+              @update-products="handleUpdateProducts"
+            />
           </div>
         </el-tab-pane>
 
         <!-- 用户管理 -->
         <el-tab-pane label="用户管理" name="users">
           <div class="tab-content">
-            <div class="responsive-data-shell" v-loading="userLoading">
-<el-table v-if="!isMobile" :data="userList" stripe style="width: 100%">
-              <el-table-column prop="username" label="用户名" width="150" />
-              <el-table-column prop="email" label="邮箱" />
-              <el-table-column prop="role" label="角色" width="120">
-                <template #default="{ row }">
-                  <el-tag :type="row.role === 'admin' ? 'danger' : 'primary'">
-                    {{ row.role === 'admin' ? '管理员' : '普通用户' }}
-                  </el-tag>
-                </template>
-              </el-table-column>
-              <el-table-column prop="created_at" label="创建时间" width="180">
-                <template #default="{ row }">
-                  {{ formatDate(row.created_at) }}
-                </template>
-              </el-table-column>
-              <el-table-column label="操作" width="220" fixed="right">
-                <template #default="{ row }">
-                  <el-button type="primary" link @click="handleEditUserRole(row)">修改角色</el-button>
-                  <el-button type="warning" link @click="handleResetUserPassword(row)">重置密码</el-button>
-                  <el-button type="danger" link @click="handleDeleteUser(row)">删除</el-button>
-                </template>
-              </el-table-column>
-            </el-table>
-
-              <div v-else class="mobile-admin-list">
-                <el-empty v-if="userList.length === 0" description="暂无用户数据" />
-                <template v-else>
-                  <el-card
-                    v-for="row in userList"
-                    :key="row.id"
-                    class="mobile-admin-card"
-                    shadow="never"
-                  >
-                    <div class="mobile-admin-card-head">
-                      <div>
-                        <div class="mobile-admin-card-title">{{ row.username }}</div>
-                        <div class="mobile-admin-card-meta">{{ row.email || '-' }}</div>
-                      </div>
-                      <el-tag :type="row.role === 'admin' ? 'danger' : 'primary'">{{ row.role === 'admin' ? '管理员' : '普通用户' }}</el-tag>
-                    </div>
-                    <div class="mobile-admin-card-grid">
-                      <div class="mobile-admin-card-row">
-                        <span class="mobile-admin-card-label">邮箱</span>
-                        <span class="mobile-admin-card-value">{{ row.email || '-' }}</span>
-                      </div>
-                      <div class="mobile-admin-card-row">
-                        <span class="mobile-admin-card-label">创建时间</span>
-                        <span class="mobile-admin-card-value">{{ formatDate(row.created_at) }}</span>
-                      </div>
-                    </div>
-                    <div class="mobile-admin-card-actions">
-                      <el-button type="primary" plain @click="handleEditUserRole(row)">修改角色</el-button>
-                      <el-button type="warning" plain @click="handleResetUserPassword(row)">重置密码</el-button>
-                      <el-button type="danger" plain @click="handleDeleteUser(row)">删除</el-button>
-                    </div>
-                  </el-card>
-                </template>
-              </div>
-            </div>
-            <el-pagination
-              v-model:current-page="userPagination.page"
-              v-model:page-size="userPagination.pageSize"
-              :page-sizes="[10, 20, 50]"
+            <AdminUserList
+              :is-mobile="isMobile"
+              :loading="userLoading"
+              :users="userList"
+              :page="userPagination.page"
+              :page-size="userPagination.pageSize"
               :total="userPagination.total"
-              layout="total, sizes, prev, pager, next"
-              @size-change="(s: number) => { userPagination.pageSize = s; loadUserList() }"
-              @current-change="(p: number) => { userPagination.page = p; loadUserList() }"
-              style="margin-top: 20px"
+              :format-date="formatDate"
+              @edit-role="handleEditUserRole"
+              @reset-password="handleResetUserPassword"
+              @delete-user="handleDeleteUser"
+              @size-change="handleUserSizeChange"
+              @page-change="handleUserPageChange"
             />
           </div>
         </el-tab-pane>
@@ -389,104 +80,23 @@
         <!-- 统计概览 -->
         <el-tab-pane label="统计概览" name="stats">
           <div class="tab-content">
-            <el-row :gutter="20">
-              <el-col :span="6" v-for="stat in statsOverview" :key="stat.key">
-                <el-card shadow="hover" class="stat-card">
-                  <div class="stat-content">
-                    <div class="stat-icon" :style="{ background: stat.color }">
-                      <el-icon><component :is="stat.icon" /></el-icon>
-                    </div>
-                    <div class="stat-info">
-                      <div class="stat-value">{{ stat.value }}</div>
-                      <div class="stat-label">{{ stat.label }}</div>
-                    </div>
-                  </div>
-                </el-card>
-              </el-col>
-            </el-row>
+            <AdminStatsOverview :stats="statsOverview" />
           </div>
         </el-tab-pane>
 
         <!-- 公告管理 -->
         <el-tab-pane label="公告管理" name="announcements">
-          <div class="tab-content announcement-content">
-            <div class="announcement-header">
-              <el-button type="primary" @click="showAddAnnouncementDialog">
-                <el-icon><Plus /></el-icon>
-                发布公告
-              </el-button>
-            </div>
-            <div class="responsive-data-shell" v-loading="announcementLoading">
-<el-table v-if="!isMobile" :data="announcements" stripe style="width: 100%">
-              <el-table-column type="index" width="50" />
-              <el-table-column prop="title" label="标题" min-width="200">
-                <template #default="{ row }">
-                  <div class="title-cell">
-                    <el-tag v-if="row.is_top" type="danger" size="small" effect="dark">置顶</el-tag>
-                    <el-tag v-if="row.is_popup" type="warning" size="small" class="ml-2">弹窗</el-tag>
-                    <span class="title-text">{{ row.title }}</span>
-                  </div>
-                </template>
-              </el-table-column>
-              <el-table-column prop="is_published" label="状态" width="100">
-                <template #default="{ row }">
-                  <el-tag :type="row.is_published ? 'success' : 'info'">
-                    {{ row.is_published ? '已发布' : '已下架' }}
-                  </el-tag>
-                </template>
-              </el-table-column>
-              <el-table-column prop="created_at" label="创建时间" width="180">
-                <template #default="{ row }">
-                  {{ formatDate(row.created_at) }}
-                </template>
-              </el-table-column>
-              <el-table-column label="操作" width="200" fixed="right">
-                <template #default="{ row }">
-                  <el-button size="small" @click="viewAnnouncement(row)">查看</el-button>
-                  <el-button size="small" type="primary" @click="editAnnouncement(row)">编辑</el-button>
-                  <el-button size="small" type="danger" @click="deleteAnnouncement(row)">删除</el-button>
-                </template>
-              </el-table-column>
-            </el-table>
-
-              <div v-else class="mobile-admin-list">
-                <el-empty v-if="announcements.length === 0" description="暂无公告" />
-                <template v-else>
-                  <el-card
-                    v-for="row in announcements"
-                    :key="row.id"
-                    class="mobile-admin-card"
-                    shadow="never"
-                  >
-                    <div class="mobile-admin-card-head">
-                      <div>
-                        <div class="mobile-admin-card-title">{{ row.title }}</div>
-                        <div class="mobile-admin-inline-tags">
-                          <el-tag v-if="row.is_top" type="danger" size="small" effect="dark">置顶</el-tag>
-                          <el-tag v-if="row.is_popup" type="warning" size="small">弹窗</el-tag>
-                        </div>
-                      </div>
-                      <el-tag :type="row.is_published ? 'success' : 'info'">{{ row.is_published ? '已发布' : '已下架' }}</el-tag>
-                    </div>
-                    <div class="mobile-admin-card-grid">
-                      <div class="mobile-admin-card-row">
-                        <span class="mobile-admin-card-label">创建时间</span>
-                        <span class="mobile-admin-card-value">{{ formatDate(row.created_at) }}</span>
-                      </div>
-                      <div class="mobile-admin-card-row full">
-                        <span class="mobile-admin-card-label">内容预览</span>
-                        <span class="mobile-admin-card-value multiline">{{ row.content || '-' }}</span>
-                      </div>
-                    </div>
-                    <div class="mobile-admin-card-actions">
-                      <el-button @click="viewAnnouncement(row)">查看</el-button>
-                      <el-button type="primary" @click="editAnnouncement(row)">编辑</el-button>
-                      <el-button type="danger" @click="deleteAnnouncement(row)">删除</el-button>
-                    </div>
-                  </el-card>
-                </template>
-              </div>
-            </div>
+          <div class="tab-content">
+            <AdminAnnouncementList
+              :is-mobile="isMobile"
+              :loading="announcementLoading"
+              :announcements="announcements"
+              :format-date="formatDate"
+              @create="showAddAnnouncementDialog"
+              @view="viewAnnouncement"
+              @edit="editAnnouncement"
+              @delete="deleteAnnouncement"
+            />
           </div>
         </el-tab-pane>
       </el-tabs>
@@ -578,13 +188,13 @@
 </template>
 
 <script setup lang="ts">
+import '@/styles/element/admin'
 import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Refresh, Plus } from '@element-plus/icons-vue'
-import { type User } from '../api/auth'
 import {
   type Account,
   type AccountSummary,
+  type AdminUser,
   type TaskConfig,
   getAllUsers,
   getAllAccounts,
@@ -606,12 +216,18 @@ import {
   deleteAnnouncement as apiDeleteAnnouncement
 } from '../api/announcement'
 import {
+  type ExchangeConfig,
   getExchangeConfig,
   updateExchangeConfig,
   updateProducts as apiUpdateProducts,
   executeMonthlyExchange as apiExecuteMonthlyExchange
 } from '../api/exchange'
-import { getTaskTypeName } from '../utils/task-types'
+import AdminSummaryList from '@/components/admin/AdminSummaryList.vue'
+import AdminTaskConfigList from '@/components/admin/AdminTaskConfigList.vue'
+import AdminExchangeConfig from '@/components/admin/AdminExchangeConfig.vue'
+import AdminUserList from '@/components/admin/AdminUserList.vue'
+import AdminStatsOverview from '@/components/admin/AdminStatsOverview.vue'
+import AdminAnnouncementList from '@/components/admin/AdminAnnouncementList.vue'
 
 const activeTab = ref('summaries')
 const viewportWidth = ref(typeof window !== 'undefined' ? window.innerWidth : 1440)
@@ -631,7 +247,7 @@ const taskConfigLoading = ref(false)
 const taskConfigs = ref<TaskConfig[]>([])
 
 // Exchange config
-const exchangeConfig = reactive({
+const exchangeConfig = reactive<ExchangeConfig>({
   auto_update_products: false,
   concurrency: 10,
   enabled: true,
@@ -648,9 +264,13 @@ const availableProductSourceAccounts = computed(() =>
   allAccounts.value.filter(account => account.is_active)
 )
 
+const patchExchangeConfig = (patch: Partial<ExchangeConfig>) => {
+  Object.assign(exchangeConfig, patch)
+}
+
 // User management
 const userLoading = ref(false)
-const userList = ref<User[]>([])
+const userList = ref<AdminUser[]>([])
 const userPagination = reactive({ page: 1, pageSize: 10, total: 0 })
 
 // Stats
@@ -709,6 +329,17 @@ const loadSummaries = async () => {
   finally { summaryLoading.value = false }
 }
 
+const handleSummarySizeChange = (size: number) => {
+  summaryPagination.pageSize = size
+  summaryPagination.page = 1
+  loadSummaries()
+}
+
+const handleSummaryPageChange = (page: number) => {
+  summaryPagination.page = page
+  loadSummaries()
+}
+
 // Load task configs
 const loadTaskConfigs = async () => {
   taskConfigLoading.value = true
@@ -719,12 +350,14 @@ const loadTaskConfigs = async () => {
   finally { taskConfigLoading.value = false }
 }
 
-const handleTaskConfigChange = async (row: TaskConfig) => {
+const handleTaskConfigToggle = async (row: TaskConfig, enabled: boolean) => {
+  const previous = row.is_enabled
+  row.is_enabled = enabled
   try {
     await updateTaskConfig(row.task_type, row.is_enabled)
     ElMessage.success(row.is_enabled ? '任务已上架' : '任务已下架')
   } catch {
-    row.is_enabled = !row.is_enabled
+    row.is_enabled = previous
     ElMessage.error('操作失败')
   }
 }
@@ -743,9 +376,7 @@ const loadExchangeConfig = async () => {
     
     // 加载所有账号用于商品更新
     const accountsData = await getAllAccounts(1, 1000)
-    console.log('获取到的账号数据:', accountsData)
     allAccounts.value = accountsData.accounts || []
-    console.log('加载账号数量:', allAccounts.value.length)
 
     const hasSelectedAvailableAccount = availableProductSourceAccounts.value.some(
       account => account.id === selectedAccountId.value
@@ -811,13 +442,24 @@ const loadUserList = async () => {
   userLoading.value = true
   try {
     const data = await getAllUsers(userPagination.page, userPagination.pageSize)
-    userList.value = data.users as any[]
+    userList.value = data.users
     userPagination.total = data.total
   } catch { ElMessage.error('加载用户列表失败') }
   finally { userLoading.value = false }
 }
 
-const handleEditUserRole = (row: User) => {
+const handleUserSizeChange = (size: number) => {
+  userPagination.pageSize = size
+  userPagination.page = 1
+  loadUserList()
+}
+
+const handleUserPageChange = (page: number) => {
+  userPagination.page = page
+  loadUserList()
+}
+
+const handleEditUserRole = (row: AdminUser) => {
   roleForm.id = row.id
   roleForm.role = row.role
   roleDialogVisible.value = true
@@ -832,7 +474,7 @@ const handleRoleSubmit = async () => {
   } catch { ElMessage.error('角色修改失败') }
 }
 
-const handleResetUserPassword = (row: User) => {
+const handleResetUserPassword = (row: AdminUser) => {
   passwordForm.id = row.id
   passwordForm.username = row.username
   passwordForm.password = ''
@@ -853,7 +495,7 @@ const handlePasswordSubmit = async () => {
   }
 }
 
-const handleDeleteUser = async (row: User) => {
+const handleDeleteUser = async (row: AdminUser) => {
   try {
     await ElMessageBox.confirm('确定要删除该用户吗？', '提示', { type: 'warning' })
     await deleteUser(row.id)
@@ -997,28 +639,6 @@ onUnmounted(() => {
 .admin-tabs :deep(.el-tabs__active-bar) { background: linear-gradient(90deg, #2563eb, #0ea5e9); }
 .tab-content { padding: 22px 0 0; display:flex; flex-direction:column; gap:20px; }
 .tab-content > p { margin:0; line-height:1.6; }
-.config-card { height:100%; border-radius:22px; }
-.config-header { display:flex; justify-content:space-between; align-items:center; gap:12px; font-size:16px; font-weight:700; color:#0f172a; }
-.product-management { padding-top: 4px; }
-.product-management :deep(.el-form--inline) { display:flex; flex-wrap:wrap; gap:12px 16px; align-items:flex-end; }
-.product-management :deep(.el-form-item) { margin:0; }
-.product-management :deep(.el-form-item__content) { width:100%; }
-.product-management :deep(.el-select), .product-management :deep(.el-input) { width:min(100%, 280px)!important; }
-.stat-card { height:100%; margin-bottom:0; }
-.stat-content { display:flex; align-items:center; gap:14px; }
-.stat-icon { width:54px; height:54px; border-radius:16px; display:flex; align-items:center; justify-content:center; flex-shrink:0; box-shadow:0 10px 20px rgba(15,23,42,.12); }
-.stat-icon .el-icon { font-size:26px; color:#fff; }
-.stat-info { min-width:0; }
-.stat-info .stat-value { font-size:clamp(24px,2.4vw,30px); font-weight:800; color:#0f172a; }
-.stat-info .stat-label { margin-top:4px; font-size:13px; color:#64748b; }
-.task-status-cell { display:inline-flex; align-items:center; gap:8px; flex-wrap:wrap; }
-.status-on { color:#10b981; font-size:13px; font-weight:600; }
-.status-off { color:#ef4444; font-size:13px; font-weight:600; }
-.announcement-content { padding-top:10px; gap:10px; }
-.announcement-header { margin-bottom:0; min-height:34px; display:flex; justify-content:flex-end; align-items:center; }
-.title-cell { display:flex; align-items:center; gap:8px; min-width:0; }
-.title-text { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.ml-2 { margin-left:8px; }
 .form-options { display:flex; gap:14px; flex-wrap:wrap; }
 .tip-item { margin-bottom:0; }
 .view-content { padding:10px 4px 4px; }
@@ -1032,32 +652,23 @@ onUnmounted(() => {
 :deep(.el-table td.el-table__cell) { color:#334155; }
 :deep(.el-pagination) { justify-content:flex-end; flex-wrap:wrap; gap:8px; }
 :deep(.el-dialog) { max-width: calc(100vw - 32px); border-radius:22px; }
-@media (max-width: 1280px) { .admin-panel-container { padding:14px; } .tab-content { gap:16px; padding-top:18px; } :deep(.el-col-12) { width:100%!important; max-width:100%!important; flex:0 0 100%!important; } :deep(.el-col-6) { width:50%!important; max-width:50%!important; flex:0 0 50%!important; } }
-@media (max-width: 768px) { .admin-panel-container { padding:0; } .card-header { font-size:20px; } .admin-tabs :deep(.el-tabs__item) { height:40px; padding:0 14px; font-size:13px; } .tab-content { padding-top:16px; gap:14px; } .announcement-content { padding-top:10px; gap:10px; } .announcement-header { justify-content:stretch; min-height:34px; } .announcement-header :deep(.el-button) { width:100%; } .product-management :deep(.el-form--inline) { flex-direction:column; align-items:stretch; } .product-management :deep(.el-select), .product-management :deep(.el-input), .product-management :deep(.el-button) { width:100%!important; } .task-status-cell { align-items:flex-start; } .form-options { flex-direction:column; gap:10px; } .view-title { font-size:18px; } :deep(.el-col-6) { width:50%!important; max-width:50%!important; flex:0 0 50%!important; } :deep(.el-pagination) { justify-content:center; } }
-@media (max-width: 520px) { :deep(.el-col-6) { width:100%!important; max-width:100%!important; flex:0 0 100%!important; } }
-
-.responsive-data-shell { min-height: 120px; }
-.mobile-admin-list { display: grid; gap: 12px; }
-.mobile-admin-card { border-radius: 18px; border: 1px solid rgba(226, 232, 240, 0.9); background: rgba(255, 255, 255, 0.94); box-shadow: 0 14px 28px rgba(37, 99, 235, 0.08); }
-.mobile-admin-card :deep(.el-card__body) { padding: 16px; }
-.mobile-admin-card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
-.mobile-admin-card-title { font-size: 15px; font-weight: 700; color: #0f172a; line-height: 1.4; word-break: break-word; }
-.mobile-admin-card-meta { margin-top: 4px; font-size: 12px; color: #64748b; }
-.mobile-admin-card-grid { display: grid; gap: 10px; }
-.mobile-admin-card-row { display: grid; grid-template-columns: 84px minmax(0, 1fr); gap: 10px; align-items: start; }
-.mobile-admin-card-row.full { grid-template-columns: 1fr; }
-.mobile-admin-card-label { font-size: 12px; color: #64748b; font-weight: 600; }
-.mobile-admin-card-value { font-size: 13px; color: #334155; word-break: break-word; }
-.mobile-admin-card-value.strong { font-weight: 700; color: #2563eb; }
-.mobile-admin-card-value.success { color: #059669; font-weight: 600; }
-.mobile-admin-card-value.multiline { line-height: 1.6; }
-.mobile-admin-inline-tags { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
-.mobile-admin-card-footer { margin-top: 14px; padding-top: 12px; border-top: 1px solid rgba(226, 232, 240, 0.8); }
-.mobile-admin-card-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
-.mobile-admin-card-actions :deep(.el-button) { flex: 1 1 120px; margin: 0; }
+@media (max-width: 1280px) {
+  .admin-panel-container { padding:14px; }
+  .tab-content { gap:16px; padding-top:18px; }
+  :deep(.el-col-12) { width:100%!important; max-width:100%!important; flex:0 0 100%!important; }
+  :deep(.el-col-6) { width:50%!important; max-width:50%!important; flex:0 0 50%!important; }
+}
 @media (max-width: 768px) {
-  .responsive-data-shell :deep(.el-table) { display: none; }
-  .mobile-admin-card-row { grid-template-columns: 78px minmax(0, 1fr); }
+  .admin-panel-container { padding:0; }
+  .card-header { font-size:20px; }
+  .admin-tabs :deep(.el-tabs__item) { height:40px; padding:0 14px; font-size:13px; }
+  .tab-content { padding-top:16px; gap:14px; }
+  .form-options { flex-direction:column; gap:10px; }
+  .view-title { font-size:18px; }
+  :deep(.el-col-6) { width:50%!important; max-width:50%!important; flex:0 0 50%!important; }
+  :deep(.el-pagination) { justify-content:center; }
+}
+@media (max-width: 520px) {
+  :deep(.el-col-6) { width:100%!important; max-width:100%!important; flex:0 0 100%!important; }
 }
 </style>
-

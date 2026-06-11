@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -14,20 +15,16 @@ import (
 	"syscall"
 	"time"
 
-	"caiyun/internal/cache"
+	"caiyun/internal/bootstrap"
 	"caiyun/internal/concurrency"
 	"caiyun/internal/constants"
-	"caiyun/internal/core/auth"
-	corehttp "caiyun/internal/core/http"
 	"caiyun/internal/monitor"
 	"caiyun/internal/notification"
 	"caiyun/internal/queue"
 	"caiyun/internal/repository"
 	"caiyun/internal/scheduler"
 	"caiyun/internal/services"
-	"caiyun/pkg/database"
 
-	"github.com/joho/godotenv"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
@@ -40,7 +37,7 @@ type Worker struct {
 	taskMonitor    *monitor.TaskMonitor
 	jobScheduler   *scheduler.Scheduler
 	retryManager   *monitor.RetryManager
-	taskQueue      *queue.TaskQueue
+	taskQueue      queue.ReliableTaskQueue
 	notifier       notification.Notifier
 	concurrency    int
 	wg             sync.WaitGroup
@@ -56,7 +53,7 @@ func NewWorker(
 	taskMonitor *monitor.TaskMonitor,
 	jobScheduler *scheduler.Scheduler,
 	retryManager *monitor.RetryManager,
-	taskQueue *queue.TaskQueue,
+	taskQueue queue.ReliableTaskQueue,
 	notifier notification.Notifier,
 	concurrency int,
 ) *Worker {
@@ -101,12 +98,35 @@ func (w *Worker) queueListener() {
 	defer w.wg.Done()
 
 	log.Println("队列监听器已启动")
+	workerLimit := w.concurrency
+	if workerLimit <= 0 {
+		workerLimit = 1
+	}
+	sem := make(chan struct{}, workerLimit)
+	recoverTicker := time.NewTicker(time.Minute)
+	delayedTicker := time.NewTicker(10 * time.Second)
+	defer recoverTicker.Stop()
+	defer delayedTicker.Stop()
 
 	for {
 		select {
 		case <-w.ctx.Done():
 			log.Println("队列监听器已停止")
 			return
+		case <-recoverTicker.C:
+			recovered, err := w.taskQueue.RecoverStaleProcessing(queue.DefaultVisibilityDelay)
+			if err != nil {
+				log.Printf("恢复超时处理中任务失败: %v", err)
+			} else if recovered > 0 {
+				log.Printf("已恢复 %d 个超时处理中任务", recovered)
+			}
+		case <-delayedTicker.C:
+			promoted, err := w.taskQueue.PromoteDueDelayed(100)
+			if err != nil {
+				log.Printf("恢复到期延迟任务失败: %v", err)
+			} else if promoted > 0 {
+				log.Printf("已恢复 %d 个到期延迟任务", promoted)
+			}
 		default:
 			// 从队列获取任务（阻塞5秒）
 			message, err := w.taskQueue.Dequeue(5 * time.Second)
@@ -115,14 +135,29 @@ func (w *Worker) queueListener() {
 				continue
 			}
 
-			// 异步处理任务
-			go w.processQueueTask(message)
+			select {
+			case sem <- struct{}{}:
+			case <-w.ctx.Done():
+				_ = w.taskQueue.Requeue(message)
+				return
+			}
+
+			w.wg.Add(1)
+			go func(msg *queue.TaskMessage) {
+				defer w.wg.Done()
+				defer func() { <-sem }()
+				w.processQueueTask(msg)
+			}(message)
 		}
 	}
 }
 
 // processQueueTask 处理队列任务
 func (w *Worker) processQueueTask(message *queue.TaskMessage) {
+	if message == nil {
+		log.Println("收到空队列消息，已忽略")
+		return
+	}
 	log.Printf("从队列获取任务: 账号ID=%d, 任务类型=%s", message.AccountID, message.TaskType)
 
 	// 获取账号信息
@@ -130,17 +165,47 @@ func (w *Worker) processQueueTask(message *queue.TaskMessage) {
 	if err != nil {
 		log.Printf("获取账号失败: %v", err)
 		w.notifier.SendTaskFailure(message.AccountID, message.TaskType, fmt.Sprintf("获取账号失败: %v", err))
+		w.handleQueueTaskFailure(message, err)
 		return
 	}
 
-	// 执行任务
-	if err := w.ExecuteSingleAccount(account.ID); err != nil {
+	// 执行任务：队列消息可以指定 all/all_tasks 或具体任务类型。
+	if err := w.ExecuteQueueAccountTask(account.ID, message.TaskType); err != nil {
 		log.Printf("任务执行失败: %v", err)
 		w.notifier.SendTaskFailure(message.AccountID, message.TaskType, err.Error())
+		w.handleQueueTaskFailure(message, err)
 	} else {
 		log.Printf("任务执行成功: 账号ID=%d", message.AccountID)
 		w.notifier.SendTaskSuccess(message.AccountID, message.TaskType, "任务执行成功")
+		if err := w.taskQueue.Ack(message); err != nil {
+			log.Printf("任务确认失败: account_id=%d task_type=%s err=%v", message.AccountID, message.TaskType, err)
+		}
 	}
+}
+
+func (w *Worker) handleQueueTaskFailure(message *queue.TaskMessage, cause error) {
+	if message == nil {
+		return
+	}
+	message.RetryCount++
+	if message.RetryCount < queue.DefaultMaxAttempts {
+		if err := w.taskQueue.Requeue(message); err != nil {
+			log.Printf("任务重新入队失败: account_id=%d task_type=%s retry=%d err=%v", message.AccountID, message.TaskType, message.RetryCount, err)
+		} else {
+			log.Printf("任务已重新入队: account_id=%d task_type=%s retry=%d/%d", message.AccountID, message.TaskType, message.RetryCount, queue.DefaultMaxAttempts)
+		}
+		return
+	}
+
+	reason := ""
+	if cause != nil {
+		reason = cause.Error()
+	}
+	if err := w.taskQueue.DeadLetter(message, reason); err != nil {
+		log.Printf("任务写入死信队列失败: account_id=%d task_type=%s err=%v", message.AccountID, message.TaskType, err)
+		return
+	}
+	log.Printf("任务已移入死信队列: account_id=%d task_type=%s retries=%d reason=%s", message.AccountID, message.TaskType, message.RetryCount, reason)
 }
 
 // Stop 停止Worker
@@ -159,6 +224,16 @@ func (w *Worker) Stop() {
 
 // ExecuteSingleAccount 执行单个账号的任务
 func (w *Worker) ExecuteSingleAccount(accountID uint) error {
+	return w.ExecuteQueueAccountTask(accountID, "all_tasks")
+}
+
+// ExecuteQueueAccountTask 执行队列指定的账号任务，支持具体任务类型。
+func (w *Worker) ExecuteQueueAccountTask(accountID uint, taskType string) error {
+	taskType = strings.TrimSpace(taskType)
+	if taskType == "" {
+		taskType = "all_tasks"
+	}
+
 	// 获取账号详情
 	account, err := w.accountService.GetAccountByID(accountID)
 	if err != nil {
@@ -173,19 +248,19 @@ func (w *Worker) ExecuteSingleAccount(accountID uint) error {
 	// 使用重试管理器执行任务
 	err = w.retryManager.ExecuteWithRetry(
 		accountID,
-		"all_tasks",
+		taskType,
 		func() error {
 			// 刷新Token（如果需要）
 			if err := w.accountService.RefreshTokenIfNeeded(account); err != nil {
 				return err
 			}
 
-			// 执行所有任务
-			_, err := w.taskService.ExecuteTaskForAccount(account)
+			// 执行队列指定任务；taskType=all/all_tasks 时执行全部批量任务。
+			_, err := w.taskService.ExecuteSelectedTaskForAccount(account, taskType)
 			return err
 		},
 		func(progress float64, message string) {
-			w.taskMonitor.UpdateTaskProgress(accountID, "all_tasks", progress, message)
+			w.taskMonitor.UpdateTaskProgress(accountID, taskType, progress, message)
 		},
 	)
 
@@ -229,79 +304,31 @@ func (w *Worker) RunAllAccounts() error {
 	return nil
 }
 
-func getEnv(key, defaultValue string) string {
-	value, exists := os.LookupEnv(key)
-	if !exists {
-		return defaultValue
-	}
-	return value
-}
-
 func main() {
 	// 标准库 log 默认写 stderr，会导致运行日志全部落到错误日志文件。
 	log.SetOutput(os.Stdout)
 
-	// 加载环境变量
-	if err := godotenv.Load(); err != nil {
-		log.Println("未找到.env文件，使用默认配置")
-	}
+	bootstrap.LoadEnvFile()
 
-	// 连接数据库
-	dbConfig := database.Config{
-		Host:     getEnv("DB_HOST", "localhost"),
-		Port:     getEnv("DB_PORT", "3306"),
-		User:     getEnv("DB_USER", "caiyun_app"),
-		Password: getSecretEnv("DB_PASSWORD", "local-development-password"),
-		DBName:   getEnv("DB_NAME", "caiyun"),
-	}
-	db, err := database.NewMySQL(dbConfig)
+	core, err := bootstrap.InitCore()
 	if err != nil {
-		log.Fatal("数据库连接失败:", err)
+		log.Fatal("基础依赖初始化失败:", err)
 	}
-
-	// 连接Redis
-	redisConfig := cache.RedisConfig{
-		Host:     getEnv("REDIS_HOST", "localhost"),
-		Port:     getEnv("REDIS_PORT", "6379"),
-		Password: getEnv("REDIS_PASSWORD", ""),
-		DB:       0,
-	}
-	redisCache, err := cache.NewRedisCache(redisConfig)
-	if err != nil {
-		log.Fatal("Redis连接失败:", err)
-	}
-
-	// 初始化认证管理器
-	httpClient := corehttp.NewClient()
-	authMgr := auth.NewAuth(httpClient)
-
-	// 初始化Repositories
-	accountRepo := repository.NewAccountRepository(db)
-	userRepo := repository.NewUserRepository(db)
-	taskLogRepo := repository.NewTaskLogRepository(db)
-	cloudStatsRepo := repository.NewCloudStatsRepository(db)
-
-	// 创建Redis存储（用于任务存储）
-	redisStorage := cache.NewRedisStorage(redisCache, "caiyun:task")
-
-	// 初始化TaskConfig仓库并同步注册表定义
-	taskConfigRepo := repository.NewTaskConfigRepository(db)
-	schemaRepo := repository.NewSchemaRepository(db)
-	if err := schemaRepo.ValidateCriticalSchema(); err != nil {
-		log.Fatalf("数据库结构校验失败: %v", err)
-	}
-	if err := taskConfigRepo.SyncDefinitions(services.DefaultTaskConfigs()); err != nil {
-		log.Fatalf("任务配置同步失败: %v", err)
-	}
+	defer func() {
+		if err := core.Redis.Close(); err != nil {
+			log.Printf("关闭 Redis 连接失败: %v", err)
+		}
+	}()
+	repos := core.Repository
 
 	// 初始化Services
-	accountService := services.NewAccountService(accountRepo, userRepo, redisCache, authMgr)
-	taskService := services.NewTaskService(accountRepo, taskLogRepo, redisStorage, authMgr, taskConfigRepo, cloudStatsRepo)
-	cloudService := services.NewCloudService(accountRepo, cloudStatsRepo, taskLogRepo)
+	accountService := services.NewAccountService(repos.Account, repos.User, core.Redis, core.Auth)
+	taskService := services.NewTaskService(repos.Account, repos.TaskLog, core.TaskStore, core.Auth, repos.TaskConfig, repos.CloudStats)
+	cloudService := services.NewCloudService(repos.Account, repos.CloudStats, repos.TaskLog)
 
 	// 获取并发数配置
 	concurrencyLimit := 10
-	if concurrencyStr := getEnv("TASK_CONCURRENCY", "10"); concurrencyStr != "" {
+	if concurrencyStr := bootstrap.GetEnv("TASK_CONCURRENCY", "10"); concurrencyStr != "" {
 		if n, err := strconv.Atoi(concurrencyStr); err == nil && n > 0 {
 			concurrencyLimit = n
 		}
@@ -325,33 +352,33 @@ func main() {
 		Logger:     log.Default(),
 	})
 
-	// 初始化兑换中心相关 Repository
-	productRepo := repository.NewProductRepository(db)
-	exchangeAccountRepo := repository.NewExchangeAccountRepository(db)
-	exchangeTaskRepo := repository.NewExchangeTaskRepository(db)
-	exchangeRecordRepo := repository.NewExchangeRecordRepository(db)
-	configRepo := repository.NewSystemConfigRepository(db)
-
 	// 初始化 TokenManager
-	tokenManager := services.NewTokenManager(accountRepo, exchangeAccountRepo, authMgr)
+	tokenManager := services.NewTokenManager(repos.Account, repos.ExchangeAccount, core.Auth)
+	tokenManager.SetDistributedLockCache(core.Redis)
 
 	// 初始化兑换中心 Service
 	exchangeService := services.NewExchangeService(
-		productRepo, exchangeAccountRepo, exchangeTaskRepo,
-		accountRepo, configRepo, exchangeRecordRepo, taskLogRepo, authMgr, tokenManager,
+		repos.Product, repos.ExchangeAccount, repos.ExchangeTask,
+		repos.Account, repos.SystemConfig, repos.ExchangeRecord, repos.TaskLog, core.Auth, tokenManager,
 	)
 
 	// 初始化抢兑调度器（用于定时抢兑任务）
 	exchangeScheduler := services.NewExchangeScheduler(
-		exchangeTaskRepo, exchangeAccountRepo, exchangeRecordRepo, productRepo, configRepo, taskLogRepo, tokenManager,
+		repos.ExchangeTask, repos.ExchangeAccount, repos.ExchangeRecord, repos.Product, repos.SystemConfig, repos.TaskLog, tokenManager,
 	)
+	exchangeScheduler.SetLeaseStore(core.Redis)
 
 	// 启动抢兑调度器
 	exchangeScheduler.Start()
 	log.Println("【Worker】抢兑调度器已启动")
 
 	// 初始化任务队列
-	taskQueue := queue.NewTaskQueue(redisCache)
+	taskQueue, err := queue.NewConfiguredTaskQueue(core.Redis)
+	if err != nil {
+		log.Fatalf("初始化任务队列失败: %v", err)
+	}
+	accountService.SetTaskQueue(taskQueue)
+	log.Printf("任务队列后端: %s", queue.TaskQueueBackendFromEnv())
 
 	// 初始化通知服务
 	multiNotifier := notification.NewMultiNotifier(log.Default())
@@ -375,7 +402,7 @@ func main() {
 	// 添加定时任务（必须用 workerInstance，否则回调里 taskManager 为 nil 会 panic）
 	_, err = jobScheduler.AddJobWithName(
 		"daily_task_execution",
-		getEnv("TASK_SCHEDULE", "0 8 * * *"),
+		bootstrap.GetEnv("TASK_SCHEDULE", "0 8 * * *"),
 		func() error {
 			log.Println("定时任务开始执行...")
 			return workerInstance.RunAllAccounts()
@@ -387,13 +414,13 @@ func main() {
 	}
 
 	// 添加自动兑换月卡定时任务
-	registerMonthlyExchangeJob(jobScheduler, exchangeService, configRepo)
+	registerMonthlyExchangeJob(jobScheduler, exchangeService, repos.SystemConfig)
 
 	// 添加商品自动更新定时任务
-	registerAutoUpdateProductsJob(jobScheduler, exchangeService, configRepo, accountRepo)
+	registerAutoUpdateProductsJob(jobScheduler, exchangeService, repos.SystemConfig, repos.Account)
 
 	// 添加账号健康检查定时任务
-	registerAccountHealthCheckJob(jobScheduler, tokenManager, accountRepo, multiNotifier)
+	registerAccountHealthCheckJob(jobScheduler, tokenManager, repos.Account, multiNotifier)
 
 	workerInstance.Start()
 
@@ -410,6 +437,7 @@ func main() {
 
 	// 停止服务
 	workerInstance.Stop()
+	tokenManager.Stop()
 
 	// 停止抢兑调度器
 	exchangeScheduler.Stop()
@@ -418,7 +446,12 @@ func main() {
 
 // startMonitoringAPI 启动监控API（可选）
 func startMonitoringAPI(worker *Worker) {
-	port := getEnv("WORKER_MONITOR_PORT", "8081")
+	host := bootstrap.GetEnv("WORKER_MONITOR_HOST", "127.0.0.1")
+	port := bootstrap.GetEnv("WORKER_MONITOR_PORT", "8081")
+	if !isLoopbackHost(host) && !bootstrap.GetBoolEnv("WORKER_MONITOR_ALLOW_PLAINTEXT", false) {
+		log.Printf("监控API未启动：WORKER_MONITOR_HOST=%s 非本机地址。若已由 HTTPS 反代保护，请显式设置 WORKER_MONITOR_ALLOW_PLAINTEXT=true", host)
+		return
+	}
 	metricsCollector := monitor.NewMetrics()
 	metricsHandler := promhttp.HandlerFor(metricsCollector.Registry(), promhttp.HandlerOpts{})
 
@@ -426,10 +459,10 @@ func startMonitoringAPI(worker *Worker) {
 		taskMonitorStats := worker.taskMonitor.GetStats()
 		taskManagerStats := worker.taskManager.GetStatus()
 
-		total := toInt(taskMonitorStats["total_tasks"])
-		running := toInt(taskMonitorStats["active_tasks"])
-		completed := toInt(taskMonitorStats["completed_tasks"])
-		pending := toInt(taskManagerStats["pending_tasks"])
+		total := bootstrap.ToInt(taskMonitorStats["total_tasks"])
+		running := bootstrap.ToInt(taskMonitorStats["active_tasks"])
+		completed := bootstrap.ToInt(taskMonitorStats["completed_tasks"])
+		pending := bootstrap.ToInt(taskManagerStats["pending_tasks"])
 
 		metricsCollector.SetTaskStats(total, pending, running, completed)
 	}
@@ -453,7 +486,7 @@ func startMonitoringAPI(worker *Worker) {
 	}))
 
 	srv := &http.Server{
-		Addr:              ":" + port,
+		Addr:              net.JoinHostPort(host, port),
 		Handler:           mux,
 		ReadHeaderTimeout: 5 * time.Second,
 	}
@@ -484,10 +517,19 @@ func startMonitoringAPI(worker *Worker) {
 		}
 	}()
 
-	log.Printf("监控API已启动（端口: %s）", port)
+	log.Printf("监控API已启动（地址: %s）", srv.Addr)
 	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Printf("监控API启动失败: %v", err)
 	}
+}
+
+func isLoopbackHost(host string) bool {
+	host = strings.TrimSpace(strings.ToLower(host))
+	if host == "" || host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 // writeJSON 输出 JSON 响应。
@@ -516,47 +558,6 @@ func requireMonitorAuth(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 		next(w, r)
-	}
-}
-
-func getSecretEnv(key, insecureDefault string) string {
-	value, exists := os.LookupEnv(key)
-	if !exists || value == "" {
-		if os.Getenv("ALLOW_INSECURE_DEFAULTS") == "true" {
-			log.Printf("警告：%s 使用不安全默认值，仅允许本地调试", key)
-			return insecureDefault
-		}
-		log.Fatalf("缺少必需环境变量 %s；如仅本地调试可设置 ALLOW_INSECURE_DEFAULTS=true", key)
-	}
-	if value == insecureDefault || len(value) < 16 {
-		if os.Getenv("ALLOW_INSECURE_DEFAULTS") == "true" {
-			log.Printf("警告：%s 使用弱值，仅允许本地调试", key)
-			return value
-		}
-		log.Fatalf("%s 使用弱值或默认值，请更换为强随机值", key)
-	}
-	return value
-}
-
-// toInt 将常见数值类型转换为 int。
-func toInt(value interface{}) int {
-	switch v := value.(type) {
-	case int:
-		return v
-	case int32:
-		return int(v)
-	case int64:
-		return int(v)
-	case uint:
-		return int(v)
-	case uint32:
-		return int(v)
-	case uint64:
-		return int(v)
-	case float64:
-		return int(v)
-	default:
-		return 0
 	}
 }
 

@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"caiyun/internal/services"
+	apiresponse "caiyun/pkg/response"
 	"errors"
 	"net/http"
 	"strconv"
@@ -41,7 +42,7 @@ func (h *AdminHandler) GetAllUsers(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
+	apiresponse.Success(c, gin.H{
 		"users": users,
 		"total": total,
 		"page":  page,
@@ -69,7 +70,7 @@ func (h *AdminHandler) GetAllAccounts(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
+	apiresponse.Success(c, gin.H{
 		"accounts":  accounts,
 		"total":     total,
 		"page":      page,
@@ -99,7 +100,7 @@ func (h *AdminHandler) SearchAllAccounts(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, resp)
+	apiresponse.Success(c, resp)
 }
 
 // GetAccountSummaries 获取所有账号概况
@@ -122,7 +123,7 @@ func (h *AdminHandler) GetAccountSummaries(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
+	apiresponse.Success(c, gin.H{
 		"summaries": summaries,
 		"total":     total,
 		"page":      page,
@@ -137,7 +138,7 @@ func (h *AdminHandler) GetAdminDashboard(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, InternalServerErrorResponse())
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"data": data})
+	apiresponse.Success(c, data)
 }
 
 // UpdateUserRole 更新用户角色
@@ -163,7 +164,7 @@ func (h *AdminHandler) UpdateUserRole(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, SuccessResponse{Message: "角色更新成功"})
+	apiresponse.Message(c, "角色更新成功")
 }
 
 // ResetUserPassword 管理员重置用户密码
@@ -192,7 +193,7 @@ func (h *AdminHandler) ResetUserPassword(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, SuccessResponse{Message: "用户密码已重置"})
+	apiresponse.Message(c, "用户密码已重置")
 }
 
 // UpdateAccountStatusRequest 更新账号状态请求
@@ -217,7 +218,7 @@ func (h *AdminHandler) UpdateAccountStatus(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, SuccessResponse{Message: "账号状态更新成功"})
+	apiresponse.Message(c, "账号状态更新成功")
 }
 
 // DeleteUser 删除用户
@@ -243,7 +244,7 @@ func (h *AdminHandler) DeleteUser(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, SuccessResponse{Message: "用户删除成功"})
+	apiresponse.Message(c, "用户删除成功")
 }
 
 // DeleteAccount 删除账号
@@ -259,7 +260,7 @@ func (h *AdminHandler) DeleteAccount(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, SuccessResponse{Message: "账号删除成功"})
+	apiresponse.Message(c, "账号删除成功")
 }
 
 // GetStatsOverview 获取统计概览
@@ -270,7 +271,7 @@ func (h *AdminHandler) GetStatsOverview(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
+	apiresponse.Success(c, gin.H{
 		"user_count":    stats.UserCount,
 		"account_count": stats.AccountCount,
 		"total_cloud":   stats.TotalCloud,
@@ -285,7 +286,7 @@ func (h *AdminHandler) GetTaskConfigs(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, InternalServerErrorResponse())
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"configs": configs})
+	apiresponse.Success(c, gin.H{"configs": configs})
 }
 
 // UpdateTaskConfig 更新任务配置（上架/下架）
@@ -311,5 +312,5 @@ func (h *AdminHandler) UpdateTaskConfig(c *gin.Context) {
 	if !req.IsEnabled {
 		action = "下架"
 	}
-	c.JSON(http.StatusOK, SuccessResponse{Message: "任务已" + action})
+	apiresponse.Message(c, "任务已"+action)
 }
