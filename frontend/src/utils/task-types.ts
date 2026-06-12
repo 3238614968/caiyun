@@ -1,6 +1,7 @@
 export const taskTypeNameMap: Record<string, string> = {
   signin: '签到',
   task_expansion_reward: '翻倍奖励',
+  cloud_multiple: '云朵翻倍',
   wechat: '微信',
   wxdraw: '微信抽奖',
   tasklist: '任务列表',
@@ -27,6 +28,7 @@ export const taskTypeNameMap: Record<string, string> = {
 const orderedTaskTypes = [
   'signin',
   'task_expansion_reward',
+  'cloud_multiple',
   'wechat',
   'wxdraw',
   'tasklist',

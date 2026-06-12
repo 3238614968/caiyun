@@ -26,6 +26,14 @@ type SmsApiResponse struct {
 	Data    map[string]interface{} `json:"data"`
 }
 
+// SlideSolveResult 表示滑块识别服务返回的结果。
+type SlideSolveResult struct {
+	Offset     int
+	Confidence float64
+	Method     string
+	Attempt    int
+}
+
 // CodeStatus 表示验证码任务状态。
 type CodeStatus struct {
 	Phone     string
@@ -157,6 +165,43 @@ func GetCodeStatus(phone string) (*CodeStatus, error) {
 	return result, nil
 }
 
+// SolveSlide 调用短信登录服务的 /api/sms/solve 接口识别滑块偏移量。
+// 仅依赖远端接口返回的 offset，项目内不做本地图像识别。
+func SolveSlide(puzzle, picture string) (*SlideSolveResult, error) {
+	puzzle = strings.TrimSpace(puzzle)
+	picture = strings.TrimSpace(picture)
+	if puzzle == "" || picture == "" {
+		return nil, fmt.Errorf("缺少滑块图片数据")
+	}
+
+	apiResp, err := postJSON("/api/sms/solve", map[string]string{
+		"puzzle":  puzzle,
+		"picture": picture,
+	}, "")
+	if err != nil {
+		return nil, err
+	}
+	if apiResp.Data == nil {
+		return nil, fmt.Errorf("滑块识别响应数据为空")
+	}
+
+	offset, ok := numberFromSMSData(apiResp.Data["offset"])
+	if !ok {
+		return nil, fmt.Errorf("滑块识别响应缺少 offset")
+	}
+	result := &SlideSolveResult{Offset: int(offset)}
+	if confidence, ok := numberFromSMSData(apiResp.Data["confidence"]); ok {
+		result.Confidence = confidence
+	}
+	if attempt, ok := numberFromSMSData(apiResp.Data["attempt"]); ok {
+		result.Attempt = int(attempt)
+	}
+	if method, ok := apiResp.Data["method"].(string); ok {
+		result.Method = strings.TrimSpace(method)
+	}
+	return result, nil
+}
+
 // postJSON 调用短信服务 JSON POST 接口。
 func postJSON(path string, payload map[string]string, phone string) (*SmsApiResponse, error) {
 	requestURL := buildSMSAPIURL(path)
@@ -257,4 +302,30 @@ func responseDataKeys(data map[string]interface{}) string {
 		keys = append(keys, key)
 	}
 	return strings.Join(keys, ",")
+}
+
+func numberFromSMSData(value interface{}) (float64, bool) {
+	switch v := value.(type) {
+	case float64:
+		return v, true
+	case float32:
+		return float64(v), true
+	case int:
+		return float64(v), true
+	case int64:
+		return float64(v), true
+	case json.Number:
+		n, err := v.Float64()
+		return n, err == nil
+	case string:
+		v = strings.TrimSpace(v)
+		if v == "" {
+			return 0, false
+		}
+		var n json.Number = json.Number(v)
+		parsed, err := n.Float64()
+		return parsed, err == nil
+	default:
+		return 0, false
+	}
 }

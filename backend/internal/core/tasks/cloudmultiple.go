@@ -52,6 +52,12 @@ func (t *CloudMultipleTask) Run() error {
 		return nil
 	}
 
+	if isCloudMultipleAlreadyClaimed(msg) {
+		t.lastMessage = msg
+		t.logger.Success(msg)
+		return nil
+	}
+
 	if msg == "" {
 		msg = fmt.Sprintf("code=%v", resp.Code)
 	}
@@ -63,4 +69,9 @@ func (t *CloudMultipleTask) Run() error {
 
 func (t *CloudMultipleTask) Message() string {
 	return strings.TrimSpace(t.lastMessage)
+}
+
+func isCloudMultipleAlreadyClaimed(message string) bool {
+	normalized := strings.ReplaceAll(strings.TrimSpace(message), " ", "")
+	return strings.Contains(normalized, "已领取")
 }

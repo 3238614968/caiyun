@@ -6,6 +6,7 @@ import (
 	apiresponse "caiyun/pkg/response"
 	"encoding/csv"
 	"fmt"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -901,7 +902,9 @@ func (h *ExchangeHandler) ImmediateExchange(c *gin.Context) {
 		1,
 	)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, InternalServerErrorResponse())
+		log.Printf("[ImmediateExchange] 创建立即兑换任务失败 user_id=%v exchange_account_id=%d product_id=%d: %v",
+			userID, req.ExchangeAccountID, req.ProductID, err)
+		c.JSON(http.StatusBadRequest, ErrorResponse{Message: err.Error()})
 		return
 	}
 
