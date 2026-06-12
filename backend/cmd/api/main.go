@@ -53,7 +53,7 @@ func main() {
 		},
 	}
 	authService := services.NewAuthServiceWithPasswordResetCache(repos.User, jwtManager, jwtExpiry, passwordResetConfig, core.Redis)
-	accountService := services.NewAccountService(repos.Account, repos.User, core.Redis, core.Auth)
+	accountService := services.NewAccountService(repos.Account, repos.User, core.Redis, core.Auth, repos.ExchangeAccount)
 	taskQueue, err := queue.NewConfiguredTaskQueue(core.Redis)
 	if err != nil {
 		log.Printf("初始化任务队列失败: %v", err)

@@ -298,44 +298,7 @@ func ParseLoginVar(varStr string) (sid, rmkey string, err error) {
 
 // QuerySpecTokenForJWT 获取 ssoToken（用于 JWT）
 func (a *Auth) QuerySpecTokenForJWT(phone string) (string, error) {
-	// 构建请求体
-	reqBody := map[string]interface{}{
-		"toSourceId": "001005",
-		"account":    phone,
-	}
-
-	headers := map[string]string{
-		"Referer":      "https://yun.139.com/w/",
-		"Accept":       "application/json, text/plain, */*",
-		"Content-Type": "application/json;charset=UTF-8",
-		"User-Agent":   "Mozilla/5.0 (Linux; Android 16; 22127RK46C Build/BP2A.250605.031.A3; wv) AppleWebKit/537.36 Chrome/146.0.7680.164 Mobile Safari/537.36",
-	}
-
-	resp, err := a.client.Post(
-		"https://orches.yun.139.com/orchestration/auth-rebuild/token/v1.0/querySpecToken",
-		headers,
-		reqBody,
-	)
-
-	if err != nil {
-		return "", fmt.Errorf("获取 ssoToken 请求失败: %w", err)
-	}
-
-	body, err := a.client.ReadResponseBody(resp)
-	if err != nil {
-		return "", fmt.Errorf("读取响应失败: %w", err)
-	}
-
-	var result SpecTokenResp
-	if err := json.Unmarshal([]byte(body), &result); err != nil {
-		return "", fmt.Errorf("解析响应失败: %w, body: %s", err, body)
-	}
-
-	if !result.Success {
-		return "", fmt.Errorf("获取 ssoToken 失败: code=%s, message=%s", result.Code, result.Message)
-	}
-
-	return result.Data.Token, nil
+	return a.querySpecTokenWithRetry("", phone)
 }
 
 // TyrzLoginResp tyrzLogin 响应
@@ -348,31 +311,7 @@ type TyrzLoginResp struct {
 
 // TyrzLogin 使用 ssoToken 获取 JWT token
 func (a *Auth) TyrzLogin(ssoToken string) (string, error) {
-	url := fmt.Sprintf("https://caiyun.feixin.10086.cn:7071/portal/auth/tyrzLogin.action?ssoToken=%s", ssoToken)
-
-	resp, err := a.client.Get(url, nil)
-	if err != nil {
-		return "", fmt.Errorf("tyrzLogin 请求失败: %w", err)
-	}
-
-	body, err := a.client.ReadResponseBody(resp)
-	if err != nil {
-		return "", fmt.Errorf("读取响应失败: %w", err)
-	}
-
-	// 打印响应内容用于调试
-	// fmt.Printf("DEBUG tyrzLogin response: %s\n", body)
-
-	var result TyrzLoginResp
-	if err := json.Unmarshal([]byte(body), &result); err != nil {
-		return "", fmt.Errorf("解析响应失败: %w, body: %s", err, body)
-	}
-
-	if result.Result.Token == "" {
-		return "", fmt.Errorf("JWT token 为空")
-	}
-
-	return result.Result.Token, nil
+	return a.tyrzLoginWithCandidates(ssoToken)
 }
 
 // GetJWTTokenWithSSOToken 获取 JWT Token 和对应的 ssoToken（单次 sso 查询）

@@ -78,6 +78,20 @@ func (r *ExchangeAccountRepository) UpdateLastExchangeAt(id uint, t time.Time) e
 		Update("last_exchange_at", t).Error
 }
 
+// UpdateAuthByAccountID 同步云盘主账号刷新后的鉴权信息到对应抢兑账号。
+func (r *ExchangeAccountRepository) UpdateAuthByAccountID(accountID uint, auth, token, jwtToken string) error {
+	updates := map[string]interface{}{
+		"auth":  auth,
+		"token": token,
+	}
+	if jwtToken != "" {
+		updates["jwt_token"] = jwtToken
+	}
+	return r.db.Model(&models.ExchangeAccount{}).
+		Where("account_id = ?", accountID).
+		Updates(updates).Error
+}
+
 // Count 获取用户的兑换账号数量
 func (r *ExchangeAccountRepository) Count(userID uint) (int64, error) {
 	var count int64

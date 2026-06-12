@@ -322,7 +322,7 @@ func main() {
 	repos := core.Repository
 
 	// 初始化Services
-	accountService := services.NewAccountService(repos.Account, repos.User, core.Redis, core.Auth)
+	accountService := services.NewAccountService(repos.Account, repos.User, core.Redis, core.Auth, repos.ExchangeAccount)
 	taskService := services.NewTaskService(repos.Account, repos.TaskLog, core.TaskStore, core.Auth, repos.TaskConfig, repos.CloudStats)
 	cloudService := services.NewCloudService(repos.Account, repos.CloudStats, repos.TaskLog)
 

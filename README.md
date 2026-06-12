@@ -1,4 +1,4 @@
-# 移动云盘自动任务与兑换系统
+# 移动云盘自动任务与兑换管理系统
 
 ![Go](https://img.shields.io/badge/Go-1.21+-00ADD8?logo=go&logoColor=white)
 ![Vue](https://img.shields.io/badge/Vue-3-42b883?logo=vue.js&logoColor=white)
@@ -6,7 +6,7 @@
 ![MySQL](https://img.shields.io/badge/MySQL-8.0+-4479A1?logo=mysql&logoColor=white)
 ![License](https://img.shields.io/badge/License-MIT-green.svg)
 
-基于 **Go 后端 + Vue 3 前端** 的移动云盘自动化平台，提供账号管理、日常任务执行、兑换调度、商品同步、日志审计与管理后台能力。
+基于 **Go 后端 + Vue 3 前端** 的移动云盘自动化管理平台，提供账号托管、日常任务执行、兑换调度、商品同步、日志审计、监控与管理后台能力。
 
 ---
 
@@ -14,7 +14,7 @@
 
 - [项目简介](#项目简介)
 - [核心能力](#核心能力)
-- [本次新增与修复](#本次新增与修复)
+- [版本更新摘要](#版本更新摘要)
 - [系统架构](#系统架构)
 - [技术栈](#技术栈)
 - [目录结构](#目录结构)
@@ -58,7 +58,7 @@
 ### 2) 账号管理
 
 - 多账号管理，支持同一手机号被不同用户分别绑定
-- Auth / JWT 自动刷新
+- Authorization / JWT 自动刷新，支持新版 APP refreshToken 链路
 - JWT 获取失败自动重试，连续失败可自动禁用账号
 - 账号健康检查、状态监控、过期账号隔离
 
@@ -83,6 +83,8 @@
 - 商品自动更新 / 手动同步
 - 自定义兑换时间
 - 多账号并发兑换
+- 滑块验证码接口识别
+- 同账号同月同分类商品重复兑换保护
 - 兑换日志与执行结果记录
 
 ### 5) 管理后台
@@ -94,12 +96,24 @@
 
 ---
 
-## 本次新增与修复
+## 版本更新摘要
 
 > 以下内容已纳入当前代码与构建产物。
 
 ### 新增功能
 
+- **新版 Authorization 刷新机制**
+  - 接入 APP 新版 `user/auth/refreshToken` 链路
+  - 使用 AES-192-CBC 加密请求与解密响应
+  - 刷新成功后重新组装 `Basic base64(mobile:phone:token)`，并通过 `querySpecToken` 验证可用后才写入数据库
+  - 主账号刷新成功后会同步更新对应抢兑账号的 `auth / token / jwt_token`
+- **抢兑滑块验证码接口识别**
+  - 抢兑流程自动获取滑块验证码图片
+  - 仅保留远端识别接口调用，不内置本地 NCC / PCL 图片识别实现
+  - 识别成功后自动带入 `puzzleOffset` 调用新版 `exchangeV2`
+- **月度同系列兑换保护**
+  - 识别“兑换成功 / 重复兑奖 / 本月已兑换”等结果
+  - 同账号同月同分类商品不再重复执行，避免音乐、流量等系列重复提交
 - **签到中心 / 任务中心 V2 适配**
   - 已接入新版 `taskListV2`
   - 支持按 `cloudEmail / time / day / month` 分组拉取任务
@@ -113,6 +127,7 @@
   - 任务类型与执行结果统一为更短、更规整的中文展示
   - 前端管理页、兑换页、日志页完成自适应优化
   - 管理页与日志页在手机端支持卡片视图
+  - 引入前端 E2E 用例覆盖登录、账号、兑换、管理员配置等核心路径
 
 ### 修复与优化
 
@@ -124,6 +139,9 @@
 - **修复 JWT / SSO 上下文错配**
   - 统一复用同一次获取的 `ssoToken` 与其对应 JWT
   - 避免签到预热页与 JWT 来源不一致导致 `infoV3 / startSignIn / taskListV2` 失败
+- **修复 JWT 非规范编码绕过校验**
+  - 校验 JWT 三段 Base64URL 是否为规范编码
+  - 避免篡改但解码等价的 token 被误判为有效
 - **修复临时文件清理误删风险**
   - 临时上传/分享文件仅清理本次任务记录的文件 ID，不再按文件名前缀全盘扫描删除
 - **修复兑换与账号相关流程细节**
@@ -320,8 +338,8 @@ frontend/dist
 
 ```bash
 cd backend
-GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o api-linux ./cmd/api
-GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o worker-linux ./cmd/worker
+GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o api-linux ./cmd/api
+GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o worker-linux ./cmd/worker
 ```
 
 构建输出文件：
@@ -409,17 +427,13 @@ kubectl apply -f k8s/caiyun.yaml
 - API、Worker、Frontend 示例已配置非 root、只读根文件系统、能力收敛、资源 requests/limits 和健康探针；如镜像运行用户变化，请同步调整 `securityContext`。
 - 如果使用外部 MySQL，可移除清单中的 MySQL Deployment/PVC/Service，并确保外部库已执行初始化 SQL。
 
-### 宝塔面板部署
-
-详见：[`backend/docs/DEPLOY_BT_PANEL.md`](backend/docs/DEPLOY_BT_PANEL.md)
-
 ### 手动部署示例
 
 ```bash
 # 1) 编译后端
 cd backend
-GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o api-linux ./cmd/api
-GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o worker-linux ./cmd/worker
+GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o api-linux ./cmd/api
+GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o worker-linux ./cmd/worker
 
 # 2) 编译前端
 cd ../frontend
@@ -430,6 +444,13 @@ npm run build
 scp -r ../backend/api-linux ../backend/worker-linux root@server:/www/wwwroot/caiyun/
 scp -r dist root@server:/www/wwwroot/caiyun/frontend/
 ```
+
+生产环境手动替换时通常只需要发布以下内容：
+
+- `backend/api-linux`：API 服务二进制
+- `backend/worker-linux`：Worker 服务二进制
+- `frontend/dist/`：前端静态资源目录
+- `backend/configs/.env.example`：仅作为配置模板参考；生产 `.env` 请按实际环境维护，不要直接覆盖
 
 ---
 
@@ -517,8 +538,10 @@ go test ./internal/queue -run RedisIntegration -count=1
 ### Token 处理机制
 
 - 任务执行前优先校验账号可用性
-- JWT 获取失败支持重试
-- 连续失败可自动禁用账号
+- Authorization 距离过期不足 5 天时会尝试预刷新；刷新失败但旧票据仍未过期时，不阻断普通任务执行
+- 新版 refreshToken 成功后必须通过 `querySpecToken` 验证，验证成功才更新数据库
+- 刷新成功后同步更新主账号与对应抢兑账号的鉴权信息
+- JWT 获取失败支持重试，连续失败可自动禁用账号
 - 签到中心请求使用与 JWT 对应的同一 `ssoToken` 预热上下文
 
 ### 任务注册表约定

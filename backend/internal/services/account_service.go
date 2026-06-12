@@ -3,6 +3,7 @@ package services
 import (
 	"caiyun/internal/cache"
 	"caiyun/internal/core/auth"
+	corehttp "caiyun/internal/core/http"
 	"caiyun/internal/models"
 	"caiyun/internal/queue"
 	"caiyun/internal/repository"
@@ -18,11 +19,12 @@ var (
 )
 
 type AccountService struct {
-	accountRepo *repository.AccountRepository
-	userRepo    *repository.UserRepository
-	cache       *cache.RedisCache
-	authMgr     *auth.Auth
-	taskQueue   queue.ReliableTaskQueue
+	accountRepo  *repository.AccountRepository
+	exchangeRepo *repository.ExchangeAccountRepository
+	userRepo     *repository.UserRepository
+	cache        *cache.RedisCache
+	authMgr      *auth.Auth
+	taskQueue    queue.ReliableTaskQueue
 }
 
 func NewAccountService(
@@ -30,17 +32,26 @@ func NewAccountService(
 	userRepo *repository.UserRepository,
 	cache *cache.RedisCache,
 	authMgr *auth.Auth,
+	exchangeRepos ...*repository.ExchangeAccountRepository,
 ) *AccountService {
-	return &AccountService{
+	service := &AccountService{
 		accountRepo: accountRepo,
 		userRepo:    userRepo,
 		cache:       cache,
 		authMgr:     authMgr,
 	}
+	if len(exchangeRepos) > 0 {
+		service.exchangeRepo = exchangeRepos[0]
+	}
+	return service
 }
 
 func (s *AccountService) SetTaskQueue(taskQueue queue.ReliableTaskQueue) {
 	s.taskQueue = taskQueue
+}
+
+func (s *AccountService) SetExchangeAccountRepository(exchangeRepo *repository.ExchangeAccountRepository) {
+	s.exchangeRepo = exchangeRepo
 }
 
 // CreateAccountRequest 创建账号请求
@@ -263,60 +274,70 @@ func (s *AccountService) GetToken(accountID uint) (string, error) {
 
 // RefreshToken 刷新账号Token
 func (s *AccountService) RefreshToken(account *models.Account) error {
-	// 先确保 account.Token 非空：如果为空则从 account.Auth 解析
-	if account.Token == "" {
-		info, err := auth.ParseToken(account.Auth)
-		if err != nil {
-			return fmt.Errorf("Token为空且解析Auth失败: %w", err)
-		}
-		account.Token = info.Token
-		// ParseToken 里会尽力解析过期时间
-		account.ExpireAt = info.Expire
-		if info.Platform != "" {
-			account.Platform = info.Platform
-		}
-		// 将解析出的 token 写回数据库，后续请求可直接使用
-		_ = s.accountRepo.Update(account)
+	if account == nil {
+		return fmt.Errorf("账号为空")
 	}
 
-	// 使用 authMgr 刷新 Token（authTokenRefresh.do 需要“纯 token”，不是 Basic Auth）
-	newToken, err := s.authMgr.RefreshToken(account.Token, account.Phone)
+	// 使用账号自己的 authorization 创建临时认证客户端，避免复用全局 client 造成串号。
+	authClient := corehttp.NewClient()
+	if authStr := sanitizeAuthValue(account.Auth); authStr != "" {
+		authClient.SetAuth(authStr)
+	}
+	authForAccount := auth.NewAuth(authClient)
+
+	// refreshToken 新接口推荐携带 userDomainId；先尽力使用当前 authorization 换取 JWT 并解析。
+	userDomainID := ""
+	jwtToken := account.JWTToken
+	if token, _, err := authForAccount.GetJWTTokenWithSSOToken(account.Phone); err == nil && token != "" {
+		jwtToken = token
+		userDomainID = jwtUserDomainID(token)
+	}
+
+	refreshed, err := authForAccount.RefreshAuthorization(account.Auth, account.Phone, userDomainID)
 	if err != nil {
 		return err
 	}
 
-	// 更新数据库
-	account.Token = newToken
-	// 设置过期时间（默认30天）
-	account.ExpireAt = time.Now().Add(30 * 24 * time.Hour).UnixMilli()
-	// 同步更新 Auth（否则后续依赖 Auth 的请求仍用旧 token）
-	if account.Platform == "" {
-		account.Platform = "pc"
+	// 刷新成功后再落库；如果后续 JWT 换取失败，也保留成功刷新的 authorization。
+	if refreshed.SSOToken != "" {
+		if token, err := authForAccount.TyrzLogin(refreshed.SSOToken); err == nil && token != "" {
+			jwtToken = token
+		}
 	}
-	account.Auth = auth.GenerateAuth(newToken, account.Phone, account.Platform)
+	applyAuthorizationRefreshToAccount(account, refreshed, jwtToken)
 
 	if err := s.accountRepo.Update(account); err != nil {
 		return err
 	}
+	if s.exchangeRepo != nil {
+		if err := s.exchangeRepo.UpdateAuthByAccountID(account.ID, account.Auth, account.Token, account.JWTToken); err != nil {
+			return fmt.Errorf("同步抢兑账号鉴权失败: %w", err)
+		}
+	}
 
 	// 更新缓存
 	cacheKey := fmt.Sprintf("account:token:%d", account.ID)
-	s.cache.Set(cacheKey, newToken, 24*time.Hour)
+	s.cache.Set(cacheKey, account.Token, 24*time.Hour)
 
 	return nil
 }
 
 // RefreshTokenIfNeeded 根据需要刷新Token
 func (s *AccountService) RefreshTokenIfNeeded(account *models.Account) error {
-	// 检查是否需要刷新
-	now := time.Now().Unix() * 1000 // 转换为毫秒
-	if account.ExpireAt > 0 && account.ExpireAt > now {
-		// Token未过期，不需要刷新
+	now := time.Now()
+	expireAt := accountAuthorizationExpireAt(account)
+	if !authorizationShouldRefresh(expireAt, now) {
 		return nil
 	}
 
-	// 刷新Token
-	return s.RefreshToken(account)
+	if err := s.RefreshToken(account); err != nil {
+		// 提前 5 天预刷新失败时，不覆盖数据库，也不阻断仍未过期账号的正常任务。
+		if expireAt > now.UnixMilli() {
+			return nil
+		}
+		return err
+	}
+	return nil
 }
 
 // GetCloudCount 获取账号云朵数量

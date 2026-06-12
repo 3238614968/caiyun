@@ -1,7 +1,9 @@
 package jwt
 
 import (
+	"encoding/base64"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -49,6 +51,10 @@ func (m *Manager) GenerateToken(userID uint, username, role string, tokenVersion
 }
 
 func (m *Manager) ValidateToken(tokenString string) (*Claims, error) {
+	if !isCanonicalJWT(tokenString) {
+		return nil, ErrInvalidToken
+	}
+
 	token, err := jwt.ParseWithClaims(tokenString, &Claims{}, func(token *jwt.Token) (interface{}, error) {
 		return m.secretKey, nil
 	})
@@ -66,4 +72,24 @@ func (m *Manager) ValidateToken(tokenString string) (*Claims, error) {
 	}
 
 	return claims, nil
+}
+
+func isCanonicalJWT(tokenString string) bool {
+	parts := strings.Split(tokenString, ".")
+	if len(parts) != 3 {
+		return false
+	}
+	for _, part := range parts {
+		if part == "" {
+			return false
+		}
+		raw, err := base64.RawURLEncoding.DecodeString(part)
+		if err != nil {
+			return false
+		}
+		if base64.RawURLEncoding.EncodeToString(raw) != part {
+			return false
+		}
+	}
+	return true
 }

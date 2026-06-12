@@ -161,6 +161,35 @@ func (tm *TokenManager) refreshToken(accountID uint) (*TokenInfo, error) {
 	}
 
 	now := time.Now()
+	if authorizationShouldRefresh(accountAuthorizationExpireAt(account), now) {
+		userDomainID := jwtUserDomainID(jwtToken)
+		refreshed, err := authForJWT.RefreshAuthorization(account.Auth, account.Phone, userDomainID)
+		if err != nil {
+			log.Printf("[TokenManager] 账号 %d authorization 刷新失败，保留原数据库记录: %v", accountID, err)
+		} else {
+			if refreshed.SSOToken != "" {
+				if token, jwtErr := authForJWT.TyrzLogin(refreshed.SSOToken); jwtErr == nil && token != "" {
+					jwtToken = token
+					ssoToken = refreshed.SSOToken
+				} else if jwtErr != nil {
+					log.Printf("[TokenManager] 账号 %d authorization 刷新成功但 JWT 重取失败，将保留已有 JWT: %v", accountID, jwtErr)
+				}
+			}
+
+			applyAuthorizationRefreshToAccount(account, refreshed, jwtToken)
+			if err := tm.accountRepo.Update(account); err != nil {
+				return nil, fmt.Errorf("更新刷新后的 authorization 失败: %w", err)
+			}
+			if tm.exchangeRepo != nil {
+				if err := tm.exchangeRepo.UpdateAuthByAccountID(account.ID, account.Auth, account.Token, account.JWTToken); err != nil {
+					log.Printf("[TokenManager] 同步刷新后的抢兑账号鉴权失败 account_id=%d: %v", account.ID, err)
+				}
+			}
+			authStr = sanitizeAuthValue(account.Auth)
+			log.Printf("[TokenManager] 账号 %d authorization 已刷新并写入数据库", accountID)
+		}
+	}
+
 	// JWT Token 缓存时间改为 15 分钟，因为 JWT 本身的有效期只有 20-30 分钟
 	tokenInfo := &TokenInfo{
 		JWTToken:     jwtToken,
