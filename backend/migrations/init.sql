@@ -130,6 +130,23 @@ CREATE TABLE `users` (
 ');
 
 -- ============================================
+-- 1.1 创建登录失败锁定表 (login_fail_locks)
+--     Redis 不可用时用于登录失败计数降级。
+-- ============================================
+CALL CheckAndCreateTable('login_fail_locks', '
+CREATE TABLE `login_fail_locks` (
+    `key_hash` CHAR(64) PRIMARY KEY COMMENT ''归一化登录名的 SHA-256 哈希'',
+    `fail_count` INT NOT NULL DEFAULT 0 COMMENT ''连续失败次数'',
+    `locked_until` TIMESTAMP NULL COMMENT ''锁定截止时间'',
+    `expires_at` TIMESTAMP NOT NULL COMMENT ''计数窗口过期时间'',
+    `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    INDEX `idx_login_fail_locks_expires_at` (`expires_at`),
+    INDEX `idx_login_fail_locks_locked_until` (`locked_until`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+');
+
+-- ============================================
 -- 2. 创建账号表 (accounts)
 -- ============================================
 CALL CheckAndCreateTable('accounts', '
@@ -153,7 +170,8 @@ CREATE TABLE `accounts` (
     INDEX `idx_phone` (`phone`),
     INDEX `idx_expire_at` (`expire_at`),
     INDEX `idx_deleted_at` (`deleted_at`),
-    INDEX `idx_user_active` (`user_id`, `is_active`)
+    INDEX `idx_user_active` (`user_id`, `is_active`),
+    UNIQUE KEY `uk_user_phone` (`user_id`, `phone`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
 ');
 
@@ -367,8 +385,8 @@ CREATE TABLE `exchange_records` (
 CALL CheckAndCreateTable('exchange_task_history', '
 CREATE TABLE `exchange_task_history` (
     `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
-    `task_id` INT NOT NULL COMMENT ''任务 ID'',
-    `account_id` INT NOT NULL COMMENT ''账号 ID'',
+    `task_id` BIGINT UNSIGNED NOT NULL COMMENT ''任务 ID'',
+    `account_id` BIGINT UNSIGNED NOT NULL COMMENT ''账号 ID'',
     `prize_id` VARCHAR(100) NOT NULL COMMENT ''商品 ID'',
     `action` VARCHAR(50) NOT NULL COMMENT ''操作类型：exchange, retry, timeout, cancel'',
     `result` VARCHAR(20) NOT NULL COMMENT ''结果：success, failed, timeout'',
@@ -445,6 +463,8 @@ CALL ModifyEnumIfNotExists('exchange_tasks', 'task_type', '''fixed'', ''long_ter
 -- ============================================
 -- 添加可能缺失的索引
 -- ============================================
+-- 同一用户不能重复绑定同一手机号（数据库层兜底，避免并发请求绕过应用层查重）。
+-- 使用生成列固定 NULL → 0 的方式实现"仅未软删记录参与唯一性"。
 CALL CreateIndexIfNotExists('exchange_tasks', 'idx_exchange_tasks_priority_status', '`priority`, `status`');
 CALL CreateIndexIfNotExists('exchange_tasks', 'idx_exchange_tasks_task_group', '`task_group`');
 CALL CreateIndexIfNotExists('exchange_tasks', 'idx_exchange_tasks_timeout', '`timeout_seconds`, `status`');
@@ -517,7 +537,8 @@ CREATE TABLE IF NOT EXISTS `web_socket_messages` (
     INDEX `idx_user_id` (`user_id`),
     INDEX `idx_is_delivered` (`is_delivered`),
     INDEX `idx_is_read` (`is_read`),
-    INDEX `idx_created_at` (`created_at`)
+    INDEX `idx_created_at` (`created_at`),
+    CONSTRAINT `fk_ws_messages_user` FOREIGN KEY (`user_id`) REFERENCES `users`(`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='WebSocket消息表';
 
 -- ============================================
@@ -543,7 +564,8 @@ CREATE TABLE IF NOT EXISTS `audit_logs` (
     INDEX `idx_user_id` (`user_id`),
     INDEX `idx_action` (`action`),
     INDEX `idx_resource` (`resource`),
-    INDEX `idx_created_at` (`created_at`)
+    INDEX `idx_created_at` (`created_at`),
+    CONSTRAINT `fk_audit_logs_user` FOREIGN KEY (`user_id`) REFERENCES `users`(`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='审计日志表';
 
 -- ============================================

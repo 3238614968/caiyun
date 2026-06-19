@@ -1,4 +1,4 @@
-﻿package utils
+package utils
 
 import (
 	"crypto/aes"
@@ -9,7 +9,9 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
+	"log"
 	"math/big"
+	"os"
 	"strings"
 	"time"
 
@@ -35,7 +37,11 @@ func RandomString(length int) string {
 	const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
 	b := make([]byte, length)
 	for i := range b {
-		n, _ := rand.Int(rand.Reader, big.NewInt(int64(len(charset))))
+		n, err := rand.Int(rand.Reader, big.NewInt(int64(len(charset))))
+		if err != nil {
+			log.Printf("[WARN] RandomString rand.Int 失败: %v", err)
+			return ""
+		}
 		b[i] = charset[n.Int64()]
 	}
 	return string(b)
@@ -44,7 +50,11 @@ func RandomString(length int) string {
 // RandomHex 生成随机十六进制字符串
 func RandomHex(length int) string {
 	b := make([]byte, length/2)
-	rand.Read(b)
+	if _, err := rand.Read(b); err != nil {
+		// 系统熵不足时记录并返回空串，调用方应检查长度。
+		log.Printf("[WARN] RandomHex rand.Read 失败: %v", err)
+		return ""
+	}
 	return hex.EncodeToString(b)
 }
 
@@ -93,20 +103,43 @@ func ParseToken(token string) (int64, error) {
 	return time.Now().Add(30 * 24 * time.Hour).UnixMilli(), nil
 }
 
+// defaultAiUserIDKey 是与移动云盘 AI 云朵接口约定的 AES-128 密钥。
+// 当未配置 CAIYUN_AI_USERID_KEY 时回退使用，并打印警告日志。
+// 注意：该密钥由服务端协议定义，非项目自有密钥。
+const defaultAiUserIDKey = "xuL97!x7GGxG%8V4"
+
+// aiUserIDKey 返回用于加密 AI 用户 ID 的 AES-128 密钥。
+// 优先读取环境变量 CAIYUN_AI_USERID_KEY；未配置时回退到协议默认密钥并告警。
+func aiUserIDKey() ([]byte, error) {
+	if envKey := strings.TrimSpace(os.Getenv("CAIYUN_AI_USERID_KEY")); len(envKey) == 16 {
+		return []byte(envKey), nil
+	}
+	if strings.EqualFold(strings.TrimSpace(os.Getenv("GIN_MODE")), "release") &&
+		!strings.EqualFold(strings.TrimSpace(os.Getenv("ALLOW_INSECURE_DEFAULTS")), "true") {
+		return nil, fmt.Errorf("CAIYUN_AI_USERID_KEY 未配置或长度非 16")
+	}
+	log.Printf("[WARN] CAIYUN_AI_USERID_KEY 未配置或长度非 16，回退到协议默认密钥")
+	return []byte(defaultAiUserIDKey), nil
+}
+
 // EncryptAiUserId 加密用户ID（用于 AI 云朵）
 // 对应 mjs ZT 函数：AES-128-CBC 加密后双重 Base64 编码
-func EncryptAiUserId(userID string) string {
-	key := []byte("xuL97!x7GGxG%8V4")
+func EncryptAiUserId(userID string) (string, error) {
+	key, err := aiUserIDKey()
+	if err != nil {
+		return "", err
+	}
 
 	// 生成 16 字节随机 IV
 	iv := make([]byte, 16)
-	rand.Read(iv)
+	if _, err := rand.Read(iv); err != nil {
+		return "", fmt.Errorf("生成 AI 用户 ID 加密 IV 失败: %w", err)
+	}
 
 	// AES-128-CBC 加密
 	block, err := aes.NewCipher(key)
 	if err != nil {
-		// 降级为简单 base64
-		return Base64Encode(userID)
+		return "", fmt.Errorf("初始化 AI 用户 ID 加密器失败: %w", err)
 	}
 
 	// PKCS7 填充
@@ -128,7 +161,7 @@ func EncryptAiUserId(userID string) string {
 
 	// 双重 Base64 编码
 	firstBase64 := base64.StdEncoding.EncodeToString(combined)
-	return base64.StdEncoding.EncodeToString([]byte(firstBase64))
+	return base64.StdEncoding.EncodeToString([]byte(firstBase64)), nil
 }
 
 // ParseAuthString 解析 Auth 字符串

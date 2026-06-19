@@ -2,6 +2,8 @@ package repository
 
 import (
 	"caiyun/internal/models"
+	"context"
+	"database/sql"
 	"time"
 
 	"gorm.io/gorm"
@@ -9,6 +11,16 @@ import (
 
 type TaskLogRepository struct {
 	db *gorm.DB
+}
+
+// AccountLogSummary 汇总指定账号在今日/昨日的任务统计。
+type AccountLogSummary struct {
+	AccountID       uint
+	TodayGained     int
+	YesterdayGained int
+	SuccessCount    int64
+	FailedCount     int64
+	LastExecutedAt  sql.NullTime
 }
 
 // 北京时间时区
@@ -22,6 +34,14 @@ func todayStart() time.Time {
 
 func NewTaskLogRepository(db *gorm.DB) *TaskLogRepository {
 	return &TaskLogRepository{db: db}
+}
+
+// WithContext 返回绑定到指定 context 的仓库副本，便于数据库操作响应请求取消和超时。
+func (r *TaskLogRepository) WithContext(ctx context.Context) *TaskLogRepository {
+	if ctx == nil {
+		return r
+	}
+	return &TaskLogRepository{db: r.db.WithContext(ctx)}
 }
 
 // Create 创建任务日志
@@ -233,6 +253,40 @@ func (r *TaskLogRepository) GetCloudGainedByAccountAndRange(accountID uint, star
 		Select("COALESCE(SUM(cloud_gained), 0)").
 		Scan(&total)
 	return total
+}
+
+// GetAccountSummariesByIDs 批量聚合账号任务统计，避免管理员账号概况页按账号逐条查询。
+func (r *TaskLogRepository) GetAccountSummariesByIDs(ids []uint, today, tomorrow, yesterday time.Time) (map[uint]AccountLogSummary, error) {
+	result := make(map[uint]AccountLogSummary, len(ids))
+	if len(ids) == 0 {
+		return result, nil
+	}
+
+	var rows []AccountLogSummary
+	err := r.db.Model(&models.TaskLog{}).
+		Select(`
+			account_id,
+			COALESCE(SUM(CASE WHEN created_at >= ? AND created_at < ? THEN cloud_gained ELSE 0 END), 0) AS today_gained,
+			COALESCE(SUM(CASE WHEN created_at >= ? AND created_at < ? THEN cloud_gained ELSE 0 END), 0) AS yesterday_gained,
+			COALESCE(SUM(CASE WHEN created_at >= ? AND created_at < ? AND status = ? THEN 1 ELSE 0 END), 0) AS success_count,
+			COALESCE(SUM(CASE WHEN created_at >= ? AND created_at < ? AND status = ? THEN 1 ELSE 0 END), 0) AS failed_count,
+			MAX(created_at) AS last_executed_at`,
+			today, tomorrow,
+			yesterday, today,
+			today, tomorrow, "success",
+			today, tomorrow, "failed",
+		).
+		Where("account_id IN ?", ids).
+		Group("account_id").
+		Scan(&rows).Error
+	if err != nil {
+		return nil, err
+	}
+
+	for _, row := range rows {
+		result[row.AccountID] = row
+	}
+	return result, nil
 }
 
 // GetCloudGainedByUserAndRange 获取指定用户在日期范围内获得的云朵数

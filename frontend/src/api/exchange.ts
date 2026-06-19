@@ -30,6 +30,7 @@ export interface Product {
   prized_name?: string
   porder?: number
   prize_image?: string
+  image_url?: string
   prize_price?: number
   prize_count?: number
 }
@@ -54,6 +55,8 @@ export interface ExchangeAccount {
   // 扩展关联字段（按后端预加载情况可能存在）。
   product_id?: number
   product?: Product
+  current_product?: Product
+  tasks?: ExchangeTask[]
   account?: Record<string, unknown>
 }
 

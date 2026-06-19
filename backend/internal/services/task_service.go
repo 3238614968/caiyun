@@ -143,7 +143,7 @@ func buildTaskRunner(svc *TaskService, account *models.Account, storage tasks.St
 			// 成功获取后重置错误计数
 			if opts.updateJWTErrorStat && svc != nil && account.JWTErrorCount > 0 {
 				account.JWTErrorCount = 0
-				if err := svc.accountRepo.Update(account); err != nil {
+				if err := svc.accountRepo.ResetJWTErrorCount(account.ID); err != nil {
 					lg.Error("重置账号JWT错误计数失败:", err)
 				}
 			}
@@ -168,7 +168,12 @@ func buildTaskRunner(svc *TaskService, account *models.Account, storage tasks.St
 	// 如果重试后仍然失败
 	if opts.updateJWTErrorStat && svc != nil && (jwtToken == "" || lastErr != nil) {
 		// 增加错误计数
-		account.JWTErrorCount++
+		newCount, err := svc.accountRepo.IncrementJWTErrorCount(account.ID)
+		if err != nil {
+			lg.Error("更新账号JWT错误计数失败:", err)
+			newCount = account.JWTErrorCount + 1
+		}
+		account.JWTErrorCount = newCount
 		lg.Error(fmt.Sprintf("JWT获取失败次数: %d/%d", account.JWTErrorCount, opts.maxJWTRetries))
 
 		// 如果达到最大重试次数，禁用账号
@@ -186,11 +191,9 @@ func buildTaskRunner(svc *TaskService, account *models.Account, storage tasks.St
 					},
 				})
 			}
-		}
-
-		// 更新账号状态到数据库
-		if err := svc.accountRepo.Update(account); err != nil {
-			lg.Error("更新账号JWT错误计数失败:", err)
+			if err := svc.accountRepo.SetActiveStatus(account.ID, false); err != nil {
+				lg.Error("禁用账号失败:", err)
+			}
 		}
 	}
 

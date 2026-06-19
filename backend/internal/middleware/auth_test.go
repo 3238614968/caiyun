@@ -1,9 +1,11 @@
 package middleware
 
 import (
+	"caiyun/pkg/jwt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 )
@@ -18,6 +20,32 @@ func TestRateLimiterBurstAndRefill(t *testing.T) {
 	}
 	if limiter.Allow("user-1") {
 		t.Fatal("third request should be rate limited")
+	}
+}
+
+func TestAuthorizationHeaderWithAuthCookieStillRequiresCSRF(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	manager := jwt.NewManager("test-secret-at-least-16-bytes")
+	token, err := manager.GenerateToken(1, "alice", "user", 0, time.Hour)
+	if err != nil {
+		t.Fatalf("GenerateToken() error = %v", err)
+	}
+
+	router := gin.New()
+	router.Use(AuthMiddleware(manager))
+	router.Use(CSRFMiddleware())
+	router.POST("/api/protected", func(c *gin.Context) {
+		c.Status(http.StatusOK)
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/api/protected", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.AddCookie(&http.Cookie{Name: "auth_token", Value: "stale-cookie-token"})
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("mixed header+cookie auth without csrf status=%d, want 403", w.Code)
 	}
 }
 
@@ -71,7 +99,7 @@ func TestCSRFMiddlewareRequiresMatchingTokenForCookieAuth(t *testing.T) {
 
 	router := gin.New()
 	router.Use(func(c *gin.Context) {
-		c.Set("auth_from_cookie", true)
+		c.Set(string(authFromCookieKey), true)
 		c.Next()
 	})
 	router.Use(CSRFMiddleware())
@@ -105,10 +133,14 @@ func TestCORSDefaultOriginsDisabledInProduction(t *testing.T) {
 	}
 }
 
-func TestCORSDefaultOriginsAllowedOutsideProduction(t *testing.T) {
+func TestCORSRequiresExplicitOriginsOutsideProduction(t *testing.T) {
 	t.Setenv("ALLOWED_ORIGINS", "")
 	t.Setenv("APP_ENV", "development")
+	if isAllowedOrigin("http://localhost:5173") {
+		t.Fatal("localhost fallback origin should not be allowed without ALLOWED_ORIGINS")
+	}
+	t.Setenv("ALLOWED_ORIGINS", "http://localhost:5173")
 	if !isAllowedOrigin("http://localhost:5173") {
-		t.Fatal("localhost fallback origin should be allowed outside production")
+		t.Fatal("explicit localhost origin should be allowed")
 	}
 }

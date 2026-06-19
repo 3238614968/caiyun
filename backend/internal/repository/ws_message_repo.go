@@ -1,7 +1,8 @@
-﻿package repository
+package repository
 
 import (
 	"caiyun/internal/models"
+	"context"
 	"encoding/json"
 	"time"
 
@@ -16,6 +17,14 @@ type WSMessageRepository struct {
 // NewWSMessageRepository 创建WebSocket消息仓库
 func NewWSMessageRepository(db *gorm.DB) *WSMessageRepository {
 	return &WSMessageRepository{db: db}
+}
+
+// WithContext 返回绑定到指定 context 的仓库副本，便于数据库操作响应请求取消和超时。
+func (r *WSMessageRepository) WithContext(ctx context.Context) *WSMessageRepository {
+	if ctx == nil {
+		return r
+	}
+	return &WSMessageRepository{db: r.db.WithContext(ctx)}
 }
 
 // Create 创建消息
@@ -43,15 +52,15 @@ func (r *WSMessageRepository) GetUndeliveredMessages(userID uint, limit int) ([]
 	return messages, err
 }
 
-// MarkAsRead 标记消息为已读
-func (r *WSMessageRepository) MarkAsRead(messageID uint) error {
+// MarkAsRead 标记指定用户自己的消息为已读，避免仅凭 messageID 越权修改其他用户消息。
+func (r *WSMessageRepository) MarkAsRead(userID, messageID uint) error {
 	now := time.Now()
-	return r.db.Model(&models.WebSocketMessage{}).
-		Where("id = ?", messageID).
-		Updates(map[string]interface{}{
-			"is_read": true,
-			"read_at": now,
-		}).Error
+	query := r.db.Model(&models.WebSocketMessage{}).
+		Where("id = ? AND user_id = ?", messageID, userID)
+	return query.Updates(map[string]interface{}{
+		"is_read": true,
+		"read_at": now,
+	}).Error
 }
 
 // MarkAsDelivered 标记消息为已送达

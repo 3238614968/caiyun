@@ -3,6 +3,7 @@ package services
 import (
 	"caiyun/internal/models"
 	"caiyun/internal/ws"
+	"context"
 	"fmt"
 	"log"
 	"strings"
@@ -11,15 +12,25 @@ import (
 
 // ExecuteTaskForAccount 为指定账号执行所有已配置批量任务。
 func (s *TaskService) ExecuteTaskForAccount(account *models.Account) ([]TaskResult, error) {
-	return s.executeTaskCodesForAccount(account, resolveConfiguredTaskCodes(s.taskConfigRepo))
+	return s.ExecuteTaskForAccountContext(context.Background(), account)
+}
+
+// ExecuteTaskForAccountContext 为指定账号执行所有已配置批量任务，并在任务边界响应取消。
+func (s *TaskService) ExecuteTaskForAccountContext(ctx context.Context, account *models.Account) ([]TaskResult, error) {
+	return s.executeTaskCodesForAccount(ctx, account, resolveConfiguredTaskCodes(s.taskConfigRepo))
 }
 
 // ExecuteSelectedTaskForAccount 为队列消息执行指定任务类型。
 // taskType 为 all/all_tasks/空时保持历史行为，执行完整批量任务。
 func (s *TaskService) ExecuteSelectedTaskForAccount(account *models.Account, taskType string) ([]TaskResult, error) {
+	return s.ExecuteSelectedTaskForAccountContext(context.Background(), account, taskType)
+}
+
+// ExecuteSelectedTaskForAccountContext 为队列消息执行指定任务类型，并在任务边界响应取消。
+func (s *TaskService) ExecuteSelectedTaskForAccountContext(ctx context.Context, account *models.Account, taskType string) ([]TaskResult, error) {
 	taskType = strings.TrimSpace(taskType)
 	if taskType == "" || taskType == "all" || taskType == "all_tasks" {
-		return s.ExecuteTaskForAccount(account)
+		return s.ExecuteTaskForAccountContext(ctx, account)
 	}
 
 	code := defaultTaskCatalog.Normalize(taskType)
@@ -29,10 +40,16 @@ func (s *TaskService) ExecuteSelectedTaskForAccount(account *models.Account, tas
 	if _, ok := defaultTaskCatalog.Get(code); !ok {
 		return nil, fmt.Errorf("未知任务类型: %s", taskType)
 	}
-	return s.executeTaskCodesForAccount(account, []string{code})
+	return s.executeTaskCodesForAccount(ctx, account, []string{code})
 }
 
-func (s *TaskService) executeTaskCodesForAccount(account *models.Account, taskCodes []string) ([]TaskResult, error) {
+func (s *TaskService) executeTaskCodesForAccount(ctx context.Context, account *models.Account, taskCodes []string) ([]TaskResult, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	// 使用 TokenManager 获取有效的 JWT Token
 	if s.tokenMgr != nil {
 		tokenInfo, err := s.tokenMgr.GetToken(account.ID)
@@ -42,7 +59,7 @@ func (s *TaskService) executeTaskCodesForAccount(account *models.Account, taskCo
 	}
 
 	runner := s.NewTaskRunnerWithRetry(account, buildAccountScopedStorage(s.storage, account.ID), s.authMgr, nil)
-	results := runner.RunSelected(taskCodes)
+	results := runner.RunSelectedContext(ctx, taskCodes)
 
 	// 计算本次获得的云朵数
 	totalGained := runner.GetCloudGained()
@@ -170,6 +187,9 @@ func (s *TaskService) executeTaskCodesForAccount(account *models.Account, taskCo
 
 	if len(persistenceErrors) > 0 {
 		return results, fmt.Errorf("任务执行完成但部分结果持久化失败: %s", strings.Join(persistenceErrors, "; "))
+	}
+	if err := ctx.Err(); err != nil {
+		return results, err
 	}
 	return results, nil
 }

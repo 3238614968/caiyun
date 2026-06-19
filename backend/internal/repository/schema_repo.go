@@ -1,6 +1,7 @@
 package repository
 
 import (
+	"context"
 	"fmt"
 	"sort"
 	"strings"
@@ -14,6 +15,14 @@ type SchemaRepository struct {
 
 func NewSchemaRepository(db *gorm.DB) *SchemaRepository {
 	return &SchemaRepository{db: db}
+}
+
+// WithContext 返回绑定到指定 context 的仓库副本，便于数据库操作响应请求取消和超时。
+func (r *SchemaRepository) WithContext(ctx context.Context) *SchemaRepository {
+	if ctx == nil {
+		return r
+	}
+	return &SchemaRepository{db: r.db.WithContext(ctx)}
 }
 
 func (r *SchemaRepository) ValidateCriticalSchema() error {
@@ -42,6 +51,7 @@ func (r *SchemaRepository) ValidateCriticalSchema() error {
 	return nil
 }
 
+// EnsureUserSessionSchema 仅校验 users 表存在与 token_version 列存在，不再运行时 ALTER TABLE。
 func (r *SchemaRepository) EnsureUserSessionSchema() error {
 	exists, err := r.tableExists("users")
 	if err != nil {
@@ -50,10 +60,10 @@ func (r *SchemaRepository) EnsureUserSessionSchema() error {
 	if !exists {
 		return fmt.Errorf("缺少 users 表，请先执行 backend/migrations/init.sql")
 	}
-
-	return r.addColumnIfMissing("users", "token_version", "INT NOT NULL DEFAULT 0 COMMENT 'JWT会话版本，用于吊销旧会话' AFTER `role`")
+	return nil
 }
 
+// EnsureTaskConfigSchema 仅校验 task_configs 表存在，不再运行时 ALTER TABLE。
 func (r *SchemaRepository) EnsureTaskConfigSchema() error {
 	exists, err := r.tableExists("task_configs")
 	if err != nil {
@@ -62,14 +72,6 @@ func (r *SchemaRepository) EnsureTaskConfigSchema() error {
 	if !exists {
 		return fmt.Errorf("缺少 task_configs 表，请先执行 backend/migrations/init.sql")
 	}
-
-	if err := r.addColumnIfMissing("task_configs", "description", "VARCHAR(255) NULL COMMENT '任务描述' AFTER `task_name`"); err != nil {
-		return err
-	}
-	if err := r.addColumnIfMissing("task_configs", "run_in_batch", "BOOLEAN NOT NULL DEFAULT TRUE COMMENT '是否参与批量执行' AFTER `sort_order`"); err != nil {
-		return err
-	}
-
 	return nil
 }
 
@@ -128,17 +130,4 @@ func (r *SchemaRepository) getColumnSet(table string) (map[string]bool, error) {
 		columns[row.ColumnName] = true
 	}
 	return columns, nil
-}
-
-func (r *SchemaRepository) addColumnIfMissing(table, column, definition string) error {
-	columns, err := r.getColumnSet(table)
-	if err != nil {
-		return err
-	}
-	if columns[column] {
-		return nil
-	}
-
-	statement := fmt.Sprintf("ALTER TABLE `%s` ADD COLUMN `%s` %s", table, column, definition)
-	return r.db.Exec(statement).Error
 }

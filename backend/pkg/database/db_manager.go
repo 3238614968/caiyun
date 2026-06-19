@@ -1,12 +1,13 @@
-﻿package database
+package database
 
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
-	"strings"
 	"time"
 
+	mysqlDriver "github.com/go-sql-driver/mysql"
 	"gorm.io/gorm"
 )
 
@@ -50,15 +51,15 @@ func NewDBManager(db *gorm.DB, config Config) (*DBManager, error) {
 
 // Stats 数据库连接池统计
 type Stats struct {
-	MaxOpenConnections int // 最大打开连接数
-	OpenConnections    int // 当前打开的连接数
-	InUse              int // 正在使用的连接数
-	Idle               int // 空闲的连接数
-	WaitCount          int64 // 等待连接的次数
+	MaxOpenConnections int           // 最大打开连接数
+	OpenConnections    int           // 当前打开的连接数
+	InUse              int           // 正在使用的连接数
+	Idle               int           // 空闲的连接数
+	WaitCount          int64         // 等待连接的次数
 	WaitDuration       time.Duration // 等待总时长
-	MaxIdleClosed      int64 // 因超过 MaxIdleTime 而关闭的连接数
-	MaxIdleTimeClosed  int64 // 因超过 ConnMaxIdleTime 而关闭的连接数
-	MaxLifetimeClosed  int64 // 因超过 ConnMaxLifetime 而关闭的连接数
+	MaxIdleClosed      int64         // 因超过 MaxIdleTime 而关闭的连接数
+	MaxIdleTimeClosed  int64         // 因超过 ConnMaxIdleTime 而关闭的连接数
+	MaxLifetimeClosed  int64         // 因超过 ConnMaxLifetime 而关闭的连接数
 }
 
 // GetStats 获取连接池统计信息
@@ -130,15 +131,15 @@ func (m *DBManager) WithTransactionInIsolation(ctx context.Context, level sql.Is
 // RetryOnDeadlock 死锁自动重试
 func (m *DBManager) RetryOnDeadlock(ctx context.Context, maxRetries int, fn func(tx *gorm.DB) error) error {
 	var lastErr error
-	
+
 	for i := 0; i <= maxRetries; i++ {
 		err := m.WithTransaction(ctx, fn)
 		if err == nil {
 			return nil
 		}
-		
+
 		lastErr = err
-		
+
 		// 检查是否是死锁错误
 		if isDeadlock(err) && i < maxRetries {
 			// 指数退避：100ms, 200ms, 400ms...
@@ -150,44 +151,19 @@ func (m *DBManager) RetryOnDeadlock(ctx context.Context, maxRetries int, fn func
 				continue
 			}
 		}
-		
+
 		break
 	}
-	
+
 	return fmt.Errorf("执行事务失败：%w", lastErr)
 }
 
 // isDeadlock 检查是否是死锁错误
 func isDeadlock(err error) bool {
-	errStr := err.Error()
-	// MySQL 死锁错误码：1213
-	// MySQL 超时错误码：1205
-	return containsString(errStr, []string{
-		"Deadlock found when trying to get lock",
-		"Lock wait timeout exceeded",
-		"ER_LOCK_DEADLOCK",
-		"ER_LOCK_WAIT_TIMEOUT",
-	})
-}
-
-func containsString(s string, substrings []string) bool {
-	for _, sub := range substrings {
-		if contains(s, sub) {
-			return true
-		}
-	}
-	return false
-}
-
-func contains(s, substr string) bool {
-	return len(s) >= len(substr) && (s == substr || len(s) > len(substr) && findSubstring(s, substr))
-}
-
-func findSubstring(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
+	var mysqlErr *mysqlDriver.MySQLError
+	if errors.As(err, &mysqlErr) {
+		// MySQL 死锁错误码：1213；锁等待超时：1205。
+		return mysqlErr.Number == 1213 || mysqlErr.Number == 1205
 	}
 	return false
 }
@@ -210,119 +186,6 @@ func (m *DBManager) GetSQLDB() *sql.DB {
 	return m.sqlDB
 }
 
-// BatchInsert 批量插入（分批次，避免单次数据过大）
-func (m *DBManager) BatchInsert(ctx context.Context, tableName string, data []map[string]interface{}, batchSize int) error {
-	if len(data) == 0 {
-		return nil
-	}
-
-	if batchSize <= 0 {
-		batchSize = 1000
-	}
-
-	total := len(data)
-	for i := 0; i < total; i += batchSize {
-		end := i + batchSize
-		if end > total {
-			end = total
-		}
-
-		batch := data[i:end]
-		if err := m.db.WithContext(ctx).Table(tableName).Create(batch).Error; err != nil {
-			return fmt.Errorf("批量插入失败：%w", err)
-		}
-	}
-
-	return nil
-}
-
-// Upsert 插入或更新（ON DUPLICATE KEY UPDATE）
-func (m *DBManager) Upsert(ctx context.Context, tableName string, data map[string]interface{}, updateColumns []string) error {
-	// 使用原生 SQL 实现 UPSERT
-	columns := make([]string, 0, len(data))
-	values := make([]interface{}, 0, len(data))
-	placeholders := make([]string, 0, len(data))
-	
-	for k, v := range data {
-		columns = append(columns, k)
-		values = append(values, v)
-		placeholders = append(placeholders, "?")
-	}
-	
-	updateSet := ""
-	if len(updateColumns) > 0 {
-		for i, col := range updateColumns {
-			if i > 0 {
-				updateSet += ", "
-			}
-			updateSet += fmt.Sprintf("%s = VALUES(%s)", col, col)
-		}
-	} else {
-		// 默认更新所有非主键列
-		for i, col := range columns {
-			if i > 0 {
-				updateSet += ", "
-			}
-			updateSet += fmt.Sprintf("%s = VALUES(%s)", col, col)
-		}
-	}
-	
-	sql := fmt.Sprintf(
-		"INSERT INTO %s (%s) VALUES (%s) ON DUPLICATE KEY UPDATE %s",
-		tableName,
-		strings.Join(columns, ", "),
-		strings.Join(placeholders, ", "),
-		updateSet,
-	)
-	
-	return m.db.WithContext(ctx).Exec(sql, values...).Error
-}
-
-// BulkUpdate 批量更新
-func (m *DBManager) BulkUpdate(ctx context.Context, tableName string, updates []map[string]interface{}, keyColumn string) error {
-	if len(updates) == 0 {
-		return nil
-	}
-
-	// 使用原生 SQL 实现批量更新
-	for _, update := range updates {
-		keyValue, ok := update[keyColumn]
-		if !ok {
-			return fmt.Errorf("缺少键列：%s", keyColumn)
-		}
-		
-		// 构建 SET 子句
-		setClauses := make([]string, 0)
-		values := make([]interface{}, 0)
-		
-		for k, v := range update {
-			if k != keyColumn {
-				setClauses = append(setClauses, fmt.Sprintf("%s = ?", k))
-				values = append(values, v)
-			}
-		}
-		
-		if len(setClauses) == 0 {
-			continue
-		}
-		
-		sql := fmt.Sprintf(
-			"UPDATE %s SET %s WHERE %s = ?",
-			tableName,
-			strings.Join(setClauses, ", "),
-			keyColumn,
-		)
-		
-		values = append(values, keyValue)
-		
-		if err := m.db.WithContext(ctx).Exec(sql, values...).Error; err != nil {
-			return err
-		}
-	}
-	
-	return nil
-}
-
 // QueryWithCache 带缓存的查询（需要外部缓存支持）
 // cacheKey: 缓存键
 // ttl: 缓存时间
@@ -342,7 +205,7 @@ func (m *DBManager) StreamQuery(ctx context.Context, query string, args ...inter
 
 	// 设置流式选项
 	rows.ColumnTypes()
-	
+
 	return rows, nil
 }
 

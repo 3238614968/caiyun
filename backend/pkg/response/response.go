@@ -1,4 +1,4 @@
-﻿package response
+package response
 
 import (
 	stderrors "errors"
@@ -55,6 +55,10 @@ func SuccessNoContent(c *gin.Context) {
 	c.Status(http.StatusNoContent)
 }
 
+// genericInternalMessage 是非 AppError 时返回给客户端的通用消息，
+// 避免把 GORM / SQL / 上游响应体等内部细节泄漏给调用方。
+const genericInternalMessage = "服务器内部错误，请稍后再试"
+
 // Error 错误响应
 func Error(c *gin.Context, err error) {
 	// 检查是否是 AppError
@@ -67,10 +71,11 @@ func Error(c *gin.Context, err error) {
 		return
 	}
 
-	// 普通错误，默认 500
+	// 普通 error：客户端只看到通用消息，详细信息写入 gin context 供审计中间件记录。
+	recordInternalError(c, err)
 	c.JSON(http.StatusInternalServerError, Response{
 		Code:    http.StatusInternalServerError,
-		Message: err.Error(),
+		Message: genericInternalMessage,
 	})
 }
 
@@ -79,6 +84,15 @@ func ErrorWithCode(c *gin.Context, code int, message string) {
 	c.JSON(code, Response{
 		Code:    code,
 		Message: message,
+	})
+}
+
+// ErrorWithData 指定错误码并附带结构化错误上下文。
+func ErrorWithData(c *gin.Context, code int, message string, data interface{}) {
+	c.JSON(code, Response{
+		Code:    code,
+		Message: message,
+		Data:    data,
 	})
 }
 
@@ -222,11 +236,25 @@ func HandleAppError(c *gin.Context, err error) {
 		return
 	}
 
-	// 非 AppError，当作内部错误处理
+	// 非 AppError：客户端只看到通用消息，详细信息记录到 gin context。
+	recordInternalError(c, err)
 	c.JSON(http.StatusInternalServerError, Response{
 		Code:    http.StatusInternalServerError,
-		Message: err.Error(),
+		Message: genericInternalMessage,
 	})
+}
+
+// internalErrorLogKey 用于把内部错误详情写入 gin context，供审计中间件记录到 ErrorMsg。
+const internalErrorLogKey = "_internal_error_detail"
+
+// recordInternalError 把 err 的完整信息记录到 gin context 与标准库 log，
+// 但不写入 HTTP 响应。审计中间件会读取 c.Errors 输出到审计日志。
+func recordInternalError(c *gin.Context, err error) {
+	if err == nil || c == nil {
+		return
+	}
+	_ = c.Error(err)
+	c.Set(internalErrorLogKey, err.Error())
 }
 
 // WithDataAndMeta 带元数据的响应

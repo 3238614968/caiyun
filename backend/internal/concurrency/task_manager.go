@@ -31,6 +31,7 @@ type TaskManager struct {
 	resultQueue chan *TaskResult
 
 	activeWorkers int32
+	activeTasks   int32
 
 	// workerWG 仅跟踪常驻 worker 协程与结果处理协程的生命周期。
 	workerWG sync.WaitGroup
@@ -171,6 +172,8 @@ func (tm *TaskManager) worker(id int) {
 			}
 
 			func() {
+				atomic.AddInt32(&tm.activeTasks, 1)
+				defer atomic.AddInt32(&tm.activeTasks, -1)
 				defer tm.taskWG.Done()
 				defer func() {
 					if r := recover(); r != nil {
@@ -287,14 +290,19 @@ func (tm *TaskManager) GetActiveWorkers() int32 {
 	return atomic.LoadInt32(&tm.activeWorkers)
 }
 
+// GetActiveTasks 获取正在执行账号任务的 worker 数量。
+func (tm *TaskManager) GetActiveTasks() int32 {
+	return atomic.LoadInt32(&tm.activeTasks)
+}
+
 // GetQueueSize 获取当前队列长度。
 func (tm *TaskManager) GetQueueSize() int {
 	return len(tm.taskQueue)
 }
 
-// GetPendingTasks 获取待处理任务数量（队列中 + 正在执行）。
+// GetPendingTasks 获取待处理任务数量（队列中 + 正在执行的账号任务）。
 func (tm *TaskManager) GetPendingTasks() int {
-	return len(tm.taskQueue) + int(tm.GetActiveWorkers())
+	return len(tm.taskQueue) + int(tm.GetActiveTasks())
 }
 
 // WaitForCompletion 等待当前已提交批次任务执行完成。
@@ -307,6 +315,7 @@ func (tm *TaskManager) WaitForCompletion() {
 func (tm *TaskManager) GetStatus() map[string]interface{} {
 	return map[string]interface{}{
 		"active_workers": tm.GetActiveWorkers(),
+		"active_tasks":   tm.GetActiveTasks(),
 		"queue_size":     tm.GetQueueSize(),
 		"pending_tasks":  tm.GetPendingTasks(),
 		"task_metrics":   tm.GetMetrics(),

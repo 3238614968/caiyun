@@ -307,6 +307,16 @@ func (c *Client) buildHeaders(reqURL string, customHeaders map[string]string) ma
 // 重试策略：网络错误、超时、5xx 状态码自动重试，最多 3 次
 // 4xx 状态码不重试，立即返回
 func (c *Client) Request(method, reqURL string, headers map[string]string, body interface{}) (*http.Response, error) {
+	return c.RequestWithContext(context.Background(), method, reqURL, headers, body)
+}
+
+// RequestWithContext HTTP 请求方法（带重试与 context 取消）。
+// 重试策略：网络错误、超时、5xx 状态码自动重试，最多 3 次。
+// 4xx 状态码不重试，立即返回。
+func (c *Client) RequestWithContext(ctx context.Context, method, reqURL string, headers map[string]string, body interface{}) (*http.Response, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	const maxRetries = 3
 	const retryDelay = 1 * time.Second
 
@@ -333,7 +343,14 @@ func (c *Client) Request(method, reqURL string, headers map[string]string, body 
 	for attempt := 0; attempt <= maxRetries; attempt++ {
 		// 重试前等待 1 秒（首次请求不等待）
 		if attempt > 0 {
-			time.Sleep(retryDelay)
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(retryDelay):
+			}
+		}
+		if err := ctx.Err(); err != nil {
+			return nil, err
 		}
 
 		// 每次重新创建 body reader
@@ -342,7 +359,7 @@ func (c *Client) Request(method, reqURL string, headers map[string]string, body 
 			reqBody = bytes.NewReader(bodyBytes)
 		}
 
-		req, err := http.NewRequest(method, reqURL, reqBody)
+		req, err := http.NewRequestWithContext(ctx, method, reqURL, reqBody)
 		if err != nil {
 			return nil, fmt.Errorf("创建请求失败: %w", err)
 		}
@@ -391,9 +408,17 @@ func (c *Client) Get(url string, headers map[string]string) (*http.Response, err
 	return c.Request("GET", url, headers, nil)
 }
 
+func (c *Client) GetWithContext(ctx context.Context, url string, headers map[string]string) (*http.Response, error) {
+	return c.RequestWithContext(ctx, "GET", url, headers, nil)
+}
+
 // Post POST 请求
 func (c *Client) Post(url string, headers map[string]string, body interface{}) (*http.Response, error) {
 	return c.Request("POST", url, headers, body)
+}
+
+func (c *Client) PostWithContext(ctx context.Context, url string, headers map[string]string, body interface{}) (*http.Response, error) {
+	return c.RequestWithContext(ctx, "POST", url, headers, body)
 }
 
 // Put PUT 请求
@@ -401,9 +426,17 @@ func (c *Client) Put(url string, headers map[string]string, body interface{}) (*
 	return c.Request("PUT", url, headers, body)
 }
 
+func (c *Client) PutWithContext(ctx context.Context, url string, headers map[string]string, body interface{}) (*http.Response, error) {
+	return c.RequestWithContext(ctx, "PUT", url, headers, body)
+}
+
 // Delete DELETE 请求
 func (c *Client) Delete(url string, headers map[string]string, body interface{}) (*http.Response, error) {
 	return c.Request("DELETE", url, headers, body)
+}
+
+func (c *Client) DeleteWithContext(ctx context.Context, url string, headers map[string]string, body interface{}) (*http.Response, error) {
+	return c.RequestWithContext(ctx, "DELETE", url, headers, body)
 }
 
 // ParseJSONResponse 解析 JSON 响应
@@ -419,7 +452,12 @@ func (c *Client) ParseJSONResponse(resp *http.Response, result interface{}) erro
 	}
 
 	if err := json.Unmarshal(body, result); err != nil {
-		return fmt.Errorf("解析 JSON 失败: %w, body: %s", err, string(body))
+		// 截断上游响应体片段，避免把整个 5MB 响应塞进 error 链路造成日志膨胀或泄漏。
+		snippet := string(body)
+		if len(snippet) > 512 {
+			snippet = snippet[:512] + "...(truncated)"
+		}
+		return fmt.Errorf("解析 JSON 失败: %w, body: %s", err, snippet)
 	}
 
 	return nil

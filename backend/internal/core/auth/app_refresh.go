@@ -8,19 +8,28 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 )
 
 const (
-	appRefreshAESKey      = "2olBaQGYnEKoStYomsd1n7ax"
-	appRefreshURL         = "https://user-njs.yun.139.com/user/auth/refreshToken"
-	appRefreshDeviceID    = "1E58F2CE422EB2234BB8795E316BD44B"
-	authWebViewUA         = "Mozilla/5.0 (Linux; Android 13; 23049RAD8C Build/TKQ1.221114.001; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/108.0.5359.128 Mobile Safari/537.36 MCloudApp/12.5.4 AppLanguage/zh-CN"
-	authOkHTTPUA          = "okhttp/4.12.0"
-	authTargetSourceID    = "001005"
-	authQuerySpecTokenURL = "https://orches.yun.139.com/orchestration/auth-rebuild/token/v1.0/querySpecToken"
+	defaultAppRefreshAESKey = "2olBaQGYnEKoStYomsd1n7ax"
+	appRefreshURL           = "https://user-njs.yun.139.com/user/auth/refreshToken"
+	appRefreshDeviceID      = "1E58F2CE422EB2234BB8795E316BD44B"
+	authWebViewUA           = "Mozilla/5.0 (Linux; Android 13; 23049RAD8C Build/TKQ1.221114.001; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/108.0.5359.128 Mobile Safari/537.36 MCloudApp/12.5.4 AppLanguage/zh-CN"
+	authOkHTTPUA            = "okhttp/4.12.0"
+	authTargetSourceID      = "001005"
+	authQuerySpecTokenURL   = "https://orches.yun.139.com/orchestration/auth-rebuild/token/v1.0/querySpecToken"
 )
+
+func appRefreshAESKey() []byte {
+	if key := strings.TrimSpace(os.Getenv("CAIYUN_APP_REFRESH_AES_KEY")); key != "" {
+		return []byte(key)
+	}
+	// 该默认值来自移动云盘上游 APP 协议，非项目自有密钥；允许为空时按协议默认值兼容。
+	return []byte(defaultAppRefreshAESKey)
+}
 
 var appRefreshDeviceInfo = fmt.Sprintf(
 	"1|127.0.0.1|1|12.5.4|Xiaomi|23049RAD8C|%s|02-00-00-00-00-00|android 13",
@@ -303,7 +312,7 @@ func parseRefreshAuthToken(decrypted string) (string, error) {
 }
 
 func appRefreshEncrypt(plaintext string) (string, error) {
-	block, err := aes.NewCipher([]byte(appRefreshAESKey))
+	block, err := aes.NewCipher(appRefreshAESKey())
 	if err != nil {
 		return "", err
 	}
@@ -338,7 +347,7 @@ func appRefreshDecrypt(cipherB64 string) (string, error) {
 		return "", fmt.Errorf("密文块长度非法")
 	}
 
-	block, err := aes.NewCipher([]byte(appRefreshAESKey))
+	block, err := aes.NewCipher(appRefreshAESKey())
 	if err != nil {
 		return "", err
 	}

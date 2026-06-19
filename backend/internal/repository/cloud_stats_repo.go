@@ -2,6 +2,7 @@ package repository
 
 import (
 	"caiyun/internal/models"
+	"context"
 	"time"
 
 	"gorm.io/gorm"
@@ -13,6 +14,14 @@ type CloudStatsRepository struct {
 
 func NewCloudStatsRepository(db *gorm.DB) *CloudStatsRepository {
 	return &CloudStatsRepository{db: db}
+}
+
+// WithContext 返回绑定到指定 context 的仓库副本，便于数据库操作响应请求取消和超时。
+func (r *CloudStatsRepository) WithContext(ctx context.Context) *CloudStatsRepository {
+	if ctx == nil {
+		return r
+	}
+	return &CloudStatsRepository{db: r.db.WithContext(ctx)}
 }
 
 // Create 创建云朵统计记录

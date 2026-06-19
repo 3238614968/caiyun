@@ -80,7 +80,7 @@ type UserResponse struct {
 func (h *AuthHandler) Register(c *gin.Context) {
 	var req services.RegisterRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, ErrorResponse{Message: err.Error()})
+		respondError(c, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -88,18 +88,21 @@ func (h *AuthHandler) Register(c *gin.Context) {
 	if err != nil {
 		switch {
 		case errors.Is(err, services.ErrUserExists):
-			c.JSON(http.StatusConflict, ErrorResponse{Message: "用户名已存在"})
+			respondError(c, http.StatusConflict, "用户名已存在")
 		case errors.Is(err, services.ErrEmailExists):
-			c.JSON(http.StatusConflict, ErrorResponse{Message: "邮箱已被注册"})
+			respondError(c, http.StatusConflict, "邮箱已被注册")
 		case errors.Is(err, services.ErrWeakPassword):
-			c.JSON(http.StatusBadRequest, ErrorResponse{Message: err.Error()})
+			respondError(c, http.StatusBadRequest, err.Error())
 		default:
-			c.JSON(http.StatusInternalServerError, InternalServerErrorResponse())
+			respondInternalServer(c)
 		}
 		return
 	}
 
-	setAuthCookies(c, resp.Token, time.Until(time.Unix(resp.ExpiresAt, 0)))
+	if err := setAuthCookies(c, resp.Token, time.Until(time.Unix(resp.ExpiresAt, 0))); err != nil {
+		respondInternalServer(c)
+		return
+	}
 	apiresponse.SuccessCreated(c, AuthResponse{
 		ExpiresAt: resp.ExpiresAt,
 		User: UserResponse{
@@ -124,7 +127,7 @@ func (h *AuthHandler) Register(c *gin.Context) {
 func (h *AuthHandler) Login(c *gin.Context) {
 	var req services.LoginRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, ErrorResponse{Message: err.Error()})
+		respondError(c, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -132,14 +135,19 @@ func (h *AuthHandler) Login(c *gin.Context) {
 	if err != nil {
 		switch err {
 		case services.ErrUserNotFound, services.ErrInvalidCredentials:
-			c.JSON(http.StatusUnauthorized, ErrorResponse{Message: "用户名或密码错误"})
+			respondError(c, http.StatusUnauthorized, "用户名或密码错误")
+		case services.ErrAccountLocked:
+			respondError(c, http.StatusTooManyRequests, "登录失败次数过多，请稍后再试")
 		default:
-			c.JSON(http.StatusInternalServerError, InternalServerErrorResponse())
+			respondInternalServer(c)
 		}
 		return
 	}
 
-	setAuthCookies(c, resp.Token, time.Until(time.Unix(resp.ExpiresAt, 0)))
+	if err := setAuthCookies(c, resp.Token, time.Until(time.Unix(resp.ExpiresAt, 0))); err != nil {
+		respondInternalServer(c)
+		return
+	}
 	apiresponse.Success(c, AuthResponse{
 		ExpiresAt: resp.ExpiresAt,
 		User: UserResponse{
@@ -155,19 +163,19 @@ func (h *AuthHandler) Login(c *gin.Context) {
 func (h *AuthHandler) SendPasswordResetCode(c *gin.Context) {
 	var req SendPasswordResetCodeRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, ErrorResponse{Message: err.Error()})
+		respondError(c, http.StatusBadRequest, err.Error())
 		return
 	}
 
 	if err := h.authService.SendPasswordResetCode(req.Username, req.Email); err != nil {
 		switch {
 		case errors.Is(err, services.ErrEmailServiceDisabled):
-			c.JSON(http.StatusServiceUnavailable, ErrorResponse{Message: "邮箱服务未配置，请联系管理员重置密码"})
+			respondError(c, http.StatusServiceUnavailable, "邮箱服务未配置，请联系管理员重置密码")
 		case errors.Is(err, services.ErrResetCodeTooFrequent):
 			// 与无效用户名/邮箱组合保持相同响应，避免通过冷却状态枚举账号邮箱关联。
 			apiresponse.Message(c, "如果用户名和邮箱匹配，验证码将发送到该邮箱")
 		default:
-			c.JSON(http.StatusInternalServerError, InternalServerErrorResponse())
+			respondInternalServer(c)
 		}
 		return
 	}
@@ -179,7 +187,7 @@ func (h *AuthHandler) SendPasswordResetCode(c *gin.Context) {
 func (h *AuthHandler) ResetPassword(c *gin.Context) {
 	var req ResetPasswordRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, ErrorResponse{Message: err.Error()})
+		respondError(c, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -187,11 +195,11 @@ func (h *AuthHandler) ResetPassword(c *gin.Context) {
 	if err != nil {
 		switch {
 		case errors.Is(err, services.ErrInvalidRecoveryInfo), errors.Is(err, services.ErrInvalidResetCode):
-			c.JSON(http.StatusBadRequest, ErrorResponse{Message: "验证码错误或已过期"})
+			respondError(c, http.StatusBadRequest, "验证码错误或已过期")
 		case errors.Is(err, services.ErrWeakPassword):
-			c.JSON(http.StatusBadRequest, ErrorResponse{Message: err.Error()})
+			respondError(c, http.StatusBadRequest, err.Error())
 		default:
-			c.JSON(http.StatusInternalServerError, InternalServerErrorResponse())
+			respondInternalServer(c)
 		}
 		return
 	}
@@ -213,11 +221,14 @@ func (h *AuthHandler) RefreshToken(c *gin.Context) {
 
 	resp, err := h.authService.RefreshToken(userID)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, ErrorResponse{Message: "刷新token失败"})
+		respondError(c, http.StatusInternalServerError, "刷新token失败")
 		return
 	}
 
-	setAuthCookies(c, resp.Token, time.Until(time.Unix(resp.ExpiresAt, 0)))
+	if err := setAuthCookies(c, resp.Token, time.Until(time.Unix(resp.ExpiresAt, 0))); err != nil {
+		respondInternalServer(c)
+		return
+	}
 	apiresponse.Success(c, TokenResponse{
 		ExpiresAt: resp.ExpiresAt,
 	})
@@ -242,7 +253,7 @@ func (h *AuthHandler) GetCurrentUser(c *gin.Context) {
 
 	user, err := h.authService.GetUserByID(userID)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, ErrorResponse{Message: "获取用户信息失败"})
+		respondError(c, http.StatusInternalServerError, "获取用户信息失败")
 		return
 	}
 
@@ -259,13 +270,18 @@ type TokenResponse struct {
 	ExpiresAt int64 `json:"expires_at"`
 }
 
-func setAuthCookies(c *gin.Context, token string, maxAge time.Duration) {
+func setAuthCookies(c *gin.Context, token string, maxAge time.Duration) error {
 	if maxAge <= 0 {
 		maxAge = 7 * 24 * time.Hour
 	}
+	csrfToken, err := generateCSRFToken()
+	if err != nil {
+		return err
+	}
 	c.SetSameSite(http.SameSiteLaxMode)
 	c.SetCookie(authCookieName, token, int(maxAge.Seconds()), "/", "", isSecureRequest(c), true)
-	c.SetCookie(csrfCookieName, generateCSRFToken(), int(maxAge.Seconds()), "/", "", isSecureRequest(c), false)
+	c.SetCookie(csrfCookieName, csrfToken, int(maxAge.Seconds()), "/", "", isSecureRequest(c), false)
+	return nil
 }
 
 func clearAuthCookie(c *gin.Context) {
@@ -278,10 +294,10 @@ func isSecureRequest(c *gin.Context) bool {
 	return c.Request.TLS != nil || c.GetHeader("X-Forwarded-Proto") == "https"
 }
 
-func generateCSRFToken() string {
+func generateCSRFToken() (string, error) {
 	var buf [32]byte
 	if _, err := rand.Read(buf[:]); err != nil {
-		return base64.RawURLEncoding.EncodeToString([]byte(time.Now().Format(time.RFC3339Nano)))
+		return "", err
 	}
-	return base64.RawURLEncoding.EncodeToString(buf[:])
+	return base64.RawURLEncoding.EncodeToString(buf[:]), nil
 }

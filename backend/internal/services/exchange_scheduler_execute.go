@@ -7,6 +7,7 @@ import (
 	"log"
 	"strings"
 	"sync"
+	"time"
 )
 
 func (s *ExchangeScheduler) executeExchangeWithAutoSwitch(tasks []*models.ExchangeTask, period string) {
@@ -272,7 +273,15 @@ func (s *ExchangeScheduler) executeTask(task *models.ExchangeTask) (bool, string
 		return false, "商品已下架或不存在，请更新商品列表后重新创建抢兑任务", 0
 	}
 
-	return performExchange(account, prizeID, s.tokenMgr)
+	locked, release, reason := s.acquireMonthlySeriesLock(task, time.Now())
+	if !locked {
+		return false, reason, 0
+	}
+	success, message, execTime := performExchange(account, prizeID, s.tokenMgr)
+	if !success {
+		release()
+	}
+	return success, message, execTime
 }
 
 func (s *ExchangeScheduler) resolveTaskPrizeID(task *models.ExchangeTask) string {

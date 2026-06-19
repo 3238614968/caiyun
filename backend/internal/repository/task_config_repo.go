@@ -1,6 +1,7 @@
 package repository
 
 import (
+	"context"
 	"strings"
 	"time"
 
@@ -15,6 +16,14 @@ type TaskConfigRepository struct {
 
 func NewTaskConfigRepository(db *gorm.DB) *TaskConfigRepository {
 	return &TaskConfigRepository{db: db}
+}
+
+// WithContext 返回绑定到指定 context 的仓库副本，便于数据库操作响应请求取消和超时。
+func (r *TaskConfigRepository) WithContext(ctx context.Context) *TaskConfigRepository {
+	if ctx == nil {
+		return r
+	}
+	return &TaskConfigRepository{db: r.db.WithContext(ctx)}
 }
 
 // AutoMigrate creates the task_configs table if not exists.

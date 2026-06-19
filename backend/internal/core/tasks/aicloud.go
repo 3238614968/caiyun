@@ -49,7 +49,11 @@ func (t *AICloudTask) Run(sessions []AISession) error {
 		return fmt.Errorf("用户ID为空")
 	}
 
-	encryptedUserID := utils.EncryptAiUserId(t.userID)
+	encryptedUserID, err := utils.EncryptAiUserId(t.userID)
+	if err != nil {
+		t.logger.Error("加密 AI 用户 ID 失败", err)
+		return err
+	}
 	cloudNum, err := t.getCurrentMonthCloudNum()
 	if err != nil {
 		t.logger.Error("获取云朵数量失败", err)

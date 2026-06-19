@@ -104,6 +104,8 @@ export function logout(): Promise<{ message: string }> {
 export function getCurrentUser(): Promise<User> {
   return request<User | ApiResponse<User>>({
     url: '/api/auth/me',
-    method: 'get'
+    method: 'get',
+    // /me 用于启动时探测 Cookie 会话；未登录时 401 是正常结果，不应触发全局错误提示。
+    silentAuthError: true
   }).then((res) => unwrapRequired(res, {} as User))
 }

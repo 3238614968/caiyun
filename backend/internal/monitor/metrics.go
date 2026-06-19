@@ -1,4 +1,4 @@
-﻿package monitor
+package monitor
 
 import (
 	"github.com/prometheus/client_golang/prometheus"
@@ -29,6 +29,9 @@ type Metrics struct {
 	// 缓存相关指标。
 	cacheHits   prometheus.Counter
 	cacheMisses prometheus.Counter
+
+	// 审计相关指标。
+	auditDropped prometheus.Gauge
 }
 
 // NewMetrics 创建指标收集器并注册指标。
@@ -127,6 +130,12 @@ func NewMetrics() *Metrics {
 		Name:      "misses_total",
 		Help:      "缓存未命中次数",
 	})
+	m.auditDropped = prometheus.NewGauge(prometheus.GaugeOpts{
+		Namespace: "caiyun",
+		Subsystem: "audit",
+		Name:      "dropped_total",
+		Help:      "因审计日志异步队列满而丢弃的日志累计数量",
+	})
 
 	m.registry.MustRegister(m.exchangeTotal)
 	m.registry.MustRegister(m.exchangeSuccess)
@@ -141,6 +150,7 @@ func NewMetrics() *Metrics {
 	m.registry.MustRegister(m.taskCompleted)
 	m.registry.MustRegister(m.cacheHits)
 	m.registry.MustRegister(m.cacheMisses)
+	m.registry.MustRegister(m.auditDropped)
 
 	return m
 }
@@ -193,4 +203,9 @@ func (m *Metrics) IncCacheHits() {
 // IncCacheMisses 增加缓存未命中次数。
 func (m *Metrics) IncCacheMisses() {
 	m.cacheMisses.Inc()
+}
+
+// SetAuditDropped 设置审计日志丢弃累计数量。
+func (m *Metrics) SetAuditDropped(count int64) {
+	m.auditDropped.Set(float64(count))
 }

@@ -119,9 +119,12 @@ import {
   executeExchangeTask,
   immediateExchange,
   getExchangeConfigPublic,
-  type ExchangeConfig
+  type ExchangeConfig,
+  type ExchangeAccount,
+  type ExchangeTask,
+  type Product
 } from '@/api/exchange'
-import { getAccounts, searchAllAccounts, type AccountSearchItem } from '@/api/account'
+import { getAccounts, searchAllAccounts, type Account, type AccountSearchItem } from '@/api/account'
 import { useAuthStore } from '@/store/auth'
 import { useExchangeMedia } from '@/composables/exchange/useExchangeMedia'
 import { useExchangeForms } from '@/composables/exchange/useExchangeForms'
@@ -140,10 +143,10 @@ const searchKeyword = ref('')
 const currentCategory = ref('')
 const exchangeConfig = ref<ExchangeConfig | null>(null)
 const categories = ref<string[]>([])
-const products = ref<any[]>([])
-const accounts = ref<any[]>([])
-const tasks = ref<any[]>([])
-const userAccounts = ref<any[]>([])
+const products = ref<Product[]>([])
+const accounts = ref<ExchangeAccount[]>([])
+const tasks = ref<ExchangeTask[]>([])
+const userAccounts = ref<Account[]>([])
 const userAccountsLoading = ref(false)
 const compactAccountDialog = ref(false)
 
@@ -205,9 +208,9 @@ const syncDefaultAccountSelection = () => {
     return
   }
 
-  const hasSelectedAccount = userAccounts.value.some((acc: any) => acc.id === accountForm.value.account_id)
+  const hasSelectedAccount = userAccounts.value.some((acc) => acc.id === accountForm.value.account_id)
   if (!hasSelectedAccount) {
-    const preferredAccount = userAccounts.value.find((acc: any) => acc.is_active) || userAccounts.value[0]
+    const preferredAccount = userAccounts.value.find((acc) => acc.is_active) || userAccounts.value[0]
     accountForm.value.account_id = preferredAccount?.id ?? null
   }
 }
@@ -219,7 +222,7 @@ const syncDefaultProductSelection = () => {
     return
   }
 
-  const hasSelectedProduct = products.value.some((product: any) => product.id === accountForm.value.product_id)
+  const hasSelectedProduct = products.value.some((product) => product.id === accountForm.value.product_id)
   if (!hasSelectedProduct) {
     accountForm.value.product_id = products.value[0].id
   }
@@ -277,7 +280,7 @@ const loadUserAccounts = async (force = false) => {
   userAccountsLoading.value = true
   try {
     const res = await getAccounts(1, 200)
-    userAccounts.value = (res.accounts || []).filter((account: any) => !!account?.id)
+    userAccounts.value = (res.accounts || []).filter((account) => !!account?.id)
     syncDefaultAccountSelection()
   } catch (error: any) {
     userAccounts.value = []
@@ -309,7 +312,7 @@ const handleSearch = () => {
   // 搜索已在前端完成，无需额外请求
 }
 
-const showCreateTaskDialog = (product: any) => {
+const showCreateTaskDialog = (product: Product) => {
   // 检查是否有兑换账号
   if (accounts.value.length === 0) {
     ElMessage.warning('请先添加兑换账号')

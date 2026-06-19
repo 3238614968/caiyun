@@ -45,7 +45,7 @@ func (h *ExchangeHandler) SearchProducts(c *gin.Context) {
 
 	products, err := h.exchangeService.SearchProducts(keyword, limit)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, InternalServerErrorResponse())
+		respondInternalServer(c)
 		return
 	}
 
@@ -64,7 +64,7 @@ type GetCategoriesResponse struct {
 func (h *ExchangeHandler) GetCategories(c *gin.Context) {
 	categories, err := h.exchangeService.GetProductCategories()
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, InternalServerErrorResponse())
+		respondInternalServer(c)
 		return
 	}
 
@@ -80,21 +80,20 @@ type UpdateProductsRequest struct {
 
 // UpdateProducts 手动更新商品
 func (h *ExchangeHandler) UpdateProducts(c *gin.Context) {
-	userID, exists := c.Get("user_id")
-	if !exists {
-		c.JSON(http.StatusUnauthorized, ErrorResponse{Message: "未授权"})
+	userID, ok := getUserID(c)
+	if !ok {
 		return
 	}
 
 	var req UpdateProductsRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, ErrorResponse{Message: err.Error()})
+		respondError(c, http.StatusBadRequest, err.Error())
 		return
 	}
 
 	// 验证账号 ID
 	if req.AccountID == 0 {
-		c.JSON(http.StatusBadRequest, ErrorResponse{Message: "账号 ID 不能为空"})
+		respondError(c, http.StatusBadRequest, "账号 ID 不能为空")
 		return
 	}
 
@@ -102,9 +101,9 @@ func (h *ExchangeHandler) UpdateProducts(c *gin.Context) {
 	isAdmin := role == "admin"
 
 	// 调用 Service 更新商品（带账号 ID）
-	count, err := h.productService.UpdateProducts(req.AccountID, userID.(uint), isAdmin)
+	count, err := h.productService.UpdateProducts(req.AccountID, userID, isAdmin)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, InternalServerErrorResponse())
+		respondInternalServer(c)
 		return
 	}
 
@@ -125,32 +124,31 @@ type AddExchangeAccountRequest struct {
 
 // AddExchangeAccount 添加兑换账号
 func (h *ExchangeHandler) AddExchangeAccount(c *gin.Context) {
-	userID, exists := c.Get("user_id")
-	if !exists {
-		c.JSON(http.StatusUnauthorized, ErrorResponse{Message: "未授权"})
+	userID, ok := getUserID(c)
+	if !ok {
 		return
 	}
 
 	var req AddExchangeAccountRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, ErrorResponse{Message: err.Error()})
+		respondError(c, http.StatusBadRequest, err.Error())
 		return
 	}
 
 	// 设置默认时间
 	exchangeTime1, err := normalizeExchangeTime(req.ExchangeTime1, "10:00:00")
 	if err != nil {
-		c.JSON(http.StatusBadRequest, ErrorResponse{Message: "第一次抢兑时间" + err.Error()})
+		respondError(c, http.StatusBadRequest, "第一次抢兑时间"+err.Error())
 		return
 	}
 	exchangeTime2, err := normalizeExchangeTime(req.ExchangeTime2, "16:00:00")
 	if err != nil {
-		c.JSON(http.StatusBadRequest, ErrorResponse{Message: "第二次抢兑时间" + err.Error()})
+		respondError(c, http.StatusBadRequest, "第二次抢兑时间"+err.Error())
 		return
 	}
 
 	account, err := h.exchangeService.AddExchangeAccount(
-		userID.(uint),
+		userID,
 		req.AccountID,
 		req.Remark,
 		exchangeTime1,
@@ -158,7 +156,7 @@ func (h *ExchangeHandler) AddExchangeAccount(c *gin.Context) {
 		req.ProductID,
 	)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, ErrorResponse{Message: err.Error()})
+		respondError(c, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -179,19 +177,23 @@ type GetExchangeAccountsResponse struct {
 
 // GetExchangeAccounts 获取用户的兑换账号列表
 func (h *ExchangeHandler) GetExchangeAccounts(c *gin.Context) {
-	userID, exists := c.Get("user_id")
-	if !exists {
-		c.JSON(http.StatusUnauthorized, ErrorResponse{Message: "未授权"})
+	h.getExchangeAccounts(c, false)
+}
+
+// GetAdminExchangeAccounts 获取全站兑换账号列表（管理员路由专用）。
+func (h *ExchangeHandler) GetAdminExchangeAccounts(c *gin.Context) {
+	h.getExchangeAccounts(c, true)
+}
+
+func (h *ExchangeHandler) getExchangeAccounts(c *gin.Context, isAdmin bool) {
+	userID, ok := getUserID(c)
+	if !ok {
 		return
 	}
 
-	// 检查是否为管理员
-	role, _ := c.Get("role")
-	isAdmin := role == "admin"
-
-	accounts, err := h.exchangeService.GetExchangeAccounts(userID.(uint), isAdmin)
+	accounts, err := h.exchangeService.GetExchangeAccounts(userID, isAdmin)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, InternalServerErrorResponse())
+		respondInternalServer(c)
 		return
 	}
 
@@ -228,39 +230,47 @@ type UpdateExchangeAccountRequest struct {
 
 // UpdateExchangeAccount 更新兑换账号配置
 func (h *ExchangeHandler) UpdateExchangeAccount(c *gin.Context) {
-	userID, exists := c.Get("user_id")
-	if !exists {
-		c.JSON(http.StatusUnauthorized, ErrorResponse{Message: "未授权"})
+	h.updateExchangeAccount(c, false)
+}
+
+// UpdateAdminExchangeAccount 更新任意兑换账号配置（管理员路由专用）。
+func (h *ExchangeHandler) UpdateAdminExchangeAccount(c *gin.Context) {
+	h.updateExchangeAccount(c, true)
+}
+
+func (h *ExchangeHandler) updateExchangeAccount(c *gin.Context, isAdmin bool) {
+	userID, ok := getUserID(c)
+	if !ok {
 		return
 	}
 
 	idStr := c.Param("id")
-	id, _ := strconv.ParseUint(idStr, 10, 32)
+	id, err := strconv.ParseUint(idStr, 10, 32)
+	if err != nil {
+		respondError(c, http.StatusBadRequest, "无效的 ID")
+		return
+	}
 
 	var req UpdateExchangeAccountRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, ErrorResponse{Message: err.Error()})
+		respondError(c, http.StatusBadRequest, err.Error())
 		return
 	}
 
 	exchangeTime1, err := normalizeExchangeTime(req.ExchangeTime1, "10:00:00")
 	if err != nil {
-		c.JSON(http.StatusBadRequest, ErrorResponse{Message: "第一次抢兑时间" + err.Error()})
+		respondError(c, http.StatusBadRequest, "第一次抢兑时间"+err.Error())
 		return
 	}
 	exchangeTime2, err := normalizeExchangeTime(req.ExchangeTime2, "16:00:00")
 	if err != nil {
-		c.JSON(http.StatusBadRequest, ErrorResponse{Message: "第二次抢兑时间" + err.Error()})
+		respondError(c, http.StatusBadRequest, "第二次抢兑时间"+err.Error())
 		return
 	}
 
-	// 检查是否为管理员
-	role, _ := c.Get("role")
-	isAdmin := role == "admin"
-
 	err = h.exchangeService.UpdateExchangeAccount(
 		uint(id),
-		userID.(uint),
+		userID,
 		isAdmin,
 		req.Remark,
 		exchangeTime1,
@@ -269,7 +279,7 @@ func (h *ExchangeHandler) UpdateExchangeAccount(c *gin.Context) {
 		req.ProductID,
 	)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, ErrorResponse{Message: err.Error()})
+		respondError(c, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -278,18 +288,21 @@ func (h *ExchangeHandler) UpdateExchangeAccount(c *gin.Context) {
 
 // DeleteExchangeAccount 删除兑换账号
 func (h *ExchangeHandler) DeleteExchangeAccount(c *gin.Context) {
-	userID, exists := c.Get("user_id")
-	if !exists {
-		c.JSON(http.StatusUnauthorized, ErrorResponse{Message: "未授权"})
+	userID, ok := getUserID(c)
+	if !ok {
 		return
 	}
 
 	idStr := c.Param("id")
-	id, _ := strconv.ParseUint(idStr, 10, 32)
-
-	err := h.exchangeService.DeleteExchangeAccount(uint(id), userID.(uint))
+	id, err := strconv.ParseUint(idStr, 10, 32)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, ErrorResponse{Message: err.Error()})
+		respondError(c, http.StatusBadRequest, "无效的 ID")
+		return
+	}
+
+	err = h.exchangeService.DeleteExchangeAccount(uint(id), userID)
+	if err != nil {
+		respondError(c, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -306,39 +319,38 @@ type CreateExchangeTaskRequest struct {
 
 // CreateExchangeTask 创建抢兑任务
 func (h *ExchangeHandler) CreateExchangeTask(c *gin.Context) {
-	userID, exists := c.Get("user_id")
-	if !exists {
-		c.JSON(http.StatusUnauthorized, ErrorResponse{Message: "未授权"})
+	userID, ok := getUserID(c)
+	if !ok {
 		return
 	}
 
 	var req CreateExchangeTaskRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, ErrorResponse{Message: err.Error()})
+		respondError(c, http.StatusBadRequest, err.Error())
 		return
 	}
 
 	// 设置默认值
 	taskType, err := normalizeExchangeTaskType(req.TaskType)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, ErrorResponse{Message: err.Error()})
+		respondError(c, http.StatusBadRequest, err.Error())
 		return
 	}
 	maxAttempts, err := normalizeMaxAttempts(req.MaxAttempts)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, ErrorResponse{Message: err.Error()})
+		respondError(c, http.StatusBadRequest, err.Error())
 		return
 	}
 
 	task, err := h.exchangeService.CreateExchangeTask(
-		userID.(uint),
+		userID,
 		req.ExchangeAccountID,
 		req.ProductID,
 		taskType,
 		maxAttempts,
 	)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, ErrorResponse{Message: err.Error()})
+		respondError(c, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -353,19 +365,23 @@ type GetExchangeTasksResponse struct {
 
 // GetExchangeTasks 获取用户的抢兑任务列表
 func (h *ExchangeHandler) GetExchangeTasks(c *gin.Context) {
-	userID, exists := c.Get("user_id")
-	if !exists {
-		c.JSON(http.StatusUnauthorized, ErrorResponse{Message: "未授权"})
+	h.getExchangeTasks(c, false)
+}
+
+// GetAdminExchangeTasks 获取全站抢兑任务列表（管理员路由专用）。
+func (h *ExchangeHandler) GetAdminExchangeTasks(c *gin.Context) {
+	h.getExchangeTasks(c, true)
+}
+
+func (h *ExchangeHandler) getExchangeTasks(c *gin.Context, isAdmin bool) {
+	userID, ok := getUserID(c)
+	if !ok {
 		return
 	}
 
-	// 检查是否为管理员
-	role, _ := c.Get("role")
-	isAdmin := role == "admin"
-
-	tasks, err := h.exchangeService.GetExchangeTasks(userID.(uint), isAdmin)
+	tasks, err := h.exchangeService.GetExchangeTasks(userID, isAdmin)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, InternalServerErrorResponse())
+		respondInternalServer(c)
 		return
 	}
 
@@ -382,29 +398,32 @@ type UpdateExchangeTaskRequest struct {
 
 // UpdateExchangeTask 更新抢兑任务
 func (h *ExchangeHandler) UpdateExchangeTask(c *gin.Context) {
-	userID, exists := c.Get("user_id")
-	if !exists {
-		c.JSON(http.StatusUnauthorized, ErrorResponse{Message: "未授权"})
+	userID, ok := getUserID(c)
+	if !ok {
 		return
 	}
 
 	idStr := c.Param("id")
-	id, _ := strconv.ParseUint(idStr, 10, 32)
+	id, err := strconv.ParseUint(idStr, 10, 32)
+	if err != nil {
+		respondError(c, http.StatusBadRequest, "无效的 ID")
+		return
+	}
 
 	var req UpdateExchangeTaskRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, ErrorResponse{Message: err.Error()})
+		respondError(c, http.StatusBadRequest, err.Error())
 		return
 	}
 	maxAttempts, err := normalizeMaxAttempts(req.MaxAttempts)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, ErrorResponse{Message: err.Error()})
+		respondError(c, http.StatusBadRequest, err.Error())
 		return
 	}
 
-	err = h.exchangeService.UpdateExchangeTask(uint(id), userID.(uint), maxAttempts)
+	err = h.exchangeService.UpdateExchangeTask(uint(id), userID, maxAttempts)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, ErrorResponse{Message: err.Error()})
+		respondError(c, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -413,18 +432,21 @@ func (h *ExchangeHandler) UpdateExchangeTask(c *gin.Context) {
 
 // DeleteExchangeTask 删除抢兑任务
 func (h *ExchangeHandler) DeleteExchangeTask(c *gin.Context) {
-	userID, exists := c.Get("user_id")
-	if !exists {
-		c.JSON(http.StatusUnauthorized, ErrorResponse{Message: "未授权"})
+	userID, ok := getUserID(c)
+	if !ok {
 		return
 	}
 
 	idStr := c.Param("id")
-	id, _ := strconv.ParseUint(idStr, 10, 32)
-
-	err := h.exchangeService.DeleteExchangeTask(uint(id), userID.(uint))
+	id, err := strconv.ParseUint(idStr, 10, 32)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, ErrorResponse{Message: err.Error()})
+		respondError(c, http.StatusBadRequest, "无效的 ID")
+		return
+	}
+
+	err = h.exchangeService.DeleteExchangeTask(uint(id), userID)
+	if err != nil {
+		respondError(c, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -433,18 +455,21 @@ func (h *ExchangeHandler) DeleteExchangeTask(c *gin.Context) {
 
 // ExecuteExchangeTask 立即执行抢兑任务
 func (h *ExchangeHandler) ExecuteExchangeTask(c *gin.Context) {
-	userID, exists := c.Get("user_id")
-	if !exists {
-		c.JSON(http.StatusUnauthorized, ErrorResponse{Message: "未授权"})
+	userID, ok := getUserID(c)
+	if !ok {
 		return
 	}
 
 	idStr := c.Param("id")
-	id, _ := strconv.ParseUint(idStr, 10, 32)
-
-	err := h.exchangeService.ExecuteExchangeTask(uint(id), userID.(uint))
+	id, err := strconv.ParseUint(idStr, 10, 32)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, ErrorResponse{Message: err.Error()})
+		respondError(c, http.StatusBadRequest, "无效的 ID")
+		return
+	}
+
+	err = h.exchangeService.ExecuteExchangeTask(uint(id), userID)
+	if err != nil {
+		respondError(c, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -458,20 +483,19 @@ type BatchExecuteExchangeTasksRequest struct {
 
 // BatchExecuteExchangeTasks 批量执行抢兑任务
 func (h *ExchangeHandler) BatchExecuteExchangeTasks(c *gin.Context) {
-	userID, exists := c.Get("user_id")
-	if !exists {
-		c.JSON(http.StatusUnauthorized, ErrorResponse{Message: "未授权"})
+	userID, ok := getUserID(c)
+	if !ok {
 		return
 	}
 
 	var req BatchExecuteExchangeTasksRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, ErrorResponse{Message: err.Error()})
+		respondError(c, http.StatusBadRequest, err.Error())
 		return
 	}
 
 	// 批量执行任务
-	results := h.exchangeService.BatchExecuteExchangeTasks(req.TaskIDs, userID.(uint))
+	results := h.exchangeService.BatchExecuteExchangeTasks(req.TaskIDs, userID)
 
 	apiresponse.Success(c, gin.H{
 		"message": "批量执行完成",
@@ -584,35 +608,35 @@ type UpdateExchangeConfigRequest struct {
 func (h *ExchangeHandler) UpdateExchangeConfig(c *gin.Context) {
 	var req UpdateExchangeConfigRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, ErrorResponse{Message: err.Error()})
+		respondError(c, http.StatusBadRequest, err.Error())
 		return
 	}
 
 	// 更新自动更新配置
 	if err := h.exchangeService.SetSystemConfig("exchange_auto_update_products", fmt.Sprintf("%v", req.AutoUpdateProducts), "是否自动更新商品列表"); err != nil {
-		c.JSON(http.StatusInternalServerError, InternalServerErrorResponse())
+		respondInternalServer(c)
 		return
 	}
 
 	if req.Concurrency <= 0 || req.Concurrency > 1000 {
-		c.JSON(http.StatusBadRequest, ErrorResponse{Message: "并发数必须在 1 到 1000 之间"})
+		respondError(c, http.StatusBadRequest, "并发数必须在 1 到 1000 之间")
 		return
 	}
 	// 更新并发数配置
 	if err := h.exchangeService.SetSystemConfig("exchange_concurrency", fmt.Sprintf("%d", req.Concurrency), "抢兑任务并发数量"); err != nil {
-		c.JSON(http.StatusInternalServerError, InternalServerErrorResponse())
+		respondInternalServer(c)
 		return
 	}
 
 	// 更新启用状态
 	if err := h.exchangeService.SetSystemConfig("exchange_enabled", fmt.Sprintf("%v", req.Enabled), "是否启用抢兑功能"); err != nil {
-		c.JSON(http.StatusInternalServerError, InternalServerErrorResponse())
+		respondInternalServer(c)
 		return
 	}
 
 	// 更新兑换月卡开关
 	if err := h.exchangeService.SetSystemConfig("exchange_monthly_enabled", fmt.Sprintf("%v", req.ExchangeMonthlyEnabled), "是否启用自动兑换月卡"); err != nil {
-		c.JSON(http.StatusInternalServerError, InternalServerErrorResponse())
+		respondInternalServer(c)
 		return
 	}
 
@@ -620,11 +644,11 @@ func (h *ExchangeHandler) UpdateExchangeConfig(c *gin.Context) {
 	if req.ExchangeTime != "" {
 		exchangeTime, err := normalizeExchangeTime(req.ExchangeTime, "")
 		if err != nil {
-			c.JSON(http.StatusBadRequest, ErrorResponse{Message: "自动兑换月卡时间" + err.Error()})
+			respondError(c, http.StatusBadRequest, "自动兑换月卡时间"+err.Error())
 			return
 		}
 		if err := h.exchangeService.SetSystemConfig("exchange_monthly_time", exchangeTime[:5], "自动兑换月卡时间"); err != nil {
-			c.JSON(http.StatusInternalServerError, InternalServerErrorResponse())
+			respondInternalServer(c)
 			return
 		}
 	}
@@ -632,14 +656,14 @@ func (h *ExchangeHandler) UpdateExchangeConfig(c *gin.Context) {
 	// 更新月卡商品ID
 	if req.MonthlyPrizeID != "" {
 		if err := h.exchangeService.SetSystemConfig("exchange_monthly_prize_id", req.MonthlyPrizeID, "月卡商品ID"); err != nil {
-			c.JSON(http.StatusInternalServerError, InternalServerErrorResponse())
+			respondInternalServer(c)
 			return
 		}
 	}
 
 	// 更新立即兑换开关
 	if err := h.exchangeService.SetSystemConfig("exchange_immediate_enabled", fmt.Sprintf("%v", req.ImmediateExchangeEnabled), "是否启用立即兑换功能"); err != nil {
-		c.JSON(http.StatusInternalServerError, InternalServerErrorResponse())
+		respondInternalServer(c)
 		return
 	}
 
@@ -648,8 +672,12 @@ func (h *ExchangeHandler) UpdateExchangeConfig(c *gin.Context) {
 
 // ExecuteMonthlyExchange 立即执行兑换月卡（管理员）
 func (h *ExchangeHandler) ExecuteMonthlyExchange(c *gin.Context) {
-	// 异步执行月卡兑换
-	go h.exchangeService.ExecuteMonthlyExchange()
+	// 异步执行月卡兑换，添加日志以便跟踪结果
+	go func() {
+		log.Println("[ExecuteMonthlyExchange] 开始执行月卡兑换任务")
+		h.exchangeService.ExecuteMonthlyExchange()
+		log.Println("[ExecuteMonthlyExchange] 月卡兑换任务执行完成")
+	}()
 
 	apiresponse.Message(c, "已开始执行月卡兑换任务")
 }
@@ -668,9 +696,8 @@ type RecordStats struct {
 
 // GetExchangeRecords 获取抢兑记录列表
 func (h *ExchangeHandler) GetExchangeRecords(c *gin.Context) {
-	userID, exists := c.Get("user_id")
-	if !exists {
-		c.JSON(http.StatusUnauthorized, ErrorResponse{Message: "未授权"})
+	userID, ok := getUserID(c)
+	if !ok {
 		return
 	}
 
@@ -678,14 +705,14 @@ func (h *ExchangeHandler) GetExchangeRecords(c *gin.Context) {
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "20"))
 	page, limit = normalizePageLimit(page, limit, 20, 100)
-	accountID, _ := strconv.ParseUint(c.Query("account_id"), 10, 32)
+	accountID, _ := strconv.ParseUint(c.Query("account_id"), 10, 32) // 查询参数，0 表示不筛选
 	productName := c.Query("product_name")
 	status := c.Query("status")
 	startDate := c.Query("start_date")
 	endDate := c.Query("end_date")
 
 	records, total, err := h.exchangeService.GetExchangeRecords(
-		userID.(uint),
+		userID,
 		uint(accountID),
 		productName,
 		status,
@@ -695,16 +722,16 @@ func (h *ExchangeHandler) GetExchangeRecords(c *gin.Context) {
 		limit,
 	)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, InternalServerErrorResponse())
+		respondInternalServer(c)
 		return
 	}
 
 	// 获取统计信息（最近 30 天）
 	startTime := time.Now().AddDate(0, 0, -30)
 	endTime := time.Now()
-	successCount, failCount, err := h.exchangeService.GetRecordStats(userID.(uint), startTime, endTime)
+	successCount, failCount, err := h.exchangeService.GetRecordStats(userID, startTime, endTime)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, InternalServerErrorResponse())
+		respondInternalServer(c)
 		return
 	}
 
@@ -720,14 +747,13 @@ func (h *ExchangeHandler) GetExchangeRecords(c *gin.Context) {
 
 // ExportExchangeRecords 导出抢兑记录
 func (h *ExchangeHandler) ExportExchangeRecords(c *gin.Context) {
-	userID, exists := c.Get("user_id")
-	if !exists {
-		c.JSON(http.StatusUnauthorized, ErrorResponse{Message: "未授权"})
+	userID, ok := getUserID(c)
+	if !ok {
 		return
 	}
 
 	// 获取筛选参数
-	accountID, _ := strconv.ParseUint(c.Query("account_id"), 10, 32)
+	accountID, _ := strconv.ParseUint(c.Query("account_id"), 10, 32) // 查询参数，0 表示不筛选
 	productName := c.Query("product_name")
 	status := c.Query("status")
 	startDate := c.Query("start_date")
@@ -736,7 +762,7 @@ func (h *ExchangeHandler) ExportExchangeRecords(c *gin.Context) {
 
 	// 获取所有记录（不分页）
 	records, _, err := h.exchangeService.GetExchangeRecords(
-		userID.(uint),
+		userID,
 		uint(accountID),
 		productName,
 		status,
@@ -746,7 +772,7 @@ func (h *ExchangeHandler) ExportExchangeRecords(c *gin.Context) {
 		10000, // 最多导出10000条
 	)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, InternalServerErrorResponse())
+		respondInternalServer(c)
 		return
 	}
 
@@ -870,9 +896,8 @@ type ImmediateExchangeResponse struct {
 
 // ImmediateExchange 立即兑换（无需创建任务，直接执行）
 func (h *ExchangeHandler) ImmediateExchange(c *gin.Context) {
-	userID, exists := c.Get("user_id")
-	if !exists {
-		c.JSON(http.StatusUnauthorized, ErrorResponse{Message: "未授权"})
+	userID, ok := getUserID(c)
+	if !ok {
 		return
 	}
 
@@ -883,19 +908,19 @@ func (h *ExchangeHandler) ImmediateExchange(c *gin.Context) {
 	}
 
 	if !immediateEnabled {
-		c.JSON(http.StatusForbidden, ErrorResponse{Message: "立即兑换功能未启用"})
+		respondError(c, http.StatusForbidden, "立即兑换功能未启用")
 		return
 	}
 
 	var req ImmediateExchangeRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, ErrorResponse{Message: "请求参数错误: " + err.Error()})
+		respondError(c, http.StatusBadRequest, "请求参数错误: "+err.Error())
 		return
 	}
 
 	// 创建临时任务并立即执行
 	task, err := h.exchangeService.CreateExchangeTask(
-		userID.(uint),
+		userID,
 		req.ExchangeAccountID,
 		req.ProductID,
 		"immediate",
@@ -904,12 +929,12 @@ func (h *ExchangeHandler) ImmediateExchange(c *gin.Context) {
 	if err != nil {
 		log.Printf("[ImmediateExchange] 创建立即兑换任务失败 user_id=%v exchange_account_id=%d product_id=%d: %v",
 			userID, req.ExchangeAccountID, req.ProductID, err)
-		c.JSON(http.StatusBadRequest, ErrorResponse{Message: err.Error()})
+		respondError(c, http.StatusBadRequest, err.Error())
 		return
 	}
 
 	// 立即执行任务
-	go h.exchangeService.ExecuteExchangeTask(task.ID, userID.(uint))
+	go h.exchangeService.ExecuteExchangeTask(task.ID, userID)
 
 	apiresponse.Success(c, ImmediateExchangeResponse{
 		Success: true,

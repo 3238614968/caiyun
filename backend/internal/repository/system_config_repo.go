@@ -1,7 +1,8 @@
-﻿package repository
+package repository
 
 import (
 	"caiyun/internal/models"
+	"context"
 
 	"gorm.io/gorm"
 )
@@ -12,6 +13,14 @@ type SystemConfigRepository struct {
 
 func NewSystemConfigRepository(db *gorm.DB) *SystemConfigRepository {
 	return &SystemConfigRepository{db: db}
+}
+
+// WithContext 返回绑定到指定 context 的仓库副本，便于数据库操作响应请求取消和超时。
+func (r *SystemConfigRepository) WithContext(ctx context.Context) *SystemConfigRepository {
+	if ctx == nil {
+		return r
+	}
+	return &SystemConfigRepository{db: r.db.WithContext(ctx)}
 }
 
 // GetByKey 根据 key 获取配置
@@ -27,19 +36,19 @@ func (r *SystemConfigRepository) GetByKey(key string) (*models.SystemConfig, err
 // Set 设置配置值
 func (r *SystemConfigRepository) Set(key, value string) error {
 	config := &models.SystemConfig{
-		KeyName:   key,
-		KeyValue:  value,
+		KeyName:  key,
+		KeyValue: value,
 	}
-	
+
 	// 尝试更新，如果没有记录则插入
 	result := r.db.Model(&models.SystemConfig{}).
 		Where("key_name = ?", key).
 		Update("key_value", value)
-	
+
 	if result.RowsAffected == 0 {
 		return r.db.Create(config).Error
 	}
-	
+
 	return result.Error
 }
 
@@ -50,20 +59,20 @@ func (r *SystemConfigRepository) UpdateByKey(key, value, description string) err
 		KeyValue:    value,
 		Description: description,
 	}
-	
+
 	// 尝试更新，如果没有记录则插入
 	result := r.db.Model(&models.SystemConfig{}).
 		Where("key_name = ?", key).
 		Updates(map[string]interface{}{
-			"key_value":    value,
-			"description":  description,
-			"updated_at":   gorm.Expr("NOW()"),
+			"key_value":   value,
+			"description": description,
+			"updated_at":  gorm.Expr("NOW()"),
 		})
-	
+
 	if result.RowsAffected == 0 {
 		return r.db.Create(config).Error
 	}
-	
+
 	return result.Error
 }
 

@@ -1,7 +1,8 @@
-﻿package repository
+package repository
 
 import (
 	"caiyun/internal/models"
+	"context"
 	"time"
 
 	"gorm.io/gorm"
@@ -15,6 +16,14 @@ type AuditLogRepository struct {
 // NewAuditLogRepository 创建审计日志仓库
 func NewAuditLogRepository(db *gorm.DB) *AuditLogRepository {
 	return &AuditLogRepository{db: db}
+}
+
+// WithContext 返回绑定到指定 context 的仓库副本，便于数据库操作响应请求取消和超时。
+func (r *AuditLogRepository) WithContext(ctx context.Context) *AuditLogRepository {
+	if ctx == nil {
+		return r
+	}
+	return &AuditLogRepository{db: r.db.WithContext(ctx)}
 }
 
 // Create 创建审计日志

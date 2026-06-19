@@ -6,33 +6,61 @@ import (
 	corehttp "caiyun/internal/core/http"
 	"caiyun/internal/models"
 	"caiyun/internal/queue"
-	"caiyun/internal/repository"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
+
+	"caiyun/pkg/validator"
 )
 
 var (
 	ErrAccountNotFound = errors.New("账号不存在")
 	ErrAccountExists   = errors.New("账号已存在")
+	ErrInvalidPhone    = errors.New("手机号格式不正确")
 )
 
 type AccountService struct {
-	accountRepo  *repository.AccountRepository
-	exchangeRepo *repository.ExchangeAccountRepository
-	userRepo     *repository.UserRepository
+	accountRepo  accountRepository
+	exchangeRepo accountExchangeRepository
+	userRepo     accountUserRepository
 	cache        *cache.RedisCache
 	authMgr      *auth.Auth
 	taskQueue    queue.ReliableTaskQueue
 }
 
+type accountRepository interface {
+	Create(account *models.Account) error
+	FindByID(id uint) (*models.Account, error)
+	Update(account *models.Account) error
+	Delete(id uint) error
+	ListByUserID(userID uint, offset, limit int, phone string) ([]*models.Account, int64, error)
+	FindActiveAccounts() ([]*models.Account, error)
+	FindActiveAccountsPaged(offset, limit int) ([]*models.Account, error)
+	FindActiveAccountsByUserID(userID uint) ([]*models.Account, error)
+	UpdateCloudCount(id uint, cloudCount int) error
+	GetTotalCloudCountByUserID(userID uint) (int, error)
+	ExistsByPhoneAndUserID(phone string, userID uint) (bool, error)
+	FindByPhoneAndUserID(phone string, userID uint) (*models.Account, error)
+	SetActiveStatus(id uint, isActive bool) error
+	UpdateAuthorizationFields(id uint, authValue, token, jwtToken, platform string, expireAt int64) error
+}
+
+type accountUserRepository interface {
+	FindByID(id uint) (*models.User, error)
+}
+
+type accountExchangeRepository interface {
+	UpdateAuthByAccountID(accountID uint, auth, token, jwtToken string) error
+}
+
 func NewAccountService(
-	accountRepo *repository.AccountRepository,
-	userRepo *repository.UserRepository,
+	accountRepo accountRepository,
+	userRepo accountUserRepository,
 	cache *cache.RedisCache,
 	authMgr *auth.Auth,
-	exchangeRepos ...*repository.ExchangeAccountRepository,
+	exchangeRepos ...accountExchangeRepository,
 ) *AccountService {
 	service := &AccountService{
 		accountRepo: accountRepo,
@@ -50,7 +78,7 @@ func (s *AccountService) SetTaskQueue(taskQueue queue.ReliableTaskQueue) {
 	s.taskQueue = taskQueue
 }
 
-func (s *AccountService) SetExchangeAccountRepository(exchangeRepo *repository.ExchangeAccountRepository) {
+func (s *AccountService) SetExchangeAccountRepository(exchangeRepo accountExchangeRepository) {
 	s.exchangeRepo = exchangeRepo
 }
 
@@ -70,6 +98,11 @@ type UpdateAccountRequest struct {
 
 // CreateAccount 创建账号（如果当前用户已存在则更新）
 func (s *AccountService) CreateAccount(userID uint, req *CreateAccountRequest) (*models.Account, error) {
+	req.Phone = strings.TrimSpace(req.Phone)
+	if !validator.IsValidPhone(req.Phone) {
+		return nil, ErrInvalidPhone
+	}
+
 	// 验证用户存在
 	_, err := s.userRepo.FindByID(userID)
 	if err != nil {
@@ -162,6 +195,11 @@ func (s *AccountService) ListAccounts(userID uint, page, pageSize int, phone str
 
 // UpdateAccount 更新账号
 func (s *AccountService) UpdateAccount(userID, accountID uint, req *UpdateAccountRequest) (*models.Account, error) {
+	req.Phone = strings.TrimSpace(req.Phone)
+	if !validator.IsValidPhone(req.Phone) {
+		return nil, ErrInvalidPhone
+	}
+
 	// 获取账号
 	account, err := s.accountRepo.FindByID(accountID)
 	if err != nil {
@@ -306,7 +344,7 @@ func (s *AccountService) RefreshToken(account *models.Account) error {
 	}
 	applyAuthorizationRefreshToAccount(account, refreshed, jwtToken)
 
-	if err := s.accountRepo.Update(account); err != nil {
+	if err := s.accountRepo.UpdateAuthorizationFields(account.ID, account.Auth, account.Token, account.JWTToken, account.Platform, account.ExpireAt); err != nil {
 		return err
 	}
 	if s.exchangeRepo != nil {
@@ -367,6 +405,11 @@ func (s *AccountService) GetActiveAccounts(userID uint) ([]*models.Account, erro
 // GetAllActiveAccounts 获取所有激活账号（供Worker使用）
 func (s *AccountService) GetAllActiveAccounts() ([]*models.Account, error) {
 	return s.accountRepo.FindActiveAccounts()
+}
+
+// ListActiveAccounts 分页获取激活账号，供 Worker 分批执行，避免一次性加载全表。
+func (s *AccountService) ListActiveAccounts(offset, limit int) ([]*models.Account, error) {
+	return s.accountRepo.FindActiveAccountsPaged(offset, limit)
 }
 
 // EnqueueTask 将任务加入队列

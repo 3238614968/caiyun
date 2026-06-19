@@ -61,8 +61,15 @@ func (e *appError) Details() string {
 
 // Wrap 包装错误
 func (e *appError) Wrap(err error) AppError {
-	e.err = err
-	return e
+	if e == nil {
+		return Wrap(err, CodeInternalError, ErrInternalServer.Error())
+	}
+	return &appError{
+		code:    e.code,
+		message: e.message,
+		details: e.details,
+		err:     err,
+	}
 }
 
 // Is 判断错误类型

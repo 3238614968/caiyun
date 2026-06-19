@@ -4,6 +4,7 @@ import (
 	"caiyun/internal/cache"
 	"caiyun/internal/core/auth"
 	corehttp "caiyun/internal/core/http"
+	"caiyun/internal/models"
 	"caiyun/internal/repository"
 	"context"
 	"crypto/rand"
@@ -38,6 +39,13 @@ type TokenInfo struct {
 	LastRefresh  time.Time
 	HealthStatus string // healthy, warning, error
 	ErrorMsg     string
+}
+
+type tokenRefreshSession struct {
+	authStr    string
+	authForJWT *auth.Auth
+	jwtToken   string
+	ssoToken   string
 }
 
 const (
@@ -110,28 +118,51 @@ func (tm *TokenManager) refreshToken(accountID uint) (*TokenInfo, error) {
 		return tokenInfo, err
 	}
 
-	refreshStartedAt := time.Now()
-	lockValue, locked, lockErr := tm.acquireRefreshLock(accountID)
-	if lockErr != nil {
-		log.Printf("[TokenManager] 获取账号 %d 分布式刷新锁失败，降级为进程内锁: %v", accountID, lockErr)
-	} else if tm.lockCache != nil && !locked {
-		if tokenInfo, err := tm.waitForExternalRefresh(accountID, refreshStartedAt); err == nil {
-			return tokenInfo, nil
-		} else {
-			log.Printf("[TokenManager] 等待账号 %d 外部刷新失败，尝试重新抢锁: %v", accountID, err)
-		}
-
-		lockValue, locked, lockErr = tm.acquireRefreshLock(accountID)
-		if lockErr != nil {
-			log.Printf("[TokenManager] 重新获取账号 %d 分布式刷新锁失败，降级为进程内锁: %v", accountID, lockErr)
-		} else if !locked {
-			return nil, fmt.Errorf("账号 %d Token 正在其他实例刷新，请稍后重试", accountID)
+	lockValue, locked, err := tm.acquireOrWaitRefreshLock(accountID, time.Now())
+	if err != nil {
+		return nil, err
+	}
+	if !locked {
+		if tokenInfo, err, ok := tm.cachedToken(accountID); ok {
+			return tokenInfo, err
 		}
 	}
 	if locked {
 		defer tm.releaseRefreshLock(accountID, lockValue)
 	}
 
+	return tm.refreshAccountToken(accountID)
+}
+
+func (tm *TokenManager) acquireOrWaitRefreshLock(accountID uint, refreshStartedAt time.Time) (string, bool, error) {
+	lockValue, locked, lockErr := tm.acquireRefreshLock(accountID)
+	if lockErr != nil {
+		log.Printf("[TokenManager] 获取账号 %d 分布式刷新锁失败，降级为进程内锁: %v", accountID, lockErr)
+		return lockValue, locked, nil
+	}
+	if tm.lockCache == nil || locked {
+		return lockValue, locked, nil
+	}
+
+	if tokenInfo, err := tm.waitForExternalRefresh(accountID, refreshStartedAt); err == nil {
+		tm.tokenCache.Store(accountID, tokenInfo)
+		return "", false, nil
+	} else {
+		log.Printf("[TokenManager] 等待账号 %d 外部刷新失败，尝试重新抢锁: %v", accountID, err)
+	}
+
+	lockValue, locked, lockErr = tm.acquireRefreshLock(accountID)
+	if lockErr != nil {
+		log.Printf("[TokenManager] 重新获取账号 %d 分布式刷新锁失败，降级为进程内锁: %v", accountID, lockErr)
+		return lockValue, locked, nil
+	}
+	if !locked {
+		return "", false, fmt.Errorf("账号 %d Token 正在其他实例刷新，请稍后重试", accountID)
+	}
+	return lockValue, locked, nil
+}
+
+func (tm *TokenManager) refreshAccountToken(accountID uint) (*TokenInfo, error) {
 	account, err := tm.accountRepo.GetByID(accountID)
 	if err != nil {
 		return nil, fmt.Errorf("获取账号失败: %w", err)
@@ -140,87 +171,123 @@ func (tm *TokenManager) refreshToken(accountID uint) (*TokenInfo, error) {
 		return nil, fmt.Errorf("账号已失效，请重新登录后再启用任务")
 	}
 
-	// 使用账号 Auth 创建客户端。
-	client := corehttp.NewClient()
-	authStr := sanitizeAuthValue(account.Auth)
-	if authStr != "" {
-		client.SetAuth(authStr)
+	session := newTokenRefreshSession(account)
+	session.refreshJWT(account.Phone)
+
+	now := time.Now()
+	if err := tm.refreshAuthorizationIfNeeded(account, session, now); err != nil {
+		return nil, err
 	}
 
-	// 使用账号鉴权信息获取 JWT。
-	jwtToken := ""
+	tokenInfo := newTokenInfoFromSession(session, now)
+	tm.updateAccountJWTHealth(account, tokenInfo)
+
+	if session.jwtToken != "" && account.JWTToken != session.jwtToken {
+		if err := tm.accountRepo.UpdateJWTToken(accountID, session.jwtToken); err != nil {
+			tm.tokenCache.Delete(accountID)
+			return nil, fmt.Errorf("更新账号 JWT Token 失败: %w", err)
+		}
+	}
+
+	tm.tokenCache.Store(accountID, tokenInfo)
+	return tokenInfo, nil
+}
+
+func newTokenRefreshSession(account *models.Account) *tokenRefreshSession {
+	authStr := sanitizeAuthValue(account.Auth)
 	authClient := corehttp.NewClient()
 	if authStr != "" {
 		authClient.SetAuth(authStr)
 	}
-	authForJWT := auth.NewAuth(authClient)
-	ssoToken := ""
-	if token, matchedSSOToken, err := authForJWT.GetJWTTokenWithSSOToken(account.Phone); err == nil && token != "" {
-		jwtToken = token
-		ssoToken = matchedSSOToken
+	return &tokenRefreshSession{
+		authStr:    authStr,
+		authForJWT: auth.NewAuth(authClient),
+	}
+}
+
+func (s *tokenRefreshSession) refreshJWT(phone string) {
+	if s == nil || s.authForJWT == nil {
+		return
+	}
+	if token, matchedSSOToken, err := s.authForJWT.GetJWTTokenWithSSOToken(phone); err == nil && token != "" {
+		s.jwtToken = token
+		s.ssoToken = matchedSSOToken
+	}
+}
+
+func (tm *TokenManager) refreshAuthorizationIfNeeded(account *models.Account, session *tokenRefreshSession, now time.Time) error {
+	if !authorizationShouldRefresh(accountAuthorizationExpireAt(account), now) {
+		return nil
 	}
 
-	now := time.Now()
-	if authorizationShouldRefresh(accountAuthorizationExpireAt(account), now) {
-		userDomainID := jwtUserDomainID(jwtToken)
-		refreshed, err := authForJWT.RefreshAuthorization(account.Auth, account.Phone, userDomainID)
-		if err != nil {
-			log.Printf("[TokenManager] 账号 %d authorization 刷新失败，保留原数据库记录: %v", accountID, err)
-		} else {
-			if refreshed.SSOToken != "" {
-				if token, jwtErr := authForJWT.TyrzLogin(refreshed.SSOToken); jwtErr == nil && token != "" {
-					jwtToken = token
-					ssoToken = refreshed.SSOToken
-				} else if jwtErr != nil {
-					log.Printf("[TokenManager] 账号 %d authorization 刷新成功但 JWT 重取失败，将保留已有 JWT: %v", accountID, jwtErr)
-				}
-			}
+	userDomainID := jwtUserDomainID(session.jwtToken)
+	refreshed, err := session.authForJWT.RefreshAuthorization(account.Auth, account.Phone, userDomainID)
+	if err != nil {
+		log.Printf("[TokenManager] 账号 %d authorization 刷新失败，保留原数据库记录: %v", account.ID, err)
+		return nil
+	}
 
-			applyAuthorizationRefreshToAccount(account, refreshed, jwtToken)
-			if err := tm.accountRepo.Update(account); err != nil {
-				return nil, fmt.Errorf("更新刷新后的 authorization 失败: %w", err)
-			}
-			if tm.exchangeRepo != nil {
-				if err := tm.exchangeRepo.UpdateAuthByAccountID(account.ID, account.Auth, account.Token, account.JWTToken); err != nil {
-					log.Printf("[TokenManager] 同步刷新后的抢兑账号鉴权失败 account_id=%d: %v", account.ID, err)
-				}
-			}
-			authStr = sanitizeAuthValue(account.Auth)
-			log.Printf("[TokenManager] 账号 %d authorization 已刷新并写入数据库", accountID)
+	if refreshed.SSOToken != "" {
+		if token, jwtErr := session.authForJWT.TyrzLogin(refreshed.SSOToken); jwtErr == nil && token != "" {
+			session.jwtToken = token
+			session.ssoToken = refreshed.SSOToken
+		} else if jwtErr != nil {
+			log.Printf("[TokenManager] 账号 %d authorization 刷新成功但 JWT 重取失败，将保留已有 JWT: %v", account.ID, jwtErr)
 		}
 	}
 
-	// JWT Token 缓存时间改为 15 分钟，因为 JWT 本身的有效期只有 20-30 分钟
-	tokenInfo := &TokenInfo{
-		JWTToken:     jwtToken,
-		SSOToken:     ssoToken,
-		Auth:         authStr,
+	applyAuthorizationRefreshToAccount(account, refreshed, session.jwtToken)
+	if err := tm.accountRepo.UpdateAuthorizationFields(account.ID, account.Auth, account.Token, account.JWTToken, account.Platform, account.ExpireAt); err != nil {
+		return fmt.Errorf("更新刷新后的 authorization 失败: %w", err)
+	}
+	if tm.exchangeRepo != nil {
+		if err := tm.exchangeRepo.UpdateAuthByAccountID(account.ID, account.Auth, account.Token, account.JWTToken); err != nil {
+			log.Printf("[TokenManager] 同步刷新后的抢兑账号鉴权失败 account_id=%d: %v", account.ID, err)
+		}
+	}
+	session.authStr = sanitizeAuthValue(account.Auth)
+	log.Printf("[TokenManager] 账号 %d authorization 已刷新并写入数据库", account.ID)
+	return nil
+}
+
+func newTokenInfoFromSession(session *tokenRefreshSession, now time.Time) *TokenInfo {
+	return &TokenInfo{
+		JWTToken:     session.jwtToken,
+		SSOToken:     session.ssoToken,
+		Auth:         session.authStr,
 		ExpiresAt:    now.Add(15 * time.Minute),
 		LastRefresh:  now,
 		HealthStatus: "healthy",
 	}
-	if jwtToken == "" {
+}
+
+func (tm *TokenManager) updateAccountJWTHealth(account *models.Account, tokenInfo *TokenInfo) {
+	if tokenInfo.JWTToken == "" {
 		tokenInfo.HealthStatus = "error"
 		tokenInfo.ErrorMsg = "无法获取 JWT Token"
-		tokenInfo.ExpiresAt = now.Add(tokenRefreshErrorTTL)
-		account.JWTErrorCount++
-		if account.JWTErrorCount >= maxJWTRefreshFailures {
+		tokenInfo.ExpiresAt = time.Now().Add(tokenRefreshErrorTTL)
+
+		newCount, err := tm.accountRepo.IncrementJWTErrorCount(account.ID)
+		if err != nil {
+			log.Printf("[TokenManager] 账号 %d JWT 错误计数自增失败: %v", account.ID, err)
+			newCount = account.JWTErrorCount + 1
+		}
+		account.JWTErrorCount = newCount
+		if newCount >= maxJWTRefreshFailures {
 			account.IsActive = false
 			tokenInfo.ErrorMsg = "连续无法获取 JWT Token，账号已暂停，请重新登录后再启用任务"
+			if err := tm.accountRepo.SetActiveStatus(account.ID, false); err != nil {
+				log.Printf("[TokenManager] 账号 %d 自动暂停失败: %v", account.ID, err)
+			}
 		}
-		_ = tm.accountRepo.Update(account)
-	} else if account.JWTErrorCount != 0 {
+		return
+	}
+	if account.JWTErrorCount != 0 {
 		account.JWTErrorCount = 0
-		_ = tm.accountRepo.Update(account)
+		if err := tm.accountRepo.ResetJWTErrorCount(account.ID); err != nil {
+			log.Printf("[TokenManager] 账号 %d JWT 错误计数重置失败: %v", account.ID, err)
+		}
 	}
-
-	tm.tokenCache.Store(accountID, tokenInfo)
-
-	if jwtToken != "" && account.JWTToken != jwtToken {
-		tm.accountRepo.UpdateJWTToken(accountID, jwtToken)
-	}
-
-	return tokenInfo, nil
 }
 
 func (tm *TokenManager) cachedToken(accountID uint) (*TokenInfo, error, bool) {
@@ -385,11 +452,15 @@ func (tm *TokenManager) healthCheckLoop() {
 	}
 }
 
-// checkAllTokensHealth 检查所有缓存 Token 的健康状态。
+// checkAllTokensHealth 检查所有缓存 Token 的健康状态，并清理长期过期/错误的条目。
 func (tm *TokenManager) checkAllTokensHealth() {
 	tm.tokenCache.Range(func(key, value interface{}) bool {
-		_ = key.(uint)
-		tokenInfo := value.(*TokenInfo)
+		accountID, _ := key.(uint)
+		tokenInfo, ok := value.(*TokenInfo)
+		if !ok || tokenInfo == nil {
+			tm.tokenCache.Delete(accountID)
+			return true
+		}
 
 		if tokenInfo.JWTToken == "" {
 			tokenInfo.HealthStatus = "error"
@@ -403,6 +474,11 @@ func (tm *TokenManager) checkAllTokensHealth() {
 		} else {
 			tokenInfo.HealthStatus = "healthy"
 			tokenInfo.ErrorMsg = ""
+		}
+
+		// 清理超过 tokenRefreshErrorTTL 的 error 条目，避免 sync.Map 无限增长。
+		if tokenInfo.HealthStatus == "error" && time.Since(tokenInfo.LastRefresh) > 30*time.Minute {
+			tm.tokenCache.Delete(accountID)
 		}
 
 		return true

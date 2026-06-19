@@ -197,6 +197,91 @@ func shouldSkipExchangeMonthlySeries(
 	return false, "", nil
 }
 
+func exchangeMonthlySeriesLockKey(userID, exchangeAccountID uint, series exchangeMonthlySeries, now time.Time) string {
+	yearMonth := now.Format("2006-01")
+	return fmt.Sprintf("exchange:series:%d:%d:%s:%s", userID, exchangeAccountID, yearMonth, series.Key)
+}
+
+func (s *ExchangeService) acquireMonthlySeriesLock(task *models.ExchangeTask, now time.Time) (bool, func(), string) {
+	if task == nil {
+		return true, func() {}, ""
+	}
+	if s.lockStore == nil {
+		log.Printf("【抢兑月度保护】任务 %d 未配置分布式锁，仅使用记录查询保护", task.ID)
+		return true, func() {}, ""
+	}
+
+	taskProduct := exchangeTaskProductSnapshot(s.productRepo, task)
+	series := exchangeMonthlySeriesForProduct(taskProduct, task.PrizeName)
+	if series.Key == "" {
+		return true, func() {}, ""
+	}
+
+	key := exchangeMonthlySeriesLockKey(task.UserID, task.ExchangeAccountID, series, now)
+	locked, err := s.lockStore.SetNX(key, "1", 35*24*time.Hour)
+	if err != nil {
+		reason := fmt.Sprintf("获取本月同系列抢兑锁失败: %v", err)
+		log.Printf("【抢兑月度保护】任务 %d %s", task.ID, reason)
+		return false, func() {}, reason
+	}
+	if !locked {
+		label := series.Label
+		if label == "" {
+			label = task.PrizeName
+		}
+		reason := fmt.Sprintf("本月%s已有任务正在抢兑或已锁定，跳过本次执行", label)
+		log.Printf("【抢兑月度保护】任务 %d %s", task.ID, reason)
+		return false, func() {}, reason
+	}
+
+	release := func() {
+		if err := s.lockStore.Del(key); err != nil {
+			log.Printf("【抢兑月度保护】任务 %d 释放同系列锁失败: %v", task.ID, err)
+		}
+	}
+	return true, release, ""
+}
+
+func (s *ExchangeScheduler) acquireMonthlySeriesLock(task *models.ExchangeTask, now time.Time) (bool, func(), string) {
+	if task == nil {
+		return true, func() {}, ""
+	}
+	if s.leaseStore == nil {
+		log.Printf("【抢兑月度保护】任务 %d 未配置分布式锁，仅使用记录查询保护", task.ID)
+		return true, func() {}, ""
+	}
+
+	taskProduct := exchangeTaskProductSnapshot(s.productRepo, task)
+	series := exchangeMonthlySeriesForProduct(taskProduct, task.PrizeName)
+	if series.Key == "" {
+		return true, func() {}, ""
+	}
+
+	key := exchangeMonthlySeriesLockKey(task.UserID, task.ExchangeAccountID, series, now)
+	locked, err := s.leaseStore.SetNX(key, "1", 35*24*time.Hour)
+	if err != nil {
+		reason := fmt.Sprintf("获取本月同系列抢兑锁失败: %v", err)
+		log.Printf("【抢兑月度保护】任务 %d %s", task.ID, reason)
+		return false, func() {}, reason
+	}
+	if !locked {
+		label := series.Label
+		if label == "" {
+			label = task.PrizeName
+		}
+		reason := fmt.Sprintf("本月%s已有任务正在抢兑或已锁定，跳过本次执行", label)
+		log.Printf("【抢兑月度保护】任务 %d %s", task.ID, reason)
+		return false, func() {}, reason
+	}
+
+	release := func() {
+		if err := s.leaseStore.Del(key); err != nil {
+			log.Printf("【抢兑月度保护】任务 %d 释放同系列锁失败: %v", task.ID, err)
+		}
+	}
+	return true, release, ""
+}
+
 func exchangeTaskProductSnapshot(productRepo *repository.ProductRepository, task *models.ExchangeTask) *models.Product {
 	if task == nil {
 		return nil

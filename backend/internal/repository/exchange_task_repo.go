@@ -2,6 +2,7 @@ package repository
 
 import (
 	"caiyun/internal/models"
+	"context"
 	"fmt"
 	"time"
 
@@ -15,6 +16,14 @@ type ExchangeTaskRepository struct {
 
 func NewExchangeTaskRepository(db *gorm.DB) *ExchangeTaskRepository {
 	return &ExchangeTaskRepository{db: db}
+}
+
+// WithContext 返回绑定到指定 context 的仓库副本，便于数据库操作响应请求取消和超时。
+func (r *ExchangeTaskRepository) WithContext(ctx context.Context) *ExchangeTaskRepository {
+	if ctx == nil {
+		return r
+	}
+	return &ExchangeTaskRepository{db: r.db.WithContext(ctx)}
 }
 
 // Create 创建抢兑任务

@@ -153,6 +153,7 @@
   - Cookie 会话场景补充 CSRF 校验，登录态异常时前端会同步清理本地状态
   - 密码重置、管理员重置密码会递增会话版本，已签发 JWT 立即失效
   - 用户维度限流移动到认证后执行，避免退化为 IP 限流
+  - 登录失败锁定优先使用 Redis，多副本共享；Redis 异常时可降级到 `login_fail_locks` 数据库表
   - 外部 HTTP 响应体读取增加大小限制，并避免短信认证响应明文落日志
 - **优化首页公告与统计展示**
   - 首页展示公告列表，不再新增用户侧公告菜单
@@ -243,15 +244,17 @@
 │   │   ├── repository/            # 数据访问层
 │   │   └── services/              # 业务服务层
 │   ├── migrations/                # 数据库初始化脚本
-│   ├── api-linux                  # Linux amd64 API 构建产物
-│   └── worker-linux               # Linux amd64 Worker 构建产物
+│   └── scripts/                   # 数据库初始化脚本（Compose 入口）
 ├── frontend/                      # Vue 前端
 │   ├── src/
 │   └── dist/                      # 前端生产构建产物
+├── Makefile                       # 本地构建/测试/审计等价脚本
 ├── nginx-server.conf              # Nginx 配置示例
 ├── docker-compose.yml             # Docker Compose 示例
 └── README.md
 ```
+
+> 二进制构建产物（`api-linux` / `worker-linux`）已不在仓库内维护，请通过 `make backend-build` 本地生成。
 
 ---
 
@@ -278,6 +281,13 @@ cp configs/.env.example .env
 ```
 
 根据实际环境填写数据库、Redis、JWT、端口等配置。
+
+多副本部署建议显式启用 Redis 限流后端，避免不同 API 副本各自维护本地窗口：
+
+```bash
+RATE_LIMIT_BACKEND=redis
+RATE_LIMIT_REDIS_WINDOW=1s
+```
 
 如需启用用户自助找回密码，还需要配置 SMTP：
 
@@ -502,12 +512,20 @@ go test ./internal/queue -run RedisIntegration -count=1
 
 当前安全基线包括：
 
-- JWT 带 `token_version`，用户改密、找回密码、管理员重置密码后旧会话立即失效
-- Cookie 登录态启用 CSRF 校验
+- JWT 带 `token_version`，用户改密、找回密码、管理员重置密码、角色变更或删除后旧会话立即失效（认证快照缓存主动失效）
+- Cookie 登录态启用 CSRF 校验，WebSocket 升级强制校验 Origin
 - 用户维度限流在认证后执行，兑换和导出等接口按用户隔离限流
-- 外部 HTTP 响应体读取设置大小上限，短信认证响应日志只记录摘要
-- Nginx 示例包含 HTTPS 跳转、HSTS、CSP、`X-Content-Type-Options`、`X-Frame-Options`、`Referrer-Policy` 等安全头
+- 登录失败超过阈值后优先在 Redis 共享锁定；Redis 异常时降级到 `login_fail_locks` 表继续计数
+- 前端已开启 TypeScript `strict`、`noUnusedLocals`、`noUnusedParameters`、`noImplicitReturns`
+- 监控接口 Token 使用常量时间比较，防时序攻击
+- AI 用户 ID 加密密钥支持通过 `CAIYUN_AI_USERID_KEY` 环境变量注入，`release` 模式不再降级为明文或 Base64
+- 外部 HTTP 响应体读取设置大小上限，错误链路截断响应体，短信认证响应日志只记录摘要
+- 非 AppError 内部错误一律返回通用消息，详情只入审计日志
+- 数据库 schema 启动期只校验不自动变更，与 DBA 流程解耦
+- Nginx 示例包含 HTTPS 跳转、HSTS、CSP（`connect-src` 收紧到本域 WSS）、`X-Content-Type-Options`、`X-Frame-Options`、`Referrer-Policy` 等安全头
 - K8s 示例固定镜像版本，并配置 `securityContext`、资源限制和健康探针
+- K8s 示例中 MySQL/Redis 使用 StatefulSet；API/Frontend 使用 2 副本并配置 PDB
+- Docker Compose 服务全部配置 `healthcheck`、`restart: unless-stopped` 与资源 limits
 
 ---
 

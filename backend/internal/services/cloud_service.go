@@ -151,13 +151,23 @@ func (s *CloudService) GetCloudStatsByUserID(userID uint, page, pageSize int) ([
 
 // CalculateDailyStats 计算每日统计数据
 func (s *CloudService) CalculateDailyStats() error {
-	// 获取所有账号
-	accounts, err := s.accountRepo.FindActiveAccounts()
-	if err != nil {
-		return err
-	}
+	const batchSize = 200
+	for offset := 0; ; offset += batchSize {
+		accounts, err := s.accountRepo.FindActiveAccountsPaged(offset, batchSize)
+		if err != nil {
+			return err
+		}
+		if len(accounts) == 0 {
+			return nil
+		}
 
-	return s.calculateDailyStatsForAccounts(accounts)
+		if err := s.calculateDailyStatsForAccounts(accounts); err != nil {
+			return err
+		}
+		if len(accounts) < batchSize {
+			return nil
+		}
+	}
 }
 
 // CalculateDailyStatsByUserID 仅计算指定用户的每日统计数据。
@@ -252,13 +262,9 @@ func (s *CloudService) GetGlobalTrendData(days int) ([]TrendPoint, error) {
 		return nil, err
 	}
 
-	accounts, err := s.accountRepo.GetAll()
+	totalCloud, err := s.accountRepo.SumCloudCount()
 	if err != nil {
 		return nil, err
-	}
-	totalCloud := 0
-	for _, account := range accounts {
-		totalCloud += account.CloudCount
 	}
 
 	return completeTrendData(trendStats, days, totalCloud), nil

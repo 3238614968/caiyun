@@ -7,14 +7,138 @@ import (
 	"encoding/json"
 	"io"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gin-gonic/gin"
 )
 
-// AuditMiddleware 审计日志中间件
+const (
+	auditWorkerCount = 4
+	auditBufferSize  = 4096
+)
+
+// asyncAuditWriter 是应用级单例，所有审计中间件共享同一组 worker，
+// 避免每个请求都新建 worker goroutine 造成泄漏。
+type asyncAuditWriter struct {
+	repo     *repository.AuditLogRepository
+	ch       chan *models.AuditLog
+	stopOnce sync.Once
+	stopCh   chan struct{}
+}
+
+var (
+	globalAuditWriter   *asyncAuditWriter
+	globalAuditWriterMu sync.Mutex
+	auditDroppedTotal   atomic.Int64
+)
+
+// InitGlobalAuditWriter 在应用启动时调用一次，创建共享的审计 writer 并启动 worker。
+// 可重复调用：若 repo 变化会重新创建（主要用于测试与未来热替换场景）。
+func InitGlobalAuditWriter(repo *repository.AuditLogRepository) {
+	globalAuditWriterMu.Lock()
+	defer globalAuditWriterMu.Unlock()
+
+	// 已经创建过且 repo 未变化则跳过。
+	if globalAuditWriter != nil && globalAuditWriter.repo == repo {
+		return
+	}
+	// 关闭旧实例（如有）。
+	if globalAuditWriter != nil {
+		globalAuditWriter.stop()
+	}
+	globalAuditWriter = newAsyncAuditWriter(repo)
+}
+
+// StopGlobalAuditWriter 在应用优雅退出时调用，关闭 worker。
+func StopGlobalAuditWriter() {
+	globalAuditWriterMu.Lock()
+	defer globalAuditWriterMu.Unlock()
+	if globalAuditWriter != nil {
+		globalAuditWriter.stop()
+		globalAuditWriter = nil
+	}
+}
+
+func newAsyncAuditWriter(repo *repository.AuditLogRepository) *asyncAuditWriter {
+	w := &asyncAuditWriter{
+		repo:   repo,
+		ch:     make(chan *models.AuditLog, auditBufferSize),
+		stopCh: make(chan struct{}),
+	}
+	for i := 0; i < auditWorkerCount; i++ {
+		go w.worker()
+	}
+	return w
+}
+
+func (w *asyncAuditWriter) stop() {
+	if w == nil {
+		return
+	}
+	w.stopOnce.Do(func() {
+		close(w.stopCh)
+		close(w.ch)
+	})
+}
+
+func (w *asyncAuditWriter) worker() {
+	for {
+		select {
+		case auditLog, ok := <-w.ch:
+			if !ok {
+				return
+			}
+			if auditLog == nil || w.repo == nil {
+				continue
+			}
+			if err := w.repo.Create(auditLog); err != nil {
+				gin.DefaultErrorWriter.Write([]byte("保存审计日志失败: " + err.Error() + "\n"))
+			}
+		case <-w.stopCh:
+			return
+		}
+	}
+}
+
+func (w *asyncAuditWriter) enqueue(auditLog *models.AuditLog) {
+	if w == nil || auditLog == nil {
+		return
+	}
+	select {
+	case w.ch <- auditLog:
+	default:
+		auditDroppedTotal.Add(1)
+		gin.DefaultErrorWriter.Write([]byte("审计日志队列已满，丢弃当前审计日志\n"))
+	}
+}
+
+// AuditDroppedCount 返回因异步队列满而丢弃的审计日志累计数量。
+func AuditDroppedCount() int64 {
+	return auditDroppedTotal.Load()
+}
+
+// getGlobalAuditWriter 返回已初始化的全局审计 writer；
+// 若调用方未显式初始化（例如测试），则惰性返回 nil 安全处理。
+func getGlobalAuditWriter(repo *repository.AuditLogRepository) *asyncAuditWriter {
+	globalAuditWriterMu.Lock()
+	defer globalAuditWriterMu.Unlock()
+	if globalAuditWriter != nil {
+		return globalAuditWriter
+	}
+	// 兜底：若未显式初始化，则惰性创建一次（保持向后兼容）。
+	if repo != nil {
+		globalAuditWriter = newAsyncAuditWriter(repo)
+		return globalAuditWriter
+	}
+	return nil
+}
+
+// AuditMiddleware 审计日志中间件（使用全局共享 writer）。
 func AuditMiddleware(auditRepo *repository.AuditLogRepository) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		writer := getGlobalAuditWriter(auditRepo)
 		// 记录开始时间
 		startTime := time.Now()
 
@@ -64,13 +188,9 @@ func AuditMiddleware(auditRepo *repository.AuditLogRepository) gin.HandlerFunc {
 			auditLog.ErrorMsg = redactPlainAuditPayload(c.Errors.String())
 		}
 
-		// 异步保存审计日志
-		go func() {
-			if err := auditRepo.Create(auditLog); err != nil {
-				// 记录到系统日志，但不影响主流程
-				gin.DefaultErrorWriter.Write([]byte("保存审计日志失败: " + err.Error() + "\n"))
-			}
-		}()
+		if writer != nil {
+			writer.enqueue(auditLog)
+		}
 	}
 }
 
@@ -93,75 +213,61 @@ func determineActionAndResource(method, path string) (models.AuditAction, models
 
 	// 根据路径判断资源
 	switch {
-	case contains(path, "/accounts"):
+	case strings.Contains(path, "/accounts"):
 		resource = models.AuditResourceAccount
-	case contains(path, "/tasks"):
+	case strings.Contains(path, "/tasks"):
 		resource = models.AuditResourceTask
-	case contains(path, "/products"):
+	case strings.Contains(path, "/products"):
 		resource = models.AuditResourceProduct
-	case contains(path, "/exchange"):
+	case strings.Contains(path, "/exchange"):
 		resource = models.AuditResourceExchange
-	case contains(path, "/auth"):
+	case strings.Contains(path, "/auth"):
 		resource = models.AuditResourceUser
-	case contains(path, "/config"):
+	case strings.Contains(path, "/config"):
 		resource = models.AuditResourceConfig
 	}
 
 	// 根据方法和路径判断操作
 	switch method {
 	case "POST":
-		if contains(path, "/login") {
+		if strings.Contains(path, "/login") {
 			action = models.AuditActionLogin
-		} else if contains(path, "/register") {
+		} else if strings.Contains(path, "/register") {
 			action = models.AuditActionRegister
-		} else if contains(path, "/accounts") {
+		} else if strings.Contains(path, "/accounts") {
 			action = models.AuditActionCreateAccount
-		} else if contains(path, "/tasks") {
-			if contains(path, "/execute") {
+		} else if strings.Contains(path, "/tasks") {
+			if strings.Contains(path, "/execute") {
 				action = models.AuditActionExecuteTask
 			} else {
 				action = models.AuditActionCreateTask
 			}
-		} else if contains(path, "/exchange") {
+		} else if strings.Contains(path, "/exchange") {
 			action = models.AuditActionExchange
 		}
 	case "PUT":
-		if contains(path, "/accounts") {
+		if strings.Contains(path, "/accounts") {
 			action = models.AuditActionUpdateAccount
-		} else if contains(path, "/tasks") {
+		} else if strings.Contains(path, "/tasks") {
 			action = models.AuditActionUpdateTask
-		} else if contains(path, "/config") {
+		} else if strings.Contains(path, "/config") {
 			action = models.AuditActionUpdateConfig
-		} else if contains(path, "/profile") {
+		} else if strings.Contains(path, "/profile") {
 			action = models.AuditActionUpdateProfile
 		}
 	case "DELETE":
-		if contains(path, "/accounts") {
+		if strings.Contains(path, "/accounts") {
 			action = models.AuditActionDeleteAccount
-		} else if contains(path, "/tasks") {
+		} else if strings.Contains(path, "/tasks") {
 			action = models.AuditActionDeleteTask
 		}
 	case "GET":
-		if contains(path, "/products") {
+		if strings.Contains(path, "/products") {
 			action = models.AuditActionSearchProducts
 		}
 	}
 
 	return action, resource
-}
-
-// contains 检查字符串是否包含子串
-func contains(s, substr string) bool {
-	return len(s) >= len(substr) && (s == substr || len(s) > 0 && containsHelper(s, substr))
-}
-
-func containsHelper(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
 }
 
 // getUintValue 安全地获取uint值
@@ -287,26 +393,24 @@ func NewAuditLogFilter() *AuditLogFilter {
 	}
 }
 
-// ShouldLog 检查是否应该记录审计日志
+// ShouldLog 检查是否应该记录审计日志（精确匹配优先，避免子串误伤）
 func (f *AuditLogFilter) ShouldLog(path string) bool {
 	for _, excluded := range f.ExcludedPaths {
-		if path == excluded || contains(path, excluded) {
+		if path == excluded {
 			return false
 		}
 	}
 	return true
 }
 
-// AuditMiddlewareWithFilter 带过滤器的审计日志中间件
+// AuditMiddlewareWithFilter 带过滤器的审计日志中间件（复用全局共享 writer）。
 func AuditMiddlewareWithFilter(auditRepo *repository.AuditLogRepository, filter *AuditLogFilter) gin.HandlerFunc {
+	inner := AuditMiddleware(auditRepo)
 	return func(c *gin.Context) {
-		// 检查是否应该记录
 		if !filter.ShouldLog(c.Request.URL.Path) {
 			c.Next()
 			return
 		}
-
-		// 使用普通的审计中间件
-		AuditMiddleware(auditRepo)(c)
+		inner(c)
 	}
 }

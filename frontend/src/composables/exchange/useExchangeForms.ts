@@ -1,4 +1,5 @@
 ﻿import { computed, ref } from 'vue'
+import type { Product } from '@/api/exchange'
 
 export interface ExchangeTaskForm {
   exchange_account_id: number
@@ -42,7 +43,7 @@ export function useExchangeForms() {
   const immediateExchangeDialogVisible = ref(false)
   const editingAccountId = ref<number | null>(null)
 
-  const selectedProduct = ref<any>(null)
+  const selectedProduct = ref<Product | null>(null)
   const taskForm = ref<ExchangeTaskForm>(createTaskForm())
   const accountForm = ref<ExchangeAccountForm>(createAccountForm())
 

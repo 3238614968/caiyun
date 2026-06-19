@@ -254,6 +254,6 @@ func (t *InviteFriendsTask) receiveCloud() {
 		if msg == "" {
 			msg = "领取云朵失败"
 		}
-		t.logger.Error("领取云朵失败", fmt.Errorf(msg))
+		t.logger.Error("领取云朵失败", fmt.Errorf("%s", msg))
 	}
 }

@@ -1,6 +1,7 @@
 package services
 
 import (
+	"context"
 	"fmt"
 	"sort"
 	"strings"
@@ -76,6 +77,15 @@ func buildAccountScopedStorage(base coretasks.Storage, accountID uint) coretasks
 }
 
 func (r *TaskRunner) RunSelected(taskCodes []string) []TaskResult {
+	return r.RunSelectedContext(context.Background(), taskCodes)
+}
+
+// RunSelectedContext 按指定任务编码执行任务，并在每个任务边界响应 ctx 取消。
+// 单个上游 HTTP 调用仍由 HTTP 客户端自身超时兜底；ctx 到期后不会继续启动后续任务。
+func (r *TaskRunner) RunSelectedContext(ctx context.Context, taskCodes []string) []TaskResult {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	if len(taskCodes) == 0 {
 		taskCodes = defaultTaskCatalog.DefaultBatchCodes()
 	}
@@ -84,6 +94,15 @@ func (r *TaskRunner) RunSelected(taskCodes []string) []TaskResult {
 	r.initialCloudCount = r.getCurrentCloudCount()
 
 	for _, code := range taskCodes {
+		if err := ctx.Err(); err != nil {
+			taskType := defaultTaskCatalog.Normalize(code)
+			if taskType == "" {
+				taskType = code
+			}
+			results = append(results, TaskResult{TaskType: taskType, Status: "failed", Message: err.Error()})
+			break
+		}
+
 		normalizedCode := defaultTaskCatalog.Normalize(code)
 		if normalizedCode == "" {
 			results = append(results, TaskResult{TaskType: code, Status: "failed", Message: "任务编码为空"})

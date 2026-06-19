@@ -27,6 +27,12 @@ type ExchangeService struct {
 	authMgr             *auth.Auth
 	tokenMgr            *TokenManager
 	hub                 *ws.Hub
+	lockStore           exchangeLockStore
+}
+
+type exchangeLockStore interface {
+	SetNX(key string, value interface{}, expiration time.Duration) (bool, error)
+	Del(keys ...string) error
 }
 
 func NewExchangeService(
@@ -52,6 +58,10 @@ func NewExchangeService(
 		tokenMgr:            tokenMgr,
 		hub:                 ws.GetHub(),
 	}
+}
+
+func (s *ExchangeService) SetLockStore(lockStore exchangeLockStore) {
+	s.lockStore = lockStore
 }
 
 // UpdateProducts 更新商品信息 (从云盘 API 获取)
@@ -276,7 +286,7 @@ func (s *ExchangeService) CreateExchangeTask(userID uint, exchangeAccountID uint
 	if skip, reason, err := shouldSkipExchangeMonthlySeries(s.exchangeRecordRepo, s.productRepo, candidateTask, time.Now()); err != nil {
 		log.Printf("【抢兑月度保护】创建任务时查询本月同系列记录失败，继续创建: %v", err)
 	} else if skip {
-		return nil, fmt.Errorf(reason)
+		return nil, fmt.Errorf("%s", reason)
 	}
 
 	// 检查任务是否已存在
@@ -420,8 +430,19 @@ func (s *ExchangeService) BatchExecuteExchangeTasks(taskIDs []uint, userID uint)
 
 // executeSingleTask 执行单个抢兑任务（带重试机制）
 func (s *ExchangeService) executeSingleTask(task *models.ExchangeTask) {
+	started, err := s.exchangeTaskRepo.TryMarkRunning(task.ID)
+	if err != nil {
+		log.Printf("【抢兑任务】任务 %d 抢占执行权失败: %v", task.ID, err)
+		return
+	}
+	if !started {
+		log.Printf("【抢兑任务】任务 %d 已被其他进程执行或状态不可运行，跳过", task.ID)
+		return
+	}
+
 	if skip, reason := s.monthlySeriesSkipReason(task); skip {
-		_ = s.exchangeTaskRepo.UpdateLastResult(task.ID, reason)
+		s.updateExchangeTaskLastResult(task.ID, reason)
+		s.updateExchangeTaskStatus(task.ID, string(models.ExchangeTaskPending))
 		log.Printf("【抢兑月度保护】任务 %d 跳过执行: %s", task.ID, reason)
 		s.hub.SendToUser(task.UserID, ws.Message{
 			Type: "exchange_skipped",
@@ -436,14 +457,11 @@ func (s *ExchangeService) executeSingleTask(task *models.ExchangeTask) {
 		return
 	}
 
-	// 更新任务状态为运行中
-	s.exchangeTaskRepo.UpdateStatus(task.ID, string(models.ExchangeTaskRunning))
-
 	// 获取兑换账号
 	account, err := s.exchangeAccountRepo.GetByID(task.ExchangeAccountID)
 	if err != nil {
 		s.recordExchangeResult(task, false, "获取兑换账号失败", 0)
-		s.exchangeTaskRepo.UpdateStatus(task.ID, string(models.ExchangeTaskFailed))
+		s.updateExchangeTaskStatus(task.ID, string(models.ExchangeTaskFailed))
 		return
 	}
 
@@ -456,17 +474,17 @@ func (s *ExchangeService) executeSingleTask(task *models.ExchangeTask) {
 		cloudAccount, err := s.accountRepo.GetByID(account.AccountID)
 		if err != nil {
 			s.recordExchangeResult(task, false, "云盘账号不存在或已删除", 0)
-			s.exchangeTaskRepo.UpdateStatus(task.ID, string(models.ExchangeTaskFailed))
+			s.updateExchangeTaskStatus(task.ID, string(models.ExchangeTaskFailed))
 			return
 		}
 		if !cloudAccount.IsActive {
 			s.recordExchangeResult(task, false, "云盘账号已失效，请重新登录后再启用任务", 0)
-			s.exchangeTaskRepo.UpdateStatus(task.ID, string(models.ExchangeTaskPending))
+			s.updateExchangeTaskStatus(task.ID, string(models.ExchangeTaskPending))
 			return
 		}
 		if cloudAccount.Auth == "" {
 			s.recordExchangeResult(task, false, "云盘账号认证为空，请重新登录", 0)
-			s.exchangeTaskRepo.UpdateStatus(task.ID, string(models.ExchangeTaskPending))
+			s.updateExchangeTaskStatus(task.ID, string(models.ExchangeTaskPending))
 			return
 		}
 	}
@@ -482,61 +500,79 @@ func (s *ExchangeService) executeSingleTask(task *models.ExchangeTask) {
 	var success bool
 	var message string
 	var execTime int
+	attemptsUsed := 0
+	releaseSeriesLockOnFailure := func() {}
 
-	for attempt := 0; attempt <= maxRetries; attempt++ {
-		if attempt > 0 {
-			log.Printf("【抢兑任务】任务 %d 第 %d 次重试...", task.ID, attempt)
-			// 更新重试次数
-			now := time.Now()
-			s.exchangeTaskRepo.UpdateRetryCount(task.ID, attempt, &now)
-			// 重试间隔：指数退避
-			time.Sleep(time.Duration(attempt*2) * time.Second)
-		}
+	if locked, release, reason := s.acquireMonthlySeriesLock(task, time.Now()); !locked {
+		success, message, execTime = false, reason, 0
+	} else {
+		releaseSeriesLockOnFailure = release
 
-		prizeID := s.resolveTaskPrizeID(task)
-		if !isUsableExchangePrizeID(prizeID) {
-			success, message, execTime = false, "商品已下架或不存在，请更新商品列表后重新创建抢兑任务", 0
-		} else {
-			success, message, execTime = s.doExchange(account, prizeID)
-		}
+		for attempt := 0; attempt <= maxRetries; attempt++ {
+			attemptsUsed = attempt
+			if attempt > 0 {
+				log.Printf("【抢兑任务】任务 %d 第 %d 次重试...", task.ID, attempt)
+				// 更新重试次数
+				now := time.Now()
+				s.updateExchangeTaskRetryCount(task.ID, attempt, &now)
+				// 重试间隔：指数退避
+				time.Sleep(time.Duration(attempt*2) * time.Second)
+			}
 
-		// 如果成功，或者错误不需要重试，则退出循环
-		if success || !s.shouldRetry(message) {
-			break
+			prizeID := s.resolveTaskPrizeID(task)
+			if !isUsableExchangePrizeID(prizeID) {
+				success, message, execTime = false, "商品已下架或不存在，请更新商品列表后重新创建抢兑任务", 0
+			} else {
+				success, message, execTime = s.doExchange(account, prizeID)
+			}
+
+			// 如果成功，或者错误不需要重试，则退出循环
+			if success || !s.shouldRetry(message) {
+				break
+			}
 		}
 	}
 
 	// 记录结果
 	s.recordExchangeResult(task, success, message, execTime)
+	if !success {
+		releaseSeriesLockOnFailure()
+	}
 
 	// 更新任务状态
 	if success {
 		log.Printf("【抢兑任务】任务 %d 执行成功，账号: %s", task.ID, accountName)
 		// 抢兑成功
 		if isSingleRunExchangeTask(task.TaskType) {
+			latestTask := task
+			if latest, err := s.exchangeTaskRepo.GetByID(task.ID); err == nil && latest != nil {
+				latestTask = latest
+			} else if err != nil {
+				log.Printf("【抢兑任务】任务 %d 读取最新尝试次数失败，使用本地快照: %v", task.ID, err)
+			}
 			// 固定次数任务，检查是否达到最大次数
-			if task.AttemptedCount+1 >= task.MaxAttempts {
-				s.exchangeTaskRepo.UpdateStatus(task.ID, string(models.ExchangeTaskCompleted))
+			if latestTask.MaxAttempts > 0 && latestTask.AttemptedCount >= latestTask.MaxAttempts {
+				s.updateExchangeTaskStatus(task.ID, string(models.ExchangeTaskCompleted))
 			} else {
-				s.exchangeTaskRepo.UpdateStatus(task.ID, string(models.ExchangeTaskPending))
+				s.updateExchangeTaskStatus(task.ID, string(models.ExchangeTaskPending))
 			}
 		} else {
 			// 长期任务，保持待执行状态
-			s.exchangeTaskRepo.UpdateStatus(task.ID, string(models.ExchangeTaskPending))
+			s.updateExchangeTaskStatus(task.ID, string(models.ExchangeTaskPending))
 		}
 	} else {
 		log.Printf("【抢兑任务】任务 %d 执行失败，账号: %s，原因: %s", task.ID, accountName, message)
 		// 抢兑失败
 		if strings.Contains(message, "奖品单日已耗尽") || strings.Contains(message, "奖品已兑完") || strings.Contains(message, "商品已下架或不存在") || strings.Contains(message, "商品ID不是可兑换 prizeId") {
 			// 奖品已抽完，停止任务
-			s.exchangeTaskRepo.UpdateStatus(task.ID, string(models.ExchangeTaskCompleted))
-		} else if task.RetryCount >= maxRetries {
+			s.updateExchangeTaskStatus(task.ID, string(models.ExchangeTaskCompleted))
+		} else if attemptsUsed >= maxRetries {
 			// 重试次数用尽，标记为失败
-			s.exchangeTaskRepo.UpdateStatus(task.ID, string(models.ExchangeTaskFailed))
+			s.updateExchangeTaskStatus(task.ID, string(models.ExchangeTaskFailed))
 			log.Printf("【抢兑任务】任务 %d 重试次数已用尽，标记为失败", task.ID)
 		} else {
 			// 其他错误，保持待执行状态
-			s.exchangeTaskRepo.UpdateStatus(task.ID, string(models.ExchangeTaskPending))
+			s.updateExchangeTaskStatus(task.ID, string(models.ExchangeTaskPending))
 		}
 	}
 
@@ -552,6 +588,24 @@ func (s *ExchangeService) executeSingleTask(task *models.ExchangeTask) {
 			"retry_count":  task.RetryCount,
 		},
 	})
+}
+
+func (s *ExchangeService) updateExchangeTaskStatus(taskID uint, status string) {
+	if err := s.exchangeTaskRepo.UpdateStatus(taskID, status); err != nil {
+		log.Printf("【抢兑任务】更新任务状态失败: task_id=%d status=%s err=%v", taskID, status, err)
+	}
+}
+
+func (s *ExchangeService) updateExchangeTaskRetryCount(taskID uint, retryCount int, lastRetryAt *time.Time) {
+	if err := s.exchangeTaskRepo.UpdateRetryCount(taskID, retryCount, lastRetryAt); err != nil {
+		log.Printf("【抢兑任务】更新任务重试次数失败: task_id=%d retry=%d err=%v", taskID, retryCount, err)
+	}
+}
+
+func (s *ExchangeService) updateExchangeTaskLastResult(taskID uint, result string) {
+	if err := s.exchangeTaskRepo.UpdateLastResult(taskID, result); err != nil {
+		log.Printf("【抢兑任务】更新任务最后结果失败: task_id=%d err=%v", taskID, err)
+	}
 }
 
 // shouldRetry 判断是否需要重试（使用公共函数）
@@ -584,7 +638,9 @@ func (s *ExchangeService) resolveTaskPrizeID(task *models.ExchangeTask) string {
 		task.PrizeID = product.PrizeID
 		task.ProductID = product.ID
 		task.Product = *product
-		_ = s.exchangeTaskRepo.Update(task)
+		if err := s.exchangeTaskRepo.Update(task); err != nil {
+			log.Printf("【抢兑任务】任务 %d 更新商品快照失败: %v", task.ID, err)
+		}
 		log.Printf("【抢兑任务】任务 %d 已自动修正商品ID为 %s，避免使用历史 memo 导致 404", task.ID, product.PrizeID)
 	}
 	return product.PrizeID
@@ -608,8 +664,12 @@ func (s *ExchangeService) recordExchangeResult(task *models.ExchangeTask, succes
 		record.Status = string(models.ExchangeRecordFailed)
 	}
 
-	s.exchangeRecordRepo.Create(record)
-	s.exchangeTaskRepo.UpdateAttempt(task.ID, success, message)
+	if err := s.exchangeRecordRepo.Create(record); err != nil {
+		log.Printf("【抢兑任务】创建兑换记录失败: task_id=%d account_id=%d prize=%s err=%v", task.ID, task.ExchangeAccountID, task.PrizeName, err)
+	}
+	if err := s.exchangeTaskRepo.UpdateAttempt(task.ID, success, message); err != nil {
+		log.Printf("【抢兑任务】更新任务尝试结果失败: task_id=%d success=%t err=%v", task.ID, success, err)
+	}
 	createExchangeSystemLog(
 		s.taskLogRepo,
 		task.UserID,
@@ -686,6 +746,10 @@ func (s *ExchangeService) GetRecordStats(userID uint, startTime, endTime time.Ti
 
 // ExecuteMonthlyExchange 执行月卡兑换任务（所有账号）
 func (s *ExchangeService) ExecuteMonthlyExchange() {
+	if !s.acquireMonthlyExchangeRunLock() {
+		return
+	}
+
 	// 获取所有兑换账号
 	accounts, err := s.exchangeAccountRepo.GetAllActive()
 	if err != nil {
@@ -742,6 +806,10 @@ func (s *ExchangeService) ExecuteMonthlyExchange() {
 
 // executeMonthlyExchangeForAccount 为单个账号执行月卡兑换
 func (s *ExchangeService) executeMonthlyExchangeForAccount(account *models.ExchangeAccount, prizeID string) {
+	if !s.acquireMonthlyExchangeAccountLock(account.ID) {
+		return
+	}
+
 	startTime := time.Now()
 	accountName := account.Remark
 	if accountName == "" {
@@ -800,4 +868,39 @@ func (s *ExchangeService) executeMonthlyExchangeForAccount(account *models.Excha
 			"exec_time":    time.Since(startTime).Milliseconds(),
 		},
 	})
+}
+
+func (s *ExchangeService) acquireMonthlyExchangeRunLock() bool {
+	if s.lockStore == nil {
+		log.Println("【月卡兑换】未配置分布式锁，继续执行（仅建议单实例本地环境）")
+		return true
+	}
+	key := "exchange:monthly:run:" + time.Now().Format("2006-01-02")
+	locked, err := s.lockStore.SetNX(key, "1", 24*time.Hour)
+	if err != nil {
+		log.Printf("【月卡兑换】获取全局日级锁失败: %v", err)
+		return false
+	}
+	if !locked {
+		log.Println("【月卡兑换】今日已执行过，跳过")
+		return false
+	}
+	return true
+}
+
+func (s *ExchangeService) acquireMonthlyExchangeAccountLock(accountID uint) bool {
+	if s.lockStore == nil {
+		return true
+	}
+	key := fmt.Sprintf("exchange:monthly:acc:%d:%s", accountID, time.Now().Format("2006-01-02"))
+	locked, err := s.lockStore.SetNX(key, "1", 25*time.Hour)
+	if err != nil {
+		log.Printf("【月卡兑换】账号 %d 获取日级锁失败: %v", accountID, err)
+		return false
+	}
+	if !locked {
+		log.Printf("【月卡兑换】账号 %d 今日已处理，跳过", accountID)
+		return false
+	}
+	return true
 }

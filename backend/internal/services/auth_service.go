@@ -1,12 +1,14 @@
 package services
 
 import (
+	"caiyun/internal/middleware"
 	"caiyun/internal/models"
-	"caiyun/internal/repository"
 	"caiyun/pkg/jwt"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/tls"
 	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"math/big"
@@ -29,6 +31,16 @@ var (
 	ErrEmailServiceDisabled = errors.New("邮箱服务未配置")
 	ErrResetCodeTooFrequent = errors.New("验证码发送过于频繁")
 	ErrInvalidResetCode     = errors.New("验证码错误或已过期")
+	ErrAccountLocked        = errors.New("登录失败次数过多，请稍后再试")
+)
+
+const (
+	// loginLockMaxAttempts 是连续登录失败达到该阈值后锁定账号。
+	loginLockMaxAttempts = 5
+	// loginLockTTL 是锁定持续时间。
+	loginLockTTL = 15 * time.Minute
+	// loginFailWindow 是失败计数窗口。
+	loginFailWindow = loginLockTTL
 )
 
 type SMTPConfig struct {
@@ -54,16 +66,34 @@ type passwordResetCache interface {
 	Del(keys ...string) error
 }
 
+type authUserRepository interface {
+	Create(user *models.User) error
+	FindByID(id uint) (*models.User, error)
+	FindByUsername(username string) (*models.User, error)
+	Update(user *models.User) error
+	UpdatePasswordAndRevokeSessions(userID uint, hashedPassword string) error
+	ExistsByUsername(username string) (bool, error)
+	ExistsByEmail(email string) (bool, error)
+}
+
+type loginLockStore interface {
+	GetLoginFailure(keyHash string) (int, time.Time, error)
+	RecordLoginFailure(keyHash string, maxAttempts int, window, lockTTL time.Duration) error
+	ClearLoginFailure(keyHash string) error
+}
+
 type AuthService struct {
-	userRepo       *repository.UserRepository
+	userRepo       authUserRepository
 	jwtMgr         *jwt.Manager
 	jwtExpiry      time.Duration
 	resetConfig    PasswordResetConfig
 	resetCodeCache passwordResetCache
+	loginLockCache passwordResetCache
+	loginLockStore loginLockStore
 }
 
 func NewAuthService(
-	userRepo *repository.UserRepository,
+	userRepo authUserRepository,
 	jwtMgr *jwt.Manager,
 	jwtExpiry time.Duration,
 ) *AuthService {
@@ -71,7 +101,7 @@ func NewAuthService(
 }
 
 func NewAuthServiceWithPasswordReset(
-	userRepo *repository.UserRepository,
+	userRepo authUserRepository,
 	jwtMgr *jwt.Manager,
 	jwtExpiry time.Duration,
 	resetConfig PasswordResetConfig,
@@ -80,7 +110,7 @@ func NewAuthServiceWithPasswordReset(
 }
 
 func NewAuthServiceWithPasswordResetCache(
-	userRepo *repository.UserRepository,
+	userRepo authUserRepository,
 	jwtMgr *jwt.Manager,
 	jwtExpiry time.Duration,
 	resetConfig PasswordResetConfig,
@@ -95,6 +125,10 @@ func NewAuthServiceWithPasswordResetCache(
 	if resetConfig.MaxAttempts <= 0 {
 		resetConfig.MaxAttempts = 5
 	}
+	var dbLoginLockStore loginLockStore
+	if store, ok := userRepo.(loginLockStore); ok {
+		dbLoginLockStore = store
+	}
 
 	return &AuthService{
 		userRepo:       userRepo,
@@ -102,6 +136,8 @@ func NewAuthServiceWithPasswordResetCache(
 		jwtExpiry:      jwtExpiry,
 		resetConfig:    resetConfig,
 		resetCodeCache: resetCodeCache,
+		loginLockCache: resetCodeCache, // 登录锁定复用同一 Redis 缓存
+		loginLockStore: dbLoginLockStore,
 	}
 }
 
@@ -262,16 +298,28 @@ func validatePasswordStrength(username, password string) error {
 
 // Login 用户登录
 func (s *AuthService) Login(req *LoginRequest) (*AuthResponse, error) {
+	// 登录失败锁定：优先检查 Redis 计数；Redis 不可用时降级到数据库表 login_fail_locks。
+	usernameKey := loginLockKey(req.Username)
+	if locked, _ := s.getLoginFailCount(usernameKey); locked >= loginLockMaxAttempts {
+		return nil, ErrAccountLocked
+	}
+
 	// 查找用户
 	user, err := s.userRepo.FindByUsername(req.Username)
 	if err != nil {
-		return nil, ErrUserNotFound
+		// 不暴露用户是否存在：仍递增失败计数，防止通过响应差异枚举账号。
+		s.recordLoginFailure(usernameKey)
+		return nil, ErrInvalidCredentials
 	}
 
 	// 验证密码
 	if err := bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(req.Password)); err != nil {
+		s.recordLoginFailure(usernameKey)
 		return nil, ErrInvalidCredentials
 	}
+
+	// 登录成功：清除失败计数。
+	s.clearLoginFailure(usernameKey)
 
 	// 生成JWT Token
 	token, err := s.jwtMgr.GenerateToken(user.ID, user.Username, user.Role, user.TokenVersion, s.jwtExpiry)
@@ -287,6 +335,66 @@ func (s *AuthService) Login(req *LoginRequest) (*AuthResponse, error) {
 		ExpiresAt: time.Now().Add(s.jwtExpiry).Unix(),
 		User:      user,
 	}, nil
+}
+
+func loginLockKey(username string) string {
+	return "caiyun:login_fail:" + strings.ToLower(strings.TrimSpace(username))
+}
+
+func loginLockStoreKey(key string) string {
+	sum := sha256.Sum256([]byte(key))
+	return hex.EncodeToString(sum[:])
+}
+
+// getLoginFailCount 返回当前用户名的连续登录失败次数。
+// cache 未配置时返回 0，兼容本地调试。
+func (s *AuthService) getLoginFailCount(key string) (int, error) {
+	if s.loginLockCache != nil {
+		var count int
+		if err := s.loginLockCache.Get(key, &count); err == nil {
+			return count, nil
+		}
+		// Redis key 不存在或 Redis 异常时继续尝试数据库降级。
+	}
+	if s.loginLockStore != nil {
+		count, lockedUntil, err := s.loginLockStore.GetLoginFailure(loginLockStoreKey(key))
+		if err != nil {
+			return 0, err
+		}
+		if !lockedUntil.IsZero() && lockedUntil.After(time.Now()) && count < loginLockMaxAttempts {
+			return loginLockMaxAttempts, nil
+		}
+		return count, nil
+	}
+	return 0, nil
+}
+
+func (s *AuthService) recordLoginFailure(key string) {
+	if s.loginLockCache != nil {
+		count, _ := s.getLoginFailCount(key)
+		count++
+		// 锁定窗口内累加；窗口过后 key 自动过期归零。
+		ttl := loginFailWindow
+		if count >= loginLockMaxAttempts {
+			ttl = loginLockTTL
+		}
+		if err := s.loginLockCache.Set(key, count, ttl); err == nil {
+			return
+		}
+		// Redis 写入失败时降级到数据库。
+	}
+	if s.loginLockStore != nil {
+		_ = s.loginLockStore.RecordLoginFailure(loginLockStoreKey(key), loginLockMaxAttempts, loginFailWindow, loginLockTTL)
+	}
+}
+
+func (s *AuthService) clearLoginFailure(key string) {
+	if s.loginLockCache != nil {
+		_ = s.loginLockCache.Del(key)
+	}
+	if s.loginLockStore != nil {
+		_ = s.loginLockStore.ClearLoginFailure(loginLockStoreKey(key))
+	}
 }
 
 // RefreshToken 刷新Token
@@ -372,7 +480,12 @@ func (s *AuthService) ChangePassword(userID uint, oldPassword, newPassword strin
 		return err
 	}
 
-	return s.userRepo.UpdatePasswordAndRevokeSessions(user.ID, string(hashedPassword))
+	if err := s.userRepo.UpdatePasswordAndRevokeSessions(user.ID, string(hashedPassword)); err != nil {
+		return err
+	}
+	// 改密后立即失效缓存中的用户快照，旧 JWT 立刻不可用。
+	middleware.InvalidateAuthUserCache(user.ID)
+	return nil
 }
 
 // SendPasswordResetCode 向用户注册邮箱发送密码重置验证码。
@@ -440,6 +553,8 @@ func (s *AuthService) ResetPasswordWithCode(username, email, code, newPassword s
 	if err := s.userRepo.UpdatePasswordAndRevokeSessions(user.ID, string(hashedPassword)); err != nil {
 		return err
 	}
+	// 重置密码后立即失效缓存中的用户快照。
+	middleware.InvalidateAuthUserCache(user.ID)
 
 	if s.resetCodeCache != nil {
 		_ = s.resetCodeCache.Del(passwordResetKey(user.Username, user.Email))
@@ -505,11 +620,24 @@ func (s *AuthService) sendPasswordResetEmail(to, username, code string) error {
 		fromName = "移动云盘"
 	}
 
+	// 过滤用户名中的控制字符（CR/LF 等），避免邮件头/正文注入。
+	safeUsername := sanitizeEmailText(username)
+
 	subject := "移动云盘密码重置验证码"
 	body := fmt.Sprintf("你好，%s：\n\n你的移动云盘密码重置验证码为：%s\n验证码 %d 分钟内有效，请勿转发给他人。\n\n如果不是你本人操作，请忽略本邮件。",
-		username, code, int(s.resetConfig.CodeTTL.Minutes()))
+		safeUsername, code, int(s.resetConfig.CodeTTL.Minutes()))
 	message := buildEmailMessage(from, fromName, to, subject, body)
 	return sendSMTPMail(smtpConfig, from, []string{to}, []byte(message))
+}
+
+// sanitizeEmailText 过滤字符串中的控制字符（特别是 CR/LF），防止 SMTP 头/正文注入。
+func sanitizeEmailText(s string) string {
+	return strings.Map(func(r rune) rune {
+		if r == '\r' || r == '\n' || r < 0x20 {
+			return -1
+		}
+		return r
+	}, s)
 }
 
 func buildEmailMessage(from, fromName, to, subject, body string) string {

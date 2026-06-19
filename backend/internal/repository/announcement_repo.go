@@ -2,6 +2,7 @@ package repository
 
 import (
 	"caiyun/internal/models"
+	"context"
 
 	"gorm.io/gorm"
 )
@@ -14,6 +15,14 @@ type AnnouncementRepository struct {
 // NewAnnouncementRepository 创建公告仓库
 func NewAnnouncementRepository(db *gorm.DB) *AnnouncementRepository {
 	return &AnnouncementRepository{db: db}
+}
+
+// WithContext 返回绑定到指定 context 的仓库副本，便于数据库操作响应请求取消和超时。
+func (r *AnnouncementRepository) WithContext(ctx context.Context) *AnnouncementRepository {
+	if ctx == nil {
+		return r
+	}
+	return &AnnouncementRepository{db: r.db.WithContext(ctx)}
 }
 
 // Create 创建公告

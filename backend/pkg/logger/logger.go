@@ -1,4 +1,4 @@
-﻿package logger
+package logger
 
 import (
 	"context"
@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -128,21 +129,33 @@ func (hook *rotateHook) cleanOldBackups() {
 		return
 	}
 
-	var backups []string
+	type backupFile struct {
+		path    string
+		modTime time.Time
+	}
+	var backups []backupFile
 	for _, file := range files {
 		if file.IsDir() {
 			continue
 		}
 		name := file.Name()
 		if strings.HasPrefix(name, prefix) && strings.HasSuffix(name, ".log") {
-			backups = append(backups, filepath.Join(dir, name))
+			info, err := file.Info()
+			if err != nil {
+				continue
+			}
+			backups = append(backups, backupFile{path: filepath.Join(dir, name), modTime: info.ModTime()})
 		}
 	}
+
+	sort.Slice(backups, func(i, j int) bool {
+		return backups[i].modTime.Before(backups[j].modTime)
+	})
 
 	// 按修改时间排序，删除最旧的
 	if len(backups) > hook.maxBackups {
 		for i := 0; i < len(backups)-hook.maxBackups; i++ {
-			os.Remove(backups[i])
+			os.Remove(backups[i].path)
 		}
 	}
 }
@@ -172,6 +185,7 @@ func New(config *Config) (*Logger, error) {
 			FullTimestamp:   true,
 		})
 	}
+	logger.SetOutput(os.Stdout)
 
 	// 如果配置了输出路径，添加轮转 hook
 	if config.OutputPath != "" {
@@ -197,8 +211,6 @@ func New(config *Config) (*Logger, error) {
 
 		logger.AddHook(hook)
 		logger.hook = hook
-	} else {
-		logger.SetOutput(os.Stdout)
 	}
 
 	return logger, nil

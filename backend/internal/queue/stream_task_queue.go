@@ -171,7 +171,7 @@ func (q *StreamTaskQueue) Dequeue(timeout time.Duration) (*TaskMessage, error) {
 		return nil, err
 	}
 	if len(messages) == 0 {
-		return nil, fmt.Errorf("队列超时")
+		return nil, ErrQueueTimeout
 	}
 	return decodeStreamMessage(messages[0])
 }
@@ -273,6 +273,9 @@ func (q *StreamTaskQueue) RecoverStaleProcessing(visibilityTimeout time.Duration
 		if _, err := q.cache.XAck(q.opts.StreamKey, q.opts.ConsumerGroup, message.StreamID); err != nil {
 			return recovered, err
 		}
+		if _, err := q.cache.XDel(q.opts.StreamKey, message.StreamID); err != nil {
+			return recovered, err
+		}
 		message.StreamID = ""
 		message.ProcessingAt = 0
 		if err := q.enqueueMessage(message); err != nil {
@@ -318,6 +321,9 @@ func (q *StreamTaskQueue) GetQueueLength() (int64, error) {
 	if err != nil {
 		return 0, err
 	}
+	// Redis Streams 不提供按 consumer group 精确统计“可立即消费消息数”的单条命令。
+	// 本队列在 Ack 后会 XDEL 已完成消息，因此 XLen - Pending 可作为监控面板的近似值；
+	// 在高并发读写瞬间可能存在轻微竞态误差，业务可靠性以 XACK/XAUTOCLAIM 生命周期为准。
 	length := q.cache.XLen(q.opts.StreamKey) - pending
 	if length < 0 {
 		return 0, nil

@@ -1,5 +1,13 @@
 package handlers
 
+import (
+	"net/http"
+
+	apiresponse "caiyun/pkg/response"
+
+	"github.com/gin-gonic/gin"
+)
+
 // ErrorResponse 错误响应
 type ErrorResponse struct {
 	Message string `json:"message" example:"错误信息"`
@@ -10,6 +18,30 @@ type ErrorResponse struct {
 // 上游响应体或数据库错误直接暴露给客户端。
 func InternalServerErrorResponse() ErrorResponse {
 	return ErrorResponse{Message: "服务器内部错误，请稍后再试"}
+}
+
+func respondError(c *gin.Context, statusCode int, message string) {
+	apiresponse.ErrorWithCode(c, statusCode, message)
+}
+
+func respondInternalServer(c *gin.Context) {
+	apiresponse.InternalServer(c, InternalServerErrorResponse().Message)
+}
+
+// getUserID 从 Gin context 中提取 user_id，若不存在则返回 401。
+// 返回 (userID, true) 或 (0, false)——false 时已写入响应，调用方应直接 return。
+func getUserID(c *gin.Context) (uint, bool) {
+	v, exists := c.Get("user_id")
+	if !exists {
+		respondError(c, http.StatusUnauthorized, "未授权")
+		return 0, false
+	}
+	id, ok := v.(uint)
+	if !ok {
+		respondError(c, http.StatusUnauthorized, "用户标识类型异常")
+		return 0, false
+	}
+	return id, true
 }
 
 // SuccessResponse 成功响应

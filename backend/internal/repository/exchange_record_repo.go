@@ -2,6 +2,7 @@ package repository
 
 import (
 	"caiyun/internal/models"
+	"context"
 	"time"
 
 	"gorm.io/gorm"
@@ -13,6 +14,14 @@ type ExchangeRecordRepository struct {
 
 func NewExchangeRecordRepository(db *gorm.DB) *ExchangeRecordRepository {
 	return &ExchangeRecordRepository{db: db}
+}
+
+// WithContext 返回绑定到指定 context 的仓库副本，便于数据库操作响应请求取消和超时。
+func (r *ExchangeRecordRepository) WithContext(ctx context.Context) *ExchangeRecordRepository {
+	if ctx == nil {
+		return r
+	}
+	return &ExchangeRecordRepository{db: r.db.WithContext(ctx)}
 }
 
 // Create 创建抢兑记录

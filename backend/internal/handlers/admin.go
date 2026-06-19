@@ -38,7 +38,7 @@ func (h *AdminHandler) GetAllUsers(c *gin.Context) {
 
 	users, total, err := h.adminService.GetAllUsers(page, size)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, InternalServerErrorResponse())
+		respondInternalServer(c)
 		return
 	}
 
@@ -66,7 +66,7 @@ func (h *AdminHandler) GetAllAccounts(c *gin.Context) {
 
 	accounts, total, err := h.adminService.GetAllAccounts(page, pageSize)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, InternalServerErrorResponse())
+		respondInternalServer(c)
 		return
 	}
 
@@ -96,7 +96,7 @@ func (h *AdminHandler) SearchAllAccounts(c *gin.Context) {
 
 	resp, err := h.adminService.SearchAllAccounts(req)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, InternalServerErrorResponse())
+		respondInternalServer(c)
 		return
 	}
 
@@ -119,7 +119,7 @@ func (h *AdminHandler) GetAccountSummaries(c *gin.Context) {
 
 	summaries, total, err := h.adminService.GetAccountSummaries(page, pageSize)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, InternalServerErrorResponse())
+		respondInternalServer(c)
 		return
 	}
 
@@ -135,7 +135,7 @@ func (h *AdminHandler) GetAccountSummaries(c *gin.Context) {
 func (h *AdminHandler) GetAdminDashboard(c *gin.Context) {
 	data, err := h.adminService.GetAdminDashboard()
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, InternalServerErrorResponse())
+		respondInternalServer(c)
 		return
 	}
 	apiresponse.Success(c, data)
@@ -145,22 +145,22 @@ func (h *AdminHandler) GetAdminDashboard(c *gin.Context) {
 func (h *AdminHandler) UpdateUserRole(c *gin.Context) {
 	userID, err := strconv.ParseUint(c.Param("id"), 10, 32)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, ErrorResponse{Message: "无效的用户ID"})
+		respondError(c, http.StatusBadRequest, "无效的用户ID")
 		return
 	}
 
 	var req services.UpdateUserRoleRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, ErrorResponse{Message: err.Error()})
+		respondError(c, http.StatusBadRequest, err.Error())
 		return
 	}
 
 	if err := h.adminService.UpdateUserRole(uint(userID), &req); err != nil {
 		if err == services.ErrUserNotFound {
-			c.JSON(http.StatusNotFound, ErrorResponse{Message: "用户不存在"})
+			respondError(c, http.StatusNotFound, "用户不存在")
 			return
 		}
-		c.JSON(http.StatusInternalServerError, InternalServerErrorResponse())
+		respondInternalServer(c)
 		return
 	}
 
@@ -171,24 +171,24 @@ func (h *AdminHandler) UpdateUserRole(c *gin.Context) {
 func (h *AdminHandler) ResetUserPassword(c *gin.Context) {
 	userID, err := strconv.ParseUint(c.Param("id"), 10, 32)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, ErrorResponse{Message: "无效的用户ID"})
+		respondError(c, http.StatusBadRequest, "无效的用户ID")
 		return
 	}
 
 	var req services.ResetUserPasswordRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, ErrorResponse{Message: err.Error()})
+		respondError(c, http.StatusBadRequest, err.Error())
 		return
 	}
 
 	if err := h.adminService.ResetUserPassword(uint(userID), &req); err != nil {
 		switch {
 		case errors.Is(err, services.ErrUserNotFound):
-			c.JSON(http.StatusNotFound, ErrorResponse{Message: "用户不存在"})
+			respondError(c, http.StatusNotFound, "用户不存在")
 		case errors.Is(err, services.ErrWeakPassword):
-			c.JSON(http.StatusBadRequest, ErrorResponse{Message: err.Error()})
+			respondError(c, http.StatusBadRequest, err.Error())
 		default:
-			c.JSON(http.StatusInternalServerError, InternalServerErrorResponse())
+			respondInternalServer(c)
 		}
 		return
 	}
@@ -203,18 +203,18 @@ type UpdateAccountStatusRequest = services.UpdateAccountStatusRequest
 func (h *AdminHandler) UpdateAccountStatus(c *gin.Context) {
 	accountID, err := strconv.ParseUint(c.Param("id"), 10, 32)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, ErrorResponse{Message: "无效的账号ID"})
+		respondError(c, http.StatusBadRequest, "无效的账号ID")
 		return
 	}
 
 	var req services.UpdateAccountStatusRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, ErrorResponse{Message: err.Error()})
+		respondError(c, http.StatusBadRequest, err.Error())
 		return
 	}
 
 	if err := h.adminService.UpdateAccountStatus(uint(accountID), &req); err != nil {
-		c.JSON(http.StatusInternalServerError, InternalServerErrorResponse())
+		respondInternalServer(c)
 		return
 	}
 
@@ -225,22 +225,22 @@ func (h *AdminHandler) UpdateAccountStatus(c *gin.Context) {
 func (h *AdminHandler) DeleteUser(c *gin.Context) {
 	userID, err := strconv.ParseUint(c.Param("id"), 10, 32)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, ErrorResponse{Message: "无效的用户ID"})
+		respondError(c, http.StatusBadRequest, "无效的用户ID")
 		return
 	}
 
 	currentUserID, exists := c.Get("user_id")
 	if !exists {
-		c.JSON(http.StatusUnauthorized, ErrorResponse{Message: "未授权"})
+		respondError(c, http.StatusUnauthorized, "未授权")
 		return
 	}
 
 	if err := h.adminService.DeleteUser(uint(userID), currentUserID.(uint)); err != nil {
 		if err == services.ErrCannotDeleteSelf {
-			c.JSON(http.StatusBadRequest, ErrorResponse{Message: "不能删除自己"})
+			respondError(c, http.StatusBadRequest, "不能删除自己")
 			return
 		}
-		c.JSON(http.StatusInternalServerError, InternalServerErrorResponse())
+		respondInternalServer(c)
 		return
 	}
 
@@ -251,12 +251,12 @@ func (h *AdminHandler) DeleteUser(c *gin.Context) {
 func (h *AdminHandler) DeleteAccount(c *gin.Context) {
 	accountID, err := strconv.ParseUint(c.Param("id"), 10, 32)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, ErrorResponse{Message: "无效的账号ID"})
+		respondError(c, http.StatusBadRequest, "无效的账号ID")
 		return
 	}
 
 	if err := h.adminService.DeleteAccount(uint(accountID)); err != nil {
-		c.JSON(http.StatusInternalServerError, InternalServerErrorResponse())
+		respondInternalServer(c)
 		return
 	}
 
@@ -267,7 +267,7 @@ func (h *AdminHandler) DeleteAccount(c *gin.Context) {
 func (h *AdminHandler) GetStatsOverview(c *gin.Context) {
 	stats, err := h.adminService.GetStatsOverview()
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, InternalServerErrorResponse())
+		respondInternalServer(c)
 		return
 	}
 
@@ -283,7 +283,7 @@ func (h *AdminHandler) GetStatsOverview(c *gin.Context) {
 func (h *AdminHandler) GetTaskConfigs(c *gin.Context) {
 	configs, err := h.adminService.GetTaskConfigs()
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, InternalServerErrorResponse())
+		respondInternalServer(c)
 		return
 	}
 	apiresponse.Success(c, gin.H{"configs": configs})
@@ -293,18 +293,18 @@ func (h *AdminHandler) GetTaskConfigs(c *gin.Context) {
 func (h *AdminHandler) UpdateTaskConfig(c *gin.Context) {
 	taskType := c.Param("task_type")
 	if taskType == "" {
-		c.JSON(http.StatusBadRequest, ErrorResponse{Message: "缺少任务类型"})
+		respondError(c, http.StatusBadRequest, "缺少任务类型")
 		return
 	}
 
 	var req services.UpdateTaskConfigRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, ErrorResponse{Message: err.Error()})
+		respondError(c, http.StatusBadRequest, err.Error())
 		return
 	}
 
 	if err := h.adminService.UpdateTaskConfig(taskType, &req); err != nil {
-		c.JSON(http.StatusInternalServerError, InternalServerErrorResponse())
+		respondInternalServer(c)
 		return
 	}
 

@@ -1,4 +1,5 @@
 import { ref } from 'vue'
+import type { Product } from '@/api/exchange'
 
 export function useExchangeMedia() {
   const isMobile = ref(false)
@@ -20,7 +21,7 @@ export function useExchangeMedia() {
     }
   }
 
-  const getProductImageUrl = (product: any): string => {
+  const getProductImageUrl = (product: Product | null | undefined): string => {
     if (!product) return ''
     const prizeId = String(product.prize_id)
     if (localImageMap.value[prizeId]) {

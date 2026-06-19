@@ -6,7 +6,7 @@ test('未登录访问受保护页面会跳转到登录页', async ({ page }) => 
 
   await page.goto('/dashboard')
 
-  await expect(page).toHaveURL(/\/login$/)
+  await expect(page).toHaveURL(/\/login(?:\?redirect=.*)?$/)
   await expect(page.getByRole('heading', { name: '欢迎回来' })).toBeVisible()
   await expect(page.getByPlaceholder('请输入用户名')).toBeVisible()
 })

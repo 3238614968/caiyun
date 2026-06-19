@@ -37,10 +37,13 @@ type ExchangeScheduler struct {
 
 	// 停止信号
 	stopChan chan struct{}
+	stopOnce sync.Once
+	loopWG   sync.WaitGroup
 }
 
 type schedulerLeaseStore interface {
 	SetNX(key string, value interface{}, expiration time.Duration) (bool, error)
+	Del(keys ...string) error
 }
 
 // NewExchangeScheduler 创建抢兑调度器
@@ -77,14 +80,27 @@ func (s *ExchangeScheduler) SetLeaseStore(store schedulerLeaseStore) {
 
 // Start 启动调度器
 func (s *ExchangeScheduler) Start() {
+	if s == nil {
+		return
+	}
 	log.Println("【抢兑调度器】启动...")
-	go s.scheduleLoop()
+	s.loopWG.Add(1)
+	go func() {
+		defer s.loopWG.Done()
+		s.scheduleLoop()
+	}()
 }
 
 // Stop 停止调度器
 func (s *ExchangeScheduler) Stop() {
+	if s == nil {
+		return
+	}
 	log.Println("【抢兑调度器】停止...")
-	close(s.stopChan)
+	s.stopOnce.Do(func() {
+		close(s.stopChan)
+	})
+	s.loopWG.Wait()
 }
 
 // scheduleLoop 调度循环
@@ -94,24 +110,48 @@ func (s *ExchangeScheduler) scheduleLoop() {
 
 	for {
 		select {
-		case <-ticker.C:
-			s.checkAndPrepareExchange()
 		case <-s.stopChan:
 			return
+		case <-ticker.C:
+			if s.isStopped() {
+				return
+			}
+			s.checkAndPrepareExchange()
 		}
+	}
+}
+
+func (s *ExchangeScheduler) isStopped() bool {
+	if s == nil {
+		return true
+	}
+	select {
+	case <-s.stopChan:
+		return true
+	default:
+		return false
 	}
 }
 
 // checkAndPrepareExchange 检查并准备抢兑（支持自定义时间）
 func (s *ExchangeScheduler) checkAndPrepareExchange() {
+	if s.isStopped() {
+		return
+	}
 	now := time.Now()
 	if hour, minute, ok := scheduledPrepareSlot(now); ok {
+		if s.isStopped() {
+			return
+		}
 		if s.claimSchedulerSlot("prepare", now, hour, minute, 10*time.Minute) {
 			log.Printf("【抢兑调度器】准备 %02d:%02d 抢兑队列...", hour, minute)
 			s.prepareQueueByTime(hour, minute)
 		}
 	}
 	if hour, minute, ok := scheduledExecuteSlot(now); ok {
+		if s.isStopped() {
+			return
+		}
 		// 执行阶段不再使用整分钟租约。多副本同时触发时由 TryMarkRunning 抢占任务执行权，
 		// 避免拿到租约的实例在真正执行前崩溃导致整个时间槽漏执行。
 		log.Printf("【抢兑调度器】执行 %02d:%02d 抢兑...", hour, minute)
@@ -146,6 +186,9 @@ func (s *ExchangeScheduler) claimSchedulerSlot(kind string, now time.Time, hour,
 
 // prepareQueueByTime 根据指定时间准备抢兑队列
 func (s *ExchangeScheduler) prepareQueueByTime(hour, minute int) {
+	if s.isStopped() {
+		return
+	}
 	slot := fmt.Sprintf("%02d:%02d", hour, minute)
 
 	// Load tasks for the target slot.
@@ -193,6 +236,9 @@ func (s *ExchangeScheduler) prepareQueueByTime(hour, minute int) {
 }
 
 func (s *ExchangeScheduler) executeExchangeByTime(hour, minute int) {
+	if s.isStopped() {
+		return
+	}
 	slot := fmt.Sprintf("%02d:%02d", hour, minute)
 
 	s.queueMutex.Lock()
@@ -240,6 +286,10 @@ func (s *ExchangeScheduler) executeExchangeByTime(hour, minute int) {
 			log.Printf("【抢兑调度器】%s 补查任务预热后没有可执行账号，跳过本次执行", slot)
 			return
 		}
+	}
+
+	if s.isStopped() {
+		return
 	}
 
 	log.Printf("【抢兑调度器】开始执行 %s 抢兑，共 %d 个任务", slot, len(tasksToExecute))

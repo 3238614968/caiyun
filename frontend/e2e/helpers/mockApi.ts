@@ -243,6 +243,7 @@ export async function mockBackend(page: Page) {
     { ...adminUser, created_at: now, updated_at: now },
     { id: 2, username: 'e2e-user', email: 'user@example.com', role: 'user', created_at: now, updated_at: now }
   ]
+  let isAuthenticated = false
 
   await page.route('**/api/**', async (route) => {
     const request = route.request()
@@ -251,14 +252,20 @@ export async function mockBackend(page: Page) {
     const path = url.pathname
 
     if (method === 'POST' && path === '/api/auth/login') {
+      isAuthenticated = true
       return fulfill(route, loginResponse())
     }
 
     if (method === 'POST' && path === '/api/auth/logout') {
+      isAuthenticated = false
       return fulfill(route, ok({ message: 'ok' }))
     }
 
     if (method === 'GET' && path === '/api/auth/me') {
+      const cookie = request.headers().cookie || ''
+      if (!isAuthenticated && !cookie.includes('e2e_auth=1')) {
+        return fulfill(route, { code: 401, message: '未提供认证信息' }, 401)
+      }
       return fulfill(route, ok(adminUser))
     }
 
@@ -651,7 +658,12 @@ export async function mockBackend(page: Page) {
 }
 
 export async function authenticateAsAdmin(page: Page) {
-  await page.addInitScript((user) => {
-    localStorage.setItem('user', JSON.stringify(user))
-  }, adminUser)
+  const baseURL = process.env.PLAYWRIGHT_BASE_URL || 'http://127.0.0.1:4173'
+  await page.context().addCookies([
+    {
+      name: 'e2e_auth',
+      value: '1',
+      url: baseURL
+    }
+  ])
 }

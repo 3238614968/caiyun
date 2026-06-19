@@ -28,7 +28,7 @@ var upgrader = websocket.Upgrader{
 		}
 		allowedOrigins := strings.TrimSpace(os.Getenv("ALLOWED_ORIGINS"))
 		if allowedOrigins == "" {
-			allowedOrigins = "http://localhost:3000,http://localhost:5173,http://127.0.0.1:3000,http://127.0.0.1:5173"
+			return false
 		}
 		for _, allowed := range strings.Split(allowedOrigins, ",") {
 			if strings.TrimSpace(allowed) == origin {
@@ -99,6 +99,9 @@ type Hub struct {
 	clients    map[uint]map[*Client]bool // userID -> clients
 	register   chan *Client
 	unregister chan *Client
+	stopCh     chan struct{}
+	stopOnce   sync.Once
+	offlineSem chan struct{}
 	wsRepo     *repository.WSMessageRepository // WebSocket消息仓库
 }
 
@@ -113,10 +116,31 @@ func GetHub() *Hub {
 			clients:    make(map[uint]map[*Client]bool),
 			register:   make(chan *Client, 64),
 			unregister: make(chan *Client, 64),
+			stopCh:     make(chan struct{}),
+			offlineSem: make(chan struct{}, 4),
 		}
 		go globalHub.run()
 	})
 	return globalHub
+}
+
+// Stop 停止 Hub 主循环并关闭所有客户端连接。通常在 API 进程优雅退出时调用。
+func (h *Hub) Stop() {
+	if h == nil {
+		return
+	}
+	h.stopOnce.Do(func() {
+		close(h.stopCh)
+		h.mu.Lock()
+		defer h.mu.Unlock()
+		for _, conns := range h.clients {
+			for client := range conns {
+				close(client.send)
+				_ = client.conn.Close()
+			}
+		}
+		h.clients = make(map[uint]map[*Client]bool)
+	})
 }
 
 // SetWSMessageRepository 设置WebSocket消息仓库（用于消息持久化）
@@ -136,12 +160,13 @@ func (h *Hub) run() {
 			}
 			h.clients[client.userID][client] = true
 			wsRepo := h.wsRepo
+			connCount := len(h.clients[client.userID])
 			h.mu.Unlock()
-			log.Printf("[WS] 用户 %d 已连接，当前连接数: %d", client.userID, len(h.clients[client.userID]))
+			log.Printf("[WS] 用户 %d 已连接，当前连接数: %d", client.userID, connCount)
 
 			// 用户上线时推送离线消息
 			if wsRepo != nil {
-				go h.deliverOfflineMessages(client.userID, wsRepo)
+				h.scheduleOfflineDelivery(client.userID, wsRepo)
 			}
 
 		case client := <-h.unregister:
@@ -157,7 +182,21 @@ func (h *Hub) run() {
 			}
 			h.mu.Unlock()
 			log.Printf("[WS] 用户 %d 已断开", client.userID)
+		case <-h.stopCh:
+			return
 		}
+	}
+}
+
+func (h *Hub) scheduleOfflineDelivery(userID uint, wsRepo *repository.WSMessageRepository) {
+	select {
+	case h.offlineSem <- struct{}{}:
+		go func() {
+			defer func() { <-h.offlineSem }()
+			h.deliverOfflineMessages(userID, wsRepo)
+		}()
+	default:
+		log.Printf("[WS] 离线消息投递并发已满，跳过本次上线投递 user_id=%d", userID)
 	}
 }
 
@@ -234,8 +273,7 @@ func (h *Hub) SendToUser(userID uint, msg Message) {
 		case client.send <- data:
 			delivered = true
 		default:
-			// 发送缓冲区满，关闭连接
-			h.unregister <- client
+			h.tryUnregister(client)
 		}
 	}
 
@@ -256,16 +294,28 @@ func (h *Hub) Broadcast(msg Message) {
 	}
 
 	h.mu.RLock()
-	defer h.mu.RUnlock()
-
+	clients := make([]*Client, 0)
 	for _, conns := range h.clients {
 		for client := range conns {
-			select {
-			case client.send <- data:
-			default:
-				go func(c *Client) { h.unregister <- c }(client)
-			}
+			clients = append(clients, client)
 		}
+	}
+	h.mu.RUnlock()
+
+	for _, client := range clients {
+		select {
+		case client.send <- data:
+		default:
+			h.tryUnregister(client)
+		}
+	}
+}
+
+func (h *Hub) tryUnregister(client *Client) {
+	select {
+	case h.unregister <- client:
+	default:
+		log.Printf("[WS] unregister 队列已满，跳过阻塞客户端 user_id=%d", client.userID)
 	}
 }
 
@@ -284,7 +334,17 @@ func (h *Hub) HandleWebSocket(w http.ResponseWriter, r *http.Request, userID uin
 		userID: userID,
 	}
 
-	h.register <- client
+	// 注册路径使用非阻塞发送，避免 run loop 阻塞时 HandleWebSocket 卡住。
+	select {
+	case h.register <- client:
+	case <-h.stopCh:
+		_ = conn.Close()
+		return
+	default:
+		log.Printf("[WS] register 队列已满，拒绝用户 %d 的连接", userID)
+		_ = conn.Close()
+		return
+	}
 
 	go client.writePump()
 	go client.readPump()
@@ -293,7 +353,7 @@ func (h *Hub) HandleWebSocket(w http.ResponseWriter, r *http.Request, userID uin
 // readPump 读取客户端消息（主要用于保持连接和处理ping/pong）
 func (c *Client) readPump() {
 	defer func() {
-		c.hub.unregister <- c
+		c.hub.tryUnregister(c)
 		c.conn.Close()
 	}()
 

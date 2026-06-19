@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"caiyun/internal/cache"
@@ -179,11 +180,17 @@ func (q *TaskQueue) Dequeue(timeout time.Duration) (*TaskMessage, error) {
 	// 后续成功 Ack、失败 Requeue/DeadLetter，避免 Worker 崩溃时任务直接丢失。
 	data, err := q.cache.BRPopLPush(TaskQueueKey, TaskProcessingKey, timeout)
 	if err != nil {
+		if strings.Contains(err.Error(), "队列超时") {
+			return nil, ErrQueueTimeout
+		}
 		return nil, err
 	}
 
 	var message TaskMessage
 	if err := json.Unmarshal([]byte(data), &message); err != nil {
+		if dlqErr := q.deadLetterRaw(data, fmt.Sprintf("反序列化任务消息失败: %v", err)); dlqErr != nil {
+			return nil, fmt.Errorf("反序列化任务消息失败: %w；写入死信失败: %v", err, dlqErr)
+		}
 		return nil, fmt.Errorf("反序列化任务消息失败: %w", err)
 	}
 	message.ProcessingAt = time.Now().Unix()
@@ -210,6 +217,23 @@ func (q *TaskQueue) Dequeue(timeout time.Duration) (*TaskMessage, error) {
 	message.raw = data
 
 	return &message, nil
+}
+
+func (q *TaskQueue) deadLetterRaw(raw, reason string) error {
+	_, _ = q.cache.LRem(TaskProcessingKey, 1, raw)
+	payload := map[string]interface{}{
+		"raw_message": raw,
+		"reason":      reason,
+		"failed_at":   time.Now().Unix(),
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("序列化死信消息失败: %w", err)
+	}
+	if err := q.cache.LPush(TaskDeadLetterKey, string(data)); err != nil {
+		return fmt.Errorf("写入死信队列失败: %w", err)
+	}
+	return nil
 }
 
 // Ack 确认任务已成功处理，从 processing 队列移除。

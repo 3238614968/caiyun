@@ -1,6 +1,7 @@
 package services
 
 import (
+	"caiyun/internal/middleware"
 	"caiyun/internal/models"
 	"caiyun/internal/repository"
 	"errors"
@@ -118,11 +119,9 @@ func (s *AdminService) SearchAllAccounts(req *SearchAllAccountsRequest) (*Search
 
 	result := make([]*AccountSearchItem, 0, len(accounts))
 	for _, acc := range accounts {
-		// 获取用户信息
-		user, err := s.userRepo.FindByID(acc.UserID)
 		username := ""
-		if err == nil && user != nil {
-			username = user.Username
+		if acc.User.ID > 0 {
+			username = acc.User.Username
 		}
 
 		result = append(result, &AccountSearchItem{
@@ -157,7 +156,12 @@ func (s *AdminService) UpdateUserRole(userID uint, req *UpdateUserRoleRequest) e
 		return ErrUserNotFound
 	}
 	user.Role = req.Role
-	return s.userRepo.Update(user)
+	if err := s.userRepo.Update(user); err != nil {
+		return err
+	}
+	// 角色变更后失效认证缓存，使下一次请求读到新角色。
+	middleware.InvalidateAuthUserCache(user.ID)
+	return nil
 }
 
 // ResetUserPassword 管理员重置用户密码
@@ -173,7 +177,12 @@ func (s *AdminService) ResetUserPassword(userID uint, req *ResetUserPasswordRequ
 	if err != nil {
 		return err
 	}
-	return s.userRepo.UpdatePasswordAndRevokeSessions(user.ID, string(hashedPassword))
+	if err := s.userRepo.UpdatePasswordAndRevokeSessions(user.ID, string(hashedPassword)); err != nil {
+		return err
+	}
+	// 管理员重置密码后立即失效该用户的认证缓存。
+	middleware.InvalidateAuthUserCache(user.ID)
+	return nil
 }
 
 // UpdateAccountStatusRequest 更新账号状态请求
@@ -191,7 +200,12 @@ func (s *AdminService) DeleteUser(userID, currentUserID uint) error {
 	if userID == currentUserID {
 		return ErrCannotDeleteSelf
 	}
-	return s.userRepo.Delete(userID)
+	if err := s.userRepo.Delete(userID); err != nil {
+		return err
+	}
+	// 删除用户后失效该用户的认证缓存。
+	middleware.InvalidateAuthUserCache(userID)
+	return nil
 }
 
 // DeleteAccount 删除账号
@@ -219,21 +233,21 @@ func (s *AdminService) GetStatsOverview() (*StatsOverview, error) {
 		return nil, err
 	}
 
-	accounts, err := s.accountRepo.FindActiveAccounts()
+	totalCloud, err := s.accountRepo.SumCloudCount()
 	if err != nil {
 		return nil, err
 	}
 
-	totalCloud := 0
-	for _, account := range accounts {
-		totalCloud += account.CloudCount
+	activeAccountCount, err := s.accountRepo.CountActive()
+	if err != nil {
+		return nil, err
 	}
 
 	return &StatsOverview{
 		UserCount:    userTotal,
 		AccountCount: accountTotal,
 		TotalCloud:   totalCloud,
-		ActiveTasks:  len(accounts),
+		ActiveTasks:  int(activeAccountCount),
 	}, nil
 }
 
@@ -264,6 +278,14 @@ func (s *AdminService) GetAccountSummaries(page, pageSize int) ([]*AccountSummar
 	today := todayStartCST()
 	tomorrow := today.Add(24 * time.Hour)
 	yesterday := today.Add(-24 * time.Hour)
+	accountIDs := make([]uint, 0, len(accounts))
+	for _, acc := range accounts {
+		accountIDs = append(accountIDs, acc.ID)
+	}
+	logSummaries, err := s.taskLogRepo.GetAccountSummariesByIDs(accountIDs, today, tomorrow, yesterday)
+	if err != nil {
+		return nil, 0, err
+	}
 
 	summaries := make([]*AccountSummary, len(accounts))
 	for i, acc := range accounts {
@@ -280,20 +302,14 @@ func (s *AdminService) GetAccountSummaries(page, pageSize int) ([]*AccountSummar
 			summary.OwnerUsername = acc.User.Username
 		}
 
-		// Today's gained cloud
-		summary.TodayGained = s.taskLogRepo.GetCloudGainedByAccountAndRange(acc.ID, today, tomorrow)
-
-		// Yesterday's gained cloud
-		summary.YesterdayGained = s.taskLogRepo.GetCloudGainedByAccountAndRange(acc.ID, yesterday, today)
-
-		// Today's success/fail count
-		summary.SuccessCount = s.taskLogRepo.CountByAccountStatusAndRange(acc.ID, "success", today, tomorrow)
-		summary.FailedCount = s.taskLogRepo.CountByAccountStatusAndRange(acc.ID, "failed", today, tomorrow)
-
-		// Last executed time
-		lastLog := s.taskLogRepo.FindLastByAccountID(acc.ID)
-		if lastLog != nil {
-			summary.LastExecutedAt = lastLog.CreatedAt.Format("2006-01-02 15:04:05")
+		if logSummary, ok := logSummaries[acc.ID]; ok {
+			summary.TodayGained = logSummary.TodayGained
+			summary.YesterdayGained = logSummary.YesterdayGained
+			summary.SuccessCount = logSummary.SuccessCount
+			summary.FailedCount = logSummary.FailedCount
+			if logSummary.LastExecutedAt.Valid {
+				summary.LastExecutedAt = logSummary.LastExecutedAt.Time.Format("2006-01-02 15:04:05")
+			}
 		}
 
 		summaries[i] = summary
@@ -334,17 +350,17 @@ func (s *AdminService) GetAdminDashboard() (*AdminDashboardData, error) {
 	}
 	data.UserCount = userTotal
 
-	// All accounts
-	allAccounts, accountTotal, err := s.accountRepo.List(0, 99999)
+	// Account count
+	_, accountTotal, err := s.accountRepo.List(0, 1)
 	if err != nil {
 		return nil, err
 	}
 	data.AccountCount = accountTotal
 
 	// Total cloud
-	totalCloud := 0
-	for _, acc := range allAccounts {
-		totalCloud += acc.CloudCount
+	totalCloud, err := s.accountRepo.SumCloudCount()
+	if err != nil {
+		return nil, err
 	}
 	data.TotalCloud = totalCloud
 
@@ -366,13 +382,28 @@ func (s *AdminService) GetAdminDashboard() (*AdminDashboardData, error) {
 	}
 
 	// Account ranking (top 20 by cloud_count)
-	ranking := make([]AdminAccountRank, 0, len(allAccounts))
-	for _, acc := range allAccounts {
+	topAccounts, err := s.accountRepo.TopByCloudCount(20)
+	if err != nil {
+		return nil, err
+	}
+	rankingIDs := make([]uint, 0, len(topAccounts))
+	for _, acc := range topAccounts {
+		rankingIDs = append(rankingIDs, acc.ID)
+	}
+	logSummaries, err := s.taskLogRepo.GetAccountSummariesByIDs(rankingIDs, today, tomorrow, yesterday)
+	if err != nil {
+		return nil, err
+	}
+	ranking := make([]AdminAccountRank, 0, len(topAccounts))
+	for _, acc := range topAccounts {
 		ownerName := ""
 		if acc.User.ID > 0 {
 			ownerName = acc.User.Username
 		}
-		todayGained := s.taskLogRepo.GetCloudGainedByAccountAndRange(acc.ID, today, tomorrow)
+		todayGained := 0
+		if summary, ok := logSummaries[acc.ID]; ok {
+			todayGained = summary.TodayGained
+		}
 		ranking = append(ranking, AdminAccountRank{
 			AccountID:     acc.ID,
 			Phone:         acc.Phone,
@@ -381,17 +412,6 @@ func (s *AdminService) GetAdminDashboard() (*AdminDashboardData, error) {
 			CloudCount:    acc.CloudCount,
 			TodayGained:   todayGained,
 		})
-	}
-	// Sort by cloud_count desc
-	for i := 0; i < len(ranking)-1; i++ {
-		for j := i + 1; j < len(ranking); j++ {
-			if ranking[i].CloudCount < ranking[j].CloudCount {
-				ranking[i], ranking[j] = ranking[j], ranking[i]
-			}
-		}
-	}
-	if len(ranking) > 20 {
-		ranking = ranking[:20]
 	}
 	data.AccountRanking = ranking
 

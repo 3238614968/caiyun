@@ -1,6 +1,7 @@
 package tasks
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -45,6 +46,9 @@ type Logger interface {
 
 // NewFileStore 创建文件存储
 func NewFileStore(basePath string, logger Logger) *FileStore {
+	if abs, err := filepath.Abs(basePath); err == nil {
+		basePath = abs
+	}
 	store := &FileStore{
 		basePath: basePath,
 		data:     make(map[string]string),
@@ -90,6 +94,14 @@ func (s *FileStore) load() {
 			continue
 		}
 
+		key, err := fileStoreKeyFromDiskName(file.Name())
+		if err != nil {
+			if s.logger != nil {
+				s.logger.Debug("跳过非法存储文件名", file.Name(), err)
+			}
+			continue
+		}
+
 		filePath := filepath.Join(s.basePath, file.Name())
 		data, err := os.ReadFile(filePath)
 		if err != nil {
@@ -99,12 +111,16 @@ func (s *FileStore) load() {
 			continue
 		}
 
-		s.data[file.Name()] = string(data)
+		s.data[key] = string(data)
 	}
 }
 
 // Get 获取值
 func (s *FileStore) Get(key string) (string, error) {
+	if _, err := fileStoreDiskName(key); err != nil {
+		return "", err
+	}
+
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -117,11 +133,16 @@ func (s *FileStore) Get(key string) (string, error) {
 
 // Set 设置值
 func (s *FileStore) Set(key, value string) error {
+	diskName, err := fileStoreDiskName(key)
+	if err != nil {
+		return err
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	s.data[key] = value
-	filePath := filepath.Join(s.basePath, key)
+	filePath := filepath.Join(s.basePath, diskName)
 	if err := os.WriteFile(filePath, []byte(value), 0644); err != nil {
 		return fmt.Errorf("保存文件失败: %w", err)
 	}
@@ -130,15 +151,50 @@ func (s *FileStore) Set(key, value string) error {
 
 // Delete 删除值
 func (s *FileStore) Delete(key string) error {
+	diskName, err := fileStoreDiskName(key)
+	if err != nil {
+		return err
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	delete(s.data, key)
-	filePath := filepath.Join(s.basePath, key)
+	filePath := filepath.Join(s.basePath, diskName)
 	if err := os.Remove(filePath); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("删除文件失败: %w", err)
 	}
 	return nil
+}
+
+func fileStoreDiskName(key string) (string, error) {
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return "", fmt.Errorf("存储 key 不能为空")
+	}
+	if strings.ContainsRune(key, '\x00') || filepath.IsAbs(key) || filepath.VolumeName(key) != "" {
+		return "", fmt.Errorf("非法存储 key: %q", key)
+	}
+	clean := filepath.Clean(key)
+	if clean == ".." || strings.HasPrefix(clean, ".."+string(os.PathSeparator)) || strings.Contains(clean, string(os.PathSeparator)+".."+string(os.PathSeparator)) {
+		return "", fmt.Errorf("非法存储 key: %q", key)
+	}
+	return base64.RawURLEncoding.EncodeToString([]byte(key)) + ".kv", nil
+}
+
+func fileStoreKeyFromDiskName(name string) (string, error) {
+	if strings.TrimSpace(name) == "" || filepath.Base(name) != name {
+		return "", fmt.Errorf("非法文件名")
+	}
+	if !strings.HasSuffix(name, ".kv") {
+		return name, nil
+	}
+	raw := strings.TrimSuffix(name, ".kv")
+	decoded, err := base64.RawURLEncoding.DecodeString(raw)
+	if err != nil {
+		return "", err
+	}
+	return string(decoded), nil
 }
 
 // Get 获取值

@@ -33,13 +33,13 @@ type CreateAnnouncementRequest struct {
 func (h *AnnouncementHandler) CreateAnnouncement(c *gin.Context) {
 	var req CreateAnnouncementRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, ErrorResponse{Message: "请求参数错误: " + err.Error()})
+		respondError(c, http.StatusBadRequest, "请求参数错误: "+err.Error())
 		return
 	}
 
 	announcement, err := h.announcementService.CreateAnnouncement(req.Title, req.Content, req.IsPopup, req.IsTop)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, InternalServerErrorResponse())
+		respondInternalServer(c)
 		return
 	}
 
@@ -60,19 +60,19 @@ func (h *AnnouncementHandler) UpdateAnnouncement(c *gin.Context) {
 	idStr := c.Param("id")
 	id, err := strconv.ParseUint(idStr, 10, 32)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, ErrorResponse{Message: "无效的ID"})
+		respondError(c, http.StatusBadRequest, "无效的ID")
 		return
 	}
 
 	var req UpdateAnnouncementRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, ErrorResponse{Message: "请求参数错误: " + err.Error()})
+		respondError(c, http.StatusBadRequest, "请求参数错误: "+err.Error())
 		return
 	}
 
 	announcement, err := h.announcementService.UpdateAnnouncement(uint(id), req.Title, req.Content, req.IsPopup, req.IsTop, req.IsPublished)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, InternalServerErrorResponse())
+		respondInternalServer(c)
 		return
 	}
 
@@ -84,12 +84,12 @@ func (h *AnnouncementHandler) DeleteAnnouncement(c *gin.Context) {
 	idStr := c.Param("id")
 	id, err := strconv.ParseUint(idStr, 10, 32)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, ErrorResponse{Message: "无效的ID"})
+		respondError(c, http.StatusBadRequest, "无效的ID")
 		return
 	}
 
 	if err := h.announcementService.DeleteAnnouncement(uint(id)); err != nil {
-		c.JSON(http.StatusInternalServerError, InternalServerErrorResponse())
+		respondInternalServer(c)
 		return
 	}
 
@@ -101,13 +101,13 @@ func (h *AnnouncementHandler) GetAnnouncement(c *gin.Context) {
 	idStr := c.Param("id")
 	id, err := strconv.ParseUint(idStr, 10, 32)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, ErrorResponse{Message: "无效的ID"})
+		respondError(c, http.StatusBadRequest, "无效的ID")
 		return
 	}
 
 	announcement, err := h.announcementService.GetAnnouncement(uint(id))
 	if err != nil {
-		c.JSON(http.StatusNotFound, ErrorResponse{Message: "公告不存在"})
+		respondError(c, http.StatusNotFound, "公告不存在")
 		return
 	}
 
@@ -120,7 +120,7 @@ func (h *AnnouncementHandler) GetAnnouncement(c *gin.Context) {
 func (h *AnnouncementHandler) GetAllAnnouncements(c *gin.Context) {
 	announcements, err := h.announcementService.GetAllAnnouncements()
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, InternalServerErrorResponse())
+		respondInternalServer(c)
 		return
 	}
 
@@ -134,7 +134,7 @@ func (h *AnnouncementHandler) GetAllAnnouncements(c *gin.Context) {
 func (h *AnnouncementHandler) GetPublishedAnnouncements(c *gin.Context) {
 	announcements, err := h.announcementService.GetPublishedAnnouncements()
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, InternalServerErrorResponse())
+		respondInternalServer(c)
 		return
 	}
 

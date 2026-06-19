@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"net/http"
@@ -11,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"caiyun/internal/cache"
 	"caiyun/internal/core/sms"
 	"caiyun/internal/models"
 	"caiyun/internal/services"
@@ -22,8 +24,12 @@ import (
 type AccountHandler struct {
 	accountService *services.AccountService
 	taskService    *services.TaskService
-	smsRateLimiter *SMSRateLimiter // 短信发送频率限制器
+	smsRateLimiter *SMSRateLimiter   // 短信发送频率限制器
+	redisCache     *cache.RedisCache // 分布式限流用，nil 时回退到内存
 }
+
+// phoneRe 手机号正则（中国大陆 11 位手机号），包级变量避免每次请求重新编译。
+var phoneRe = regexp.MustCompile(`^1[3-9]\d{9}$`)
 
 // SMSRateLimiter 短信发送频率限制器（内存实现）
 type SMSRateLimiter struct {
@@ -31,6 +37,8 @@ type SMSRateLimiter struct {
 	records  map[string]*SMSRecord // key: phone
 	duration time.Duration         // 时间窗口
 	limit    int                   // 最大次数
+	stopCh   chan struct{}
+	stopOnce sync.Once
 }
 
 // SMSRecord 短信发送记录
@@ -40,13 +48,28 @@ type SMSRecord struct {
 }
 
 // NewAccountHandler 创建账号处理器
-func NewAccountHandler(accountService *services.AccountService, taskService *services.TaskService) *AccountHandler {
+func NewAccountHandler(accountService *services.AccountService, taskService *services.TaskService, redisCache ...*cache.RedisCache) *AccountHandler {
+	var rc *cache.RedisCache
+	if len(redisCache) > 0 {
+		rc = redisCache[0]
+	}
 	handler := &AccountHandler{
 		accountService: accountService,
 		taskService:    taskService,
 		smsRateLimiter: NewSMSRateLimiter(5*time.Minute, 1), // 5 分钟内最多 1 次
+		redisCache:     rc,
 	}
 	return handler
+}
+
+// Close 释放 SMSRateLimiter 的后台清理协程，应在优雅退出时调用。
+func (h *AccountHandler) Close() {
+	if h == nil {
+		return
+	}
+	if h.smsRateLimiter != nil {
+		h.smsRateLimiter.Stop()
+	}
 }
 
 // NewSMSRateLimiter 创建短信频率限制器
@@ -55,6 +78,7 @@ func NewSMSRateLimiter(duration time.Duration, limit int) *SMSRateLimiter {
 		records:  make(map[string]*SMSRecord),
 		duration: duration,
 		limit:    limit,
+		stopCh:   make(chan struct{}),
 	}
 	// 启动后台清理任务，每分钟清理一次过期记录
 	go limiter.cleanupLoop()
@@ -64,9 +88,24 @@ func NewSMSRateLimiter(duration time.Duration, limit int) *SMSRateLimiter {
 // cleanupLoop 定期清理过期记录
 func (rl *SMSRateLimiter) cleanupLoop() {
 	ticker := time.NewTicker(1 * time.Minute)
-	for range ticker.C {
-		rl.cleanup()
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			rl.cleanup()
+		case <-rl.stopCh:
+			return
+		}
 	}
+}
+
+func (rl *SMSRateLimiter) Stop() {
+	if rl == nil {
+		return
+	}
+	rl.stopOnce.Do(func() {
+		close(rl.stopCh)
+	})
 }
 
 // cleanup 清理过期的发送记录
@@ -138,6 +177,35 @@ func formatWaitTime(d time.Duration) string {
 	return fmt.Sprintf("%d秒", seconds)
 }
 
+// checkSMSRateLimit 检查 SMS 发送频率，优先使用 Redis 分布式限流，回退到内存。
+func (h *AccountHandler) checkSMSRateLimit(phone string) (allowed bool, waitTime string) {
+	if h.redisCache != nil {
+		key := fmt.Sprintf("sms_rate:%s", phone)
+		ok, _, ttl, err := h.redisCache.RateLimitCheck(key, 1, 5*time.Minute)
+		if err != nil {
+			log.Printf("[checkSMSRateLimit] Redis 限流失败，回退内存: %v", err)
+			ok2, msg := h.smsRateLimiter.Allow(phone)
+			return ok2, msg
+		}
+		if ok {
+			return true, ""
+		}
+		return false, formatWaitTime(ttl)
+	}
+	return h.smsRateLimiter.Allow(phone)
+}
+
+// resetSMSRateLimit 重置 SMS 限流记录（Redis + 内存双清）。
+func (h *AccountHandler) resetSMSRateLimit(phone string) {
+	h.smsRateLimiter.Reset(phone)
+	if h.redisCache != nil {
+		key := fmt.Sprintf("sms_rate:%s", phone)
+		if err := h.redisCache.Del(key); err != nil {
+			log.Printf("[resetSMSRateLimit] 清除 Redis 限流失败: %v", err)
+		}
+	}
+}
+
 func normalizeSMSStatusError(errMsg string) (message string, retryable bool) {
 	errMsg = strings.TrimSpace(errMsg)
 	switch {
@@ -181,26 +249,28 @@ type ListAccountsResponse struct {
 // @Failure 400 {object} ErrorResponse
 // @Router /api/accounts [post]
 func (h *AccountHandler) CreateAccount(c *gin.Context) {
-	// 获取用户ID
-	userID, exists := c.Get("user_id")
-	if !exists {
-		c.JSON(http.StatusUnauthorized, ErrorResponse{Message: "未授权"})
+	userID, ok := getUserID(c)
+	if !ok {
 		return
 	}
 
 	var req CreateAccountRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, ErrorResponse{Message: err.Error()})
+		respondError(c, http.StatusBadRequest, err.Error())
 		return
 	}
 
-	account, err := h.accountService.CreateAccount(userID.(uint), &req)
+	account, err := h.accountService.CreateAccount(userID, &req)
 	if err != nil {
-		if err == services.ErrAccountExists {
-			c.JSON(http.StatusConflict, ErrorResponse{Message: "账号已存在"})
+		if err == services.ErrInvalidPhone {
+			respondError(c, http.StatusBadRequest, "手机号格式不正确")
 			return
 		}
-		c.JSON(http.StatusInternalServerError, InternalServerErrorResponse())
+		if err == services.ErrAccountExists {
+			respondError(c, http.StatusConflict, "账号已存在")
+			return
+		}
+		respondInternalServer(c)
 		return
 	}
 
@@ -219,10 +289,8 @@ func (h *AccountHandler) CreateAccount(c *gin.Context) {
 // @Failure 401 {object} ErrorResponse
 // @Router /api/accounts [get]
 func (h *AccountHandler) ListAccounts(c *gin.Context) {
-	// 获取用户ID
-	userID, exists := c.Get("user_id")
-	if !exists {
-		c.JSON(http.StatusUnauthorized, ErrorResponse{Message: "未授权"})
+	userID, ok := getUserID(c)
+	if !ok {
 		return
 	}
 
@@ -238,9 +306,9 @@ func (h *AccountHandler) ListAccounts(c *gin.Context) {
 		pageSize = 10
 	}
 
-	accounts, total, err := h.accountService.ListAccounts(userID.(uint), page, pageSize, phone)
+	accounts, total, err := h.accountService.ListAccounts(userID, page, pageSize, phone)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, InternalServerErrorResponse())
+		respondInternalServer(c)
 		return
 	}
 
@@ -263,27 +331,25 @@ func (h *AccountHandler) ListAccounts(c *gin.Context) {
 // @Failure 404 {object} ErrorResponse
 // @Router /api/accounts/{id} [get]
 func (h *AccountHandler) GetAccount(c *gin.Context) {
-	// 获取用户ID
-	userID, exists := c.Get("user_id")
-	if !exists {
-		c.JSON(http.StatusUnauthorized, ErrorResponse{Message: "未授权"})
+	userID, ok := getUserID(c)
+	if !ok {
 		return
 	}
 
 	// 获取账号ID
 	accountID, err := strconv.ParseUint(c.Param("id"), 10, 32)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, ErrorResponse{Message: "无效的账号ID"})
+		respondError(c, http.StatusBadRequest, "无效的账号ID")
 		return
 	}
 
-	account, err := h.accountService.GetAccount(userID.(uint), uint(accountID))
+	account, err := h.accountService.GetAccount(userID, uint(accountID))
 	if err != nil {
 		if err == services.ErrAccountNotFound {
-			c.JSON(http.StatusNotFound, ErrorResponse{Message: "账号不存在"})
+			respondError(c, http.StatusNotFound, "账号不存在")
 			return
 		}
-		c.JSON(http.StatusInternalServerError, InternalServerErrorResponse())
+		respondInternalServer(c)
 		return
 	}
 
@@ -303,37 +369,39 @@ func (h *AccountHandler) GetAccount(c *gin.Context) {
 // @Failure 404 {object} ErrorResponse
 // @Router /api/accounts/{id} [put]
 func (h *AccountHandler) UpdateAccount(c *gin.Context) {
-	// 获取用户ID
-	userID, exists := c.Get("user_id")
-	if !exists {
-		c.JSON(http.StatusUnauthorized, ErrorResponse{Message: "未授权"})
+	userID, ok := getUserID(c)
+	if !ok {
 		return
 	}
 
 	// 获取账号ID
 	accountID, err := strconv.ParseUint(c.Param("id"), 10, 32)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, ErrorResponse{Message: "无效的账号ID"})
+		respondError(c, http.StatusBadRequest, "无效的账号ID")
 		return
 	}
 
 	var req UpdateAccountRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, ErrorResponse{Message: err.Error()})
+		respondError(c, http.StatusBadRequest, err.Error())
 		return
 	}
 
-	account, err := h.accountService.UpdateAccount(userID.(uint), uint(accountID), &req)
+	account, err := h.accountService.UpdateAccount(userID, uint(accountID), &req)
 	if err != nil {
 		if err == services.ErrAccountNotFound {
-			c.JSON(http.StatusNotFound, ErrorResponse{Message: "账号不存在"})
+			respondError(c, http.StatusNotFound, "账号不存在")
+			return
+		}
+		if err == services.ErrInvalidPhone {
+			respondError(c, http.StatusBadRequest, "手机号格式不正确")
 			return
 		}
 		if err == services.ErrAccountExists {
-			c.JSON(http.StatusConflict, ErrorResponse{Message: "账号已存在"})
+			respondError(c, http.StatusConflict, "账号已存在")
 			return
 		}
-		c.JSON(http.StatusInternalServerError, InternalServerErrorResponse())
+		respondInternalServer(c)
 		return
 	}
 
@@ -351,26 +419,24 @@ func (h *AccountHandler) UpdateAccount(c *gin.Context) {
 // @Failure 404 {object} ErrorResponse
 // @Router /api/accounts/{id} [delete]
 func (h *AccountHandler) DeleteAccount(c *gin.Context) {
-	// 获取用户ID
-	userID, exists := c.Get("user_id")
-	if !exists {
-		c.JSON(http.StatusUnauthorized, ErrorResponse{Message: "未授权"})
+	userID, ok := getUserID(c)
+	if !ok {
 		return
 	}
 
 	// 获取账号ID
 	accountID, err := strconv.ParseUint(c.Param("id"), 10, 32)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, ErrorResponse{Message: "无效的账号ID"})
+		respondError(c, http.StatusBadRequest, "无效的账号ID")
 		return
 	}
 
-	if err := h.accountService.DeleteAccount(userID.(uint), uint(accountID)); err != nil {
+	if err := h.accountService.DeleteAccount(userID, uint(accountID)); err != nil {
 		if err == services.ErrAccountNotFound {
-			c.JSON(http.StatusNotFound, ErrorResponse{Message: "账号不存在"})
+			respondError(c, http.StatusNotFound, "账号不存在")
 			return
 		}
-		c.JSON(http.StatusInternalServerError, InternalServerErrorResponse())
+		respondInternalServer(c)
 		return
 	}
 
@@ -390,29 +456,27 @@ func (h *AccountHandler) DeleteAccount(c *gin.Context) {
 // @Failure 404 {object} ErrorResponse
 // @Router /api/accounts/{id}/status [put]
 func (h *AccountHandler) SetAccountStatus(c *gin.Context) {
-	// 获取用户ID
-	userID, exists := c.Get("user_id")
-	if !exists {
-		c.JSON(http.StatusUnauthorized, ErrorResponse{Message: "未授权"})
+	userID, ok := getUserID(c)
+	if !ok {
 		return
 	}
 
 	// 获取账号ID
 	accountID, err := strconv.ParseUint(c.Param("id"), 10, 32)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, ErrorResponse{Message: "无效的账号ID"})
+		respondError(c, http.StatusBadRequest, "无效的账号ID")
 		return
 	}
 
 	// 获取状态
 	isActive := c.Query("is_active") == "true"
 
-	if err := h.accountService.SetAccountStatus(userID.(uint), uint(accountID), isActive); err != nil {
+	if err := h.accountService.SetAccountStatus(userID, uint(accountID), isActive); err != nil {
 		if err == services.ErrAccountNotFound {
-			c.JSON(http.StatusNotFound, ErrorResponse{Message: "账号不存在"})
+			respondError(c, http.StatusNotFound, "账号不存在")
 			return
 		}
-		c.JSON(http.StatusInternalServerError, InternalServerErrorResponse())
+		respondInternalServer(c)
 		return
 	}
 
@@ -430,28 +494,26 @@ func (h *AccountHandler) SetAccountStatus(c *gin.Context) {
 // @Failure 404 {object} ErrorResponse
 // @Router /api/accounts/{id}/refresh [post]
 func (h *AccountHandler) RefreshToken(c *gin.Context) {
-	// 获取用户ID
-	userID, exists := c.Get("user_id")
-	if !exists {
-		c.JSON(http.StatusUnauthorized, ErrorResponse{Message: "未授权"})
+	userID, ok := getUserID(c)
+	if !ok {
 		return
 	}
 
 	// 获取账号ID
 	accountID, err := strconv.ParseUint(c.Param("id"), 10, 32)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, ErrorResponse{Message: "无效的账号ID"})
+		respondError(c, http.StatusBadRequest, "无效的账号ID")
 		return
 	}
 
 	// 获取账号
-	account, err := h.accountService.GetAccount(userID.(uint), uint(accountID))
+	account, err := h.accountService.GetAccount(userID, uint(accountID))
 	if err != nil {
 		if err == services.ErrAccountNotFound {
-			c.JSON(http.StatusNotFound, ErrorResponse{Message: "账号不存在"})
+			respondError(c, http.StatusNotFound, "账号不存在")
 			return
 		}
-		c.JSON(http.StatusInternalServerError, InternalServerErrorResponse())
+		respondInternalServer(c)
 		return
 	}
 
@@ -459,14 +521,14 @@ func (h *AccountHandler) RefreshToken(c *gin.Context) {
 	if err := h.accountService.RefreshToken(account); err != nil {
 		// 服务端打日志便于排查 500
 		log.Printf("[RefreshToken] account_id=%d phone=%s err=%v", accountID, account.Phone, err)
-		c.JSON(http.StatusInternalServerError, InternalServerErrorResponse())
+		respondInternalServer(c)
 		return
 	}
 
 	// 重新获取更新后的账号信息
-	updatedAccount, err := h.accountService.GetAccount(userID.(uint), uint(accountID))
+	updatedAccount, err := h.accountService.GetAccount(userID, uint(accountID))
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, InternalServerErrorResponse())
+		respondInternalServer(c)
 		return
 	}
 
@@ -484,34 +546,32 @@ func (h *AccountHandler) RefreshToken(c *gin.Context) {
 // @Failure 404 {object} ErrorResponse
 // @Router /api/accounts/{id}/trigger [post]
 func (h *AccountHandler) TriggerTask(c *gin.Context) {
-	// 获取用户ID
-	userID, exists := c.Get("user_id")
-	if !exists {
-		c.JSON(http.StatusUnauthorized, ErrorResponse{Message: "未授权"})
+	userID, ok := getUserID(c)
+	if !ok {
 		return
 	}
 
 	// 获取账号ID
 	accountID, err := strconv.ParseUint(c.Param("id"), 10, 32)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, ErrorResponse{Message: "无效的账号ID"})
+		respondError(c, http.StatusBadRequest, "无效的账号ID")
 		return
 	}
 
 	// 验证账号存在性和权限
-	account, err := h.accountService.GetAccount(userID.(uint), uint(accountID))
+	account, err := h.accountService.GetAccount(userID, uint(accountID))
 	if err != nil {
 		if err == services.ErrAccountNotFound {
-			c.JSON(http.StatusNotFound, ErrorResponse{Message: "账号不存在"})
+			respondError(c, http.StatusNotFound, "账号不存在")
 			return
 		}
-		c.JSON(http.StatusInternalServerError, InternalServerErrorResponse())
+		respondInternalServer(c)
 		return
 	}
 
 	// 检查今日是否已手动执行过
 	if h.taskService.HasExecutedToday(account.ID) {
-		c.JSON(http.StatusTooManyRequests, ErrorResponse{Message: "该账号今日已执行过任务，每天限手动执行一次"})
+		respondError(c, http.StatusTooManyRequests, "该账号今日已执行过任务，每天限手动执行一次")
 		return
 	}
 
@@ -521,15 +581,17 @@ func (h *AccountHandler) TriggerTask(c *gin.Context) {
 		// Token刷新失败不阻止任务执行，继续尝试
 	}
 
-	// 直接在goroutine中执行任务（不依赖worker进程）
+	// 直接在goroutine中执行任务（不依赖worker进程），添加超时控制防止永久阻塞。
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
 				log.Printf("[TriggerTask] 账号 %d 执行 panic: %v\n%s", account.ID, r, debug.Stack())
 			}
 		}()
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		defer cancel()
 		log.Printf("[TriggerTask] 开始执行账号 %d 的任务", account.ID)
-		if _, err := h.taskService.ExecuteTaskForAccount(account); err != nil {
+		if _, err := h.taskService.ExecuteTaskForAccountContext(ctx, account); err != nil {
 			log.Printf("[TriggerTask] 账号 %d 任务执行失败: %v", account.ID, err)
 		} else {
 			log.Printf("[TriggerTask] 账号 %d 任务执行完成", account.ID)
@@ -565,24 +627,22 @@ type SmsLoginRequest struct {
 func (h *AccountHandler) SendSmsCode(c *gin.Context) {
 	var req SendSmsCodeRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, ErrorResponse{Message: "请输入手机号"})
+		respondError(c, http.StatusBadRequest, "请输入手机号")
 		return
 	}
+	req.Phone = strings.TrimSpace(req.Phone)
 
 	// 验证手机号格式（11 位，以 1 开头）
-	phoneRe := regexp.MustCompile(`^1\d{10}$`)
 	if !phoneRe.MatchString(req.Phone) {
-		c.JSON(http.StatusBadRequest, ErrorResponse{Message: "手机号格式不正确"})
+		respondError(c, http.StatusBadRequest, "手机号格式不正确")
 		return
 	}
 
-	// 检查发送频率限制
-	allowed, waitTime := h.smsRateLimiter.Allow(req.Phone)
+	// 检查发送频率限制（优先使用 Redis 分布式限流，回退到内存限流）
+	allowed, waitTime := h.checkSMSRateLimit(req.Phone)
 	if !allowed {
 		log.Printf("[SendSmsCode] 触发频率限制 phone=%s wait=%s", req.Phone, waitTime)
-		c.JSON(http.StatusTooManyRequests, ErrorResponse{
-			Message: fmt.Sprintf("操作过于频繁，请等待%s后再试", waitTime),
-		})
+		respondError(c, http.StatusTooManyRequests, fmt.Sprintf("操作过于频繁，请等待%s后再试", waitTime))
 		return
 	}
 
@@ -590,7 +650,7 @@ func (h *AccountHandler) SendSmsCode(c *gin.Context) {
 	taskID, err := sms.SendCode(req.Phone)
 	if err != nil {
 		log.Printf("[SendSmsCode] 发送验证码失败 phone=%s: %v", req.Phone, err)
-		h.smsRateLimiter.Reset(req.Phone)
+		h.resetSMSRateLimit(req.Phone)
 		// 提供更友好的错误提示
 		errMsg := err.Error()
 		if strings.Contains(errMsg, "请求失败") || strings.Contains(errMsg, "连接") {
@@ -598,17 +658,15 @@ func (h *AccountHandler) SendSmsCode(c *gin.Context) {
 		} else if strings.Contains(errMsg, "频率") {
 			errMsg = "发送过于频繁，请稍后再试"
 		}
-		c.JSON(http.StatusInternalServerError, InternalServerErrorResponse())
+		respondError(c, http.StatusInternalServerError, errMsg)
 		return
 	}
 
 	// 如果taskID为空，说明SMS服务没有返回会话ID
 	if taskID == "" {
 		log.Printf("[SendSmsCode] SMS服务未返回task_id phone=%s", req.Phone)
-		h.smsRateLimiter.Reset(req.Phone)
-		c.JSON(http.StatusInternalServerError, ErrorResponse{
-			Message: "短信服务异常：未获取到验证码会话ID，请稍后重试或联系管理员",
-		})
+		h.resetSMSRateLimit(req.Phone)
+		respondError(c, http.StatusInternalServerError, "短信服务异常：未获取到验证码会话ID，请稍后重试或联系管理员")
 		return
 	}
 
@@ -628,12 +686,11 @@ func (h *AccountHandler) SendSmsCode(c *gin.Context) {
 // @Failure 400 {object} ErrorResponse
 // @Router /api/accounts/sms/status/{phone} [get]
 func (h *AccountHandler) GetSmsStatus(c *gin.Context) {
-	phone := c.Param("phone")
+	phone := strings.TrimSpace(c.Param("phone"))
 
 	// 验证手机号格式
-	phoneRe := regexp.MustCompile(`^1\d{10}$`)
 	if !phoneRe.MatchString(phone) {
-		c.JSON(http.StatusBadRequest, ErrorResponse{Message: "手机号格式不正确"})
+		respondError(c, http.StatusBadRequest, "手机号格式不正确")
 		return
 	}
 
@@ -643,7 +700,7 @@ func (h *AccountHandler) GetSmsStatus(c *gin.Context) {
 		log.Printf("[GetSmsStatus] 查询状态失败 phone=%s: %v", phone, err)
 		errMsg, retryable := normalizeSMSStatusError(err.Error())
 		if retryable {
-			h.smsRateLimiter.Reset(phone)
+			h.resetSMSRateLimit(phone)
 		}
 		apiresponse.Success(c, map[string]interface{}{
 			"phone":     phone,
@@ -668,7 +725,7 @@ func (h *AccountHandler) GetSmsStatus(c *gin.Context) {
 		statusMessage = "验证码发送成功，请输入验证码"
 	}
 	if retryable {
-		h.smsRateLimiter.Reset(phone)
+		h.resetSMSRateLimit(phone)
 	}
 
 	apiresponse.Success(c, map[string]interface{}{
@@ -690,23 +747,21 @@ func (h *AccountHandler) GetSmsStatus(c *gin.Context) {
 // @Failure 400 {object} ErrorResponse
 // @Router /api/accounts/sms/verify [post]
 func (h *AccountHandler) SmsLogin(c *gin.Context) {
-	// 获取用户ID
-	userID, exists := c.Get("user_id")
-	if !exists {
-		c.JSON(http.StatusUnauthorized, ErrorResponse{Message: "未授权"})
+	userID, ok := getUserID(c)
+	if !ok {
 		return
 	}
 
 	var req SmsLoginRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, ErrorResponse{Message: "请输入手机号、验证码，并先发送验证码获取会话"})
+		respondError(c, http.StatusBadRequest, "请输入手机号、验证码，并先发送验证码获取会话")
 		return
 	}
+	req.Phone = strings.TrimSpace(req.Phone)
 
 	// 验证手机号格式
-	phoneRe := regexp.MustCompile(`^1\d{10}$`)
 	if !phoneRe.MatchString(req.Phone) {
-		c.JSON(http.StatusBadRequest, ErrorResponse{Message: "手机号格式不正确"})
+		respondError(c, http.StatusBadRequest, "手机号格式不正确")
 		return
 	}
 
@@ -721,15 +776,15 @@ func (h *AccountHandler) SmsLogin(c *gin.Context) {
 		} else if strings.Contains(errMsg, "验证码错误") || strings.Contains(errMsg, "不正确") {
 			errMsg = "验证码错误，请检查后重试"
 		} else if strings.Contains(errMsg, "过期") || strings.Contains(errMsg, "失效") {
-			h.smsRateLimiter.Reset(req.Phone)
+			h.resetSMSRateLimit(req.Phone)
 			errMsg = "验证码已过期，请重新获取"
 		} else if strings.Contains(errMsg, "未找到") || strings.Contains(errMsg, "不存在") {
-			h.smsRateLimiter.Reset(req.Phone)
+			h.resetSMSRateLimit(req.Phone)
 			errMsg = "验证码会话不存在，请重新发送验证码"
 		} else {
 			errMsg = "验证失败: " + errMsg
 		}
-		c.JSON(http.StatusBadRequest, ErrorResponse{Message: errMsg})
+		respondError(c, http.StatusBadRequest, errMsg)
 		return
 	}
 
@@ -740,13 +795,17 @@ func (h *AccountHandler) SmsLogin(c *gin.Context) {
 		Remark: req.Remark,
 	}
 
-	account, err := h.accountService.CreateAccount(userID.(uint), createReq)
+	account, err := h.accountService.CreateAccount(userID, createReq)
 	if err != nil {
-		if err == services.ErrAccountExists {
-			c.JSON(http.StatusConflict, ErrorResponse{Message: "该手机号账号已存在"})
+		if err == services.ErrInvalidPhone {
+			respondError(c, http.StatusBadRequest, "手机号格式不正确")
 			return
 		}
-		c.JSON(http.StatusInternalServerError, InternalServerErrorResponse())
+		if err == services.ErrAccountExists {
+			respondError(c, http.StatusConflict, "该手机号账号已存在")
+			return
+		}
+		respondInternalServer(c)
 		return
 	}
 

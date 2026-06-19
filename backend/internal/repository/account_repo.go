@@ -2,6 +2,7 @@ package repository
 
 import (
 	"caiyun/internal/models"
+	"context"
 
 	"gorm.io/gorm"
 )
@@ -12,6 +13,14 @@ type AccountRepository struct {
 
 func NewAccountRepository(db *gorm.DB) *AccountRepository {
 	return &AccountRepository{db: db}
+}
+
+// WithContext 返回绑定到指定 context 的仓库副本，便于数据库操作响应请求取消和超时。
+func (r *AccountRepository) WithContext(ctx context.Context) *AccountRepository {
+	if ctx == nil {
+		return r
+	}
+	return &AccountRepository{db: r.db.WithContext(ctx)}
 }
 
 // Create 创建账号
@@ -57,7 +66,39 @@ func (r *AccountRepository) SearchAll(keyword string, limit int) ([]*models.Acco
 		query = query.Where("phone LIKE ? OR remark LIKE ?", "%"+keyword+"%", "%"+keyword+"%")
 	}
 
-	err := query.Limit(limit).Find(&accounts).Error
+	err := query.Preload("User").Limit(limit).Find(&accounts).Error
+	return accounts, err
+}
+
+// CountActive 统计当前未删除且启用的账号数量。
+func (r *AccountRepository) CountActive() (int64, error) {
+	var total int64
+	err := r.db.Model(&models.Account{}).
+		Where("is_active = ?", true).
+		Count(&total).Error
+	return total, err
+}
+
+// SumCloudCount 统计所有未删除账号当前云朵总数。
+func (r *AccountRepository) SumCloudCount() (int, error) {
+	var total int
+	err := r.db.Model(&models.Account{}).
+		Select("COALESCE(SUM(cloud_count), 0)").
+		Scan(&total).Error
+	return total, err
+}
+
+// TopByCloudCount 按云朵数量倒序返回账号榜单，预加载归属用户以避免 N+1 查询。
+func (r *AccountRepository) TopByCloudCount(limit int) ([]*models.Account, error) {
+	var accounts []*models.Account
+	if limit <= 0 {
+		limit = 20
+	}
+	err := r.db.Model(&models.Account{}).
+		Preload("User").
+		Order("cloud_count DESC").
+		Limit(limit).
+		Find(&accounts).Error
 	return accounts, err
 }
 
@@ -131,6 +172,20 @@ func (r *AccountRepository) FindActiveAccounts() ([]*models.Account, error) {
 	return accounts, err
 }
 
+// FindActiveAccountsPaged 分页查找激活账号，用于 Worker/统计任务分批处理，避免一次性全表加载。
+func (r *AccountRepository) FindActiveAccountsPaged(offset, limit int) ([]*models.Account, error) {
+	var accounts []*models.Account
+	if limit <= 0 || limit > 1000 {
+		limit = 200
+	}
+	err := r.db.Where("is_active = ?", true).
+		Order("id ASC").
+		Offset(offset).
+		Limit(limit).
+		Find(&accounts).Error
+	return accounts, err
+}
+
 // FindActiveAccountsByUserID 查找指定用户的所有激活账号
 func (r *AccountRepository) FindActiveAccountsByUserID(userID uint) ([]*models.Account, error) {
 	var accounts []*models.Account
@@ -151,6 +206,47 @@ func (r *AccountRepository) UpdateToken(id uint, token string) error {
 // UpdateJWTToken 更新JWT Token
 func (r *AccountRepository) UpdateJWTToken(id uint, jwtToken string) error {
 	return r.db.Model(&models.Account{}).Where("id = ?", id).Update("jwt_token", jwtToken).Error
+}
+
+// UpdateAuthorizationFields 仅更新 authorization 刷新产生的字段，避免 Save 全量覆盖账号其他并发变更。
+func (r *AccountRepository) UpdateAuthorizationFields(id uint, authValue, token, jwtToken, platform string, expireAt int64) error {
+	updates := map[string]interface{}{
+		"auth":            authValue,
+		"token":           token,
+		"expire_at":       expireAt,
+		"jwt_error_count": 0,
+	}
+	if jwtToken != "" {
+		updates["jwt_token"] = jwtToken
+	}
+	if platform != "" {
+		updates["platform"] = platform
+	}
+	return r.db.Model(&models.Account{}).
+		Where("id = ?", id).
+		Updates(updates).Error
+}
+
+// IncrementJWTErrorCount 原子自增 JWT 错误计数，并返回更新后的值。
+func (r *AccountRepository) IncrementJWTErrorCount(id uint) (int, error) {
+	result := r.db.Model(&models.Account{}).
+		Where("id = ?", id).
+		UpdateColumn("jwt_error_count", gorm.Expr("jwt_error_count + ?", 1))
+	if result.Error != nil {
+		return 0, result.Error
+	}
+	var account models.Account
+	if err := r.db.Select("jwt_error_count").First(&account, id).Error; err != nil {
+		return 0, err
+	}
+	return account.JWTErrorCount, nil
+}
+
+// ResetJWTErrorCount 原子重置 JWT 错误计数。
+func (r *AccountRepository) ResetJWTErrorCount(id uint) error {
+	return r.db.Model(&models.Account{}).
+		Where("id = ? AND jwt_error_count > 0", id).
+		UpdateColumn("jwt_error_count", 0).Error
 }
 
 // UpdateExpireAt 更新过期时间

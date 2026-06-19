@@ -1,6 +1,7 @@
 package queue
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"strconv"
@@ -10,6 +11,8 @@ import (
 	"caiyun/internal/cache"
 	"caiyun/internal/models"
 )
+
+var ErrQueueTimeout = errors.New("队列超时")
 
 const (
 	TaskQueueBackendList    = "list"

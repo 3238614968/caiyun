@@ -66,21 +66,52 @@ const router = createRouter({
           meta: { title: '抢兑记录' }
         }
       ]
+    },
+    {
+      path: '/:pathMatch(.*)*',
+      name: 'NotFound',
+      component: () => import('@/views/NotFound.vue'),
+      meta: { requiresAuth: false }
     }
   ]
 })
 
-router.beforeEach((to, _from, next) => {
+function safeRedirect(value: unknown): string {
+  const redirect = Array.isArray(value) ? value[0] : value
+  if (typeof redirect !== 'string') {
+    return '/'
+  }
+  if (!redirect.startsWith('/') || redirect.startsWith('//') || redirect.includes('\\')) {
+    return '/'
+  }
+  return redirect
+}
+
+router.beforeEach(async (to, _from, next) => {
   const authStore = useAuthStore()
+  const shouldProbeSession = !authStore.isAuthenticated
+    && !authStore.hasCheckedSession
+    && (to.meta.requiresAuth || to.name === 'Login' || to.name === 'Register')
+
+  if (shouldProbeSession) {
+    try {
+      await authStore.refreshProfile()
+    } catch {
+      // 未登录或 Cookie 已失效时保持匿名状态；/api/auth/me 的 401 不弹全局错误。
+    }
+  }
+
   const isAuthenticated = authStore.isAuthenticated
   const userRole = authStore.user?.role
 
   if (to.meta.requiresAuth && !isAuthenticated) {
-    next('/login')
+    // 未登录访问受保护页面 → 携带 redirect，登录后可回到原页面。
+    next({ name: 'Login', query: to.fullPath !== '/' ? { redirect: to.fullPath } : undefined })
   } else if (to.meta.requiresAdmin && userRole !== 'admin') {
     next('/')
   } else if ((to.name === 'Login' || to.name === 'Register') && isAuthenticated) {
-    next('/')
+    // 已登录访问登录/注册页：优先跳到 redirect，否则首页。
+    next(safeRedirect(to.query.redirect))
   } else {
     next()
   }

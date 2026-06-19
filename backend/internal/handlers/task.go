@@ -6,11 +6,13 @@ import (
 	"caiyun/internal/queue"
 	"caiyun/internal/services"
 	"caiyun/pkg/response"
+	"context"
 	"fmt"
 	"net/http"
 	"runtime/debug"
 	"strconv"
 	"sync"
+	"time"
 
 	"github.com/gin-gonic/gin"
 )
@@ -64,7 +66,7 @@ func (h *TaskHandler) GetTaskLogs(c *gin.Context) {
 	// 获取用户ID
 	userID, exists := c.Get("user_id")
 	if !exists {
-		c.JSON(http.StatusUnauthorized, ErrorResponse{Message: "未授权"})
+		respondError(c, http.StatusUnauthorized, "未授权")
 		return
 	}
 
@@ -84,7 +86,7 @@ func (h *TaskHandler) GetTaskLogs(c *gin.Context) {
 	if accountIDStr := c.Query("account_id"); accountIDStr != "" {
 		id, err := strconv.ParseUint(accountIDStr, 10, 32)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, ErrorResponse{Message: "无效的账号ID"})
+			respondError(c, http.StatusBadRequest, "无效的账号ID")
 			return
 		}
 		accountIDUint := uint(id)
@@ -93,7 +95,7 @@ func (h *TaskHandler) GetTaskLogs(c *gin.Context) {
 
 	taskLogs, total, err := h.taskService.GetTaskLogs(userID.(uint), accountID, page, pageSize)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, InternalServerErrorResponse())
+		respondInternalServer(c)
 		return
 	}
 
@@ -122,13 +124,13 @@ func (h *TaskHandler) GetDashboard(c *gin.Context) {
 	// 获取用户ID
 	userID, exists := c.Get("user_id")
 	if !exists {
-		c.JSON(http.StatusUnauthorized, ErrorResponse{Message: "未授权"})
+		respondError(c, http.StatusUnauthorized, "未授权")
 		return
 	}
 
 	dashboard, err := h.cloudService.GetDashboard(userID.(uint))
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, InternalServerErrorResponse())
+		respondInternalServer(c)
 		return
 	}
 
@@ -158,7 +160,7 @@ func (h *TaskHandler) GetCloudStats(c *gin.Context) {
 	// 获取用户ID
 	userID, exists := c.Get("user_id")
 	if !exists {
-		c.JSON(http.StatusUnauthorized, ErrorResponse{Message: "未授权"})
+		respondError(c, http.StatusUnauthorized, "未授权")
 		return
 	}
 
@@ -182,7 +184,7 @@ func (h *TaskHandler) GetCloudStats(c *gin.Context) {
 		// 获取指定账号的统计
 		accountID, err := strconv.ParseUint(accountIDStr, 10, 32)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, ErrorResponse{Message: "无效的账号ID"})
+			respondError(c, http.StatusBadRequest, "无效的账号ID")
 			return
 		}
 		cloudStats, total, err = h.cloudService.GetCloudStatsByAccount(userID.(uint), uint(accountID), page, pageSize)
@@ -192,7 +194,7 @@ func (h *TaskHandler) GetCloudStats(c *gin.Context) {
 	}
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, InternalServerErrorResponse())
+		respondInternalServer(c)
 		return
 	}
 
@@ -217,7 +219,7 @@ func (h *TaskHandler) GetTrendData(c *gin.Context) {
 	// 获取用户ID
 	userID, exists := c.Get("user_id")
 	if !exists {
-		c.JSON(http.StatusUnauthorized, ErrorResponse{Message: "未授权"})
+		respondError(c, http.StatusUnauthorized, "未授权")
 		return
 	}
 
@@ -235,7 +237,7 @@ func (h *TaskHandler) GetTrendData(c *gin.Context) {
 		trendData, err = h.cloudService.GetTrendData(userID.(uint), days)
 	}
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, InternalServerErrorResponse())
+		respondInternalServer(c)
 		return
 	}
 
@@ -261,14 +263,14 @@ func (h *TaskHandler) TriggerAllTasks(c *gin.Context) {
 	// 获取用户ID
 	userID, exists := c.Get("user_id")
 	if !exists {
-		c.JSON(http.StatusUnauthorized, ErrorResponse{Message: "未授权"})
+		respondError(c, http.StatusUnauthorized, "未授权")
 		return
 	}
 
 	// 获取用户的所有激活账号
 	accounts, err := h.accountService.GetActiveAccounts(userID.(uint))
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, InternalServerErrorResponse())
+		respondInternalServer(c)
 		return
 	}
 
@@ -323,8 +325,10 @@ func (h *TaskHandler) TriggerAllTasks(c *gin.Context) {
 				if tm != nil {
 					_ = tm.UpdateTaskProgress(acc.ID, monitorTaskType, 0.5, "账号鉴权刷新完成，开始执行任务")
 				}
-				// 执行任务
-				if _, err := h.taskService.ExecuteTaskForAccount(acc); err != nil {
+				// 执行任务，限制单账号执行时间，避免上游接口卡住导致后台 goroutine 永久占用。
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+				defer cancel()
+				if _, err := h.taskService.ExecuteTaskForAccountContext(ctx, acc); err != nil {
 					fmt.Printf("[TriggerAll] 账号 %d 执行失败: %v\n", acc.ID, err)
 					if tm != nil {
 						_ = tm.FailTask(acc.ID, monitorTaskType, err)
@@ -357,26 +361,26 @@ func (h *TaskHandler) CalculateStats(c *gin.Context) {
 	// 获取用户ID
 	userID, exists := c.Get("user_id")
 	if !exists {
-		c.JSON(http.StatusUnauthorized, ErrorResponse{Message: "未授权"})
+		respondError(c, http.StatusUnauthorized, "未授权")
 		return
 	}
 
 	if role, _ := c.Get("role"); role == "admin" {
 		// 管理员首页展示全局数据，手动计算时同步刷新全站账号快照。
 		if err := h.cloudService.CalculateDailyStats(); err != nil {
-			c.JSON(http.StatusInternalServerError, InternalServerErrorResponse())
+			respondInternalServer(c)
 			return
 		}
 	} else {
 		// 普通用户仅计算自己的每日统计，避免触发全站账号重算。
 		if err := h.cloudService.CalculateDailyStatsByUserID(userID.(uint)); err != nil {
-			c.JSON(http.StatusInternalServerError, InternalServerErrorResponse())
+			respondInternalServer(c)
 			return
 		}
 
 		// 更新差异值
 		if err := h.cloudService.UpdateCloudDiffs(userID.(uint)); err != nil {
-			c.JSON(http.StatusInternalServerError, InternalServerErrorResponse())
+			respondInternalServer(c)
 			return
 		}
 	}
@@ -396,13 +400,13 @@ func (h *TaskHandler) GetTotalCloudCount(c *gin.Context) {
 	// 获取用户ID
 	userID, exists := c.Get("user_id")
 	if !exists {
-		c.JSON(http.StatusUnauthorized, ErrorResponse{Message: "未授权"})
+		respondError(c, http.StatusUnauthorized, "未授权")
 		return
 	}
 
 	total, err := h.cloudService.GetTotalCloudCount(userID.(uint))
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, InternalServerErrorResponse())
+		respondInternalServer(c)
 		return
 	}
 
@@ -502,7 +506,7 @@ func (h *TaskHandler) GetTaskStatus(c *gin.Context) {
 	// 从最近的任务日志获取状态
 	userID, exists := c.Get("user_id")
 	if !exists {
-		c.JSON(http.StatusUnauthorized, ErrorResponse{Message: "未授权"})
+		respondError(c, http.StatusUnauthorized, "未授权")
 		return
 	}
 
