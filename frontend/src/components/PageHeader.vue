@@ -1,8 +1,15 @@
-﻿<template>
+<template>
   <div class="page-header">
     <div class="header-left">
-      <h2 class="page-title">{{ title }}</h2>
-      <p v-if="subtitle" class="page-subtitle">{{ subtitle }}</p>
+      <h2 class="page-title">
+        {{ title }}
+      </h2>
+      <p
+        v-if="subtitle"
+        class="page-subtitle"
+      >
+        {{ subtitle }}
+      </p>
     </div>
     <div class="header-right">
       <slot name="actions" />

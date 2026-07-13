@@ -1,4 +1,4 @@
-﻿import request from './axios'
+import request from './axios'
 import { unwrapApiData, type ApiResponse } from './response'
 
 // 用户接口

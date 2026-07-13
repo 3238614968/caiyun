@@ -5,6 +5,7 @@ import (
 	"caiyun/internal/ws"
 	"fmt"
 	"log"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"time"
@@ -25,6 +26,11 @@ func (s *ExchangeScheduler) executeExchangeWithAutoSwitch(tasks []*models.Exchan
 		wg.Add(1)
 		go func(prizeID string, groupTasks []*models.ExchangeTask) {
 			defer wg.Done()
+			defer func() {
+				if r := recover(); r != nil {
+					log.Printf("【抢兑调度器】商品组 %s 执行 panic: %v\n%s", prizeID, r, debug.Stack())
+				}
+			}()
 			s.executeProductGroup(prizeID, groupTasks, limiter)
 		}(prizeID, groupTasks)
 	}
@@ -99,11 +105,23 @@ func (s *ExchangeScheduler) executeProductGroup(prizeID string, tasks []*models.
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			limiterAcquired := false
+			defer func() {
+				if limiterAcquired {
+					<-limiter
+				}
+				if r := recover(); r != nil {
+					message := fmt.Sprintf("任务执行异常，已自动标记失败: %v", r)
+					log.Printf("【抢兑调度器】任务 %d 执行 panic: %v\n%s", task.ID, r, debug.Stack())
+					s.finalizeTaskResult(task, false, message, 0)
+				}
+			}()
 
 			accountName := exchangeAccountName(&task.ExchangeAccount)
 			if accountName == "" {
 				accountName = fmt.Sprintf("exchange-account-%d", task.ExchangeAccountID)
 			}
+			maskedAccountName := maskExchangeAccountName(accountName)
 
 			if stopped, reason := getStopReason(); stopped {
 				if reason == "" {
@@ -118,6 +136,9 @@ func (s *ExchangeScheduler) executeProductGroup(prizeID string, tasks []*models.
 			successMutex.Lock()
 			if successMap[task.ID] {
 				successMutex.Unlock()
+				message := "任务已在同一批次完成，跳过重复执行"
+				log.Printf("【抢兑调度器】任务 %d 检测到重复入队，跳过重复执行", task.ID)
+				s.reportSkippedTask(task, message)
 				return
 			}
 			successMutex.Unlock()
@@ -126,7 +147,7 @@ func (s *ExchangeScheduler) executeProductGroup(prizeID string, tasks []*models.
 				log.Printf(
 					"【抢兑调度器】任务 %d 开始抢兑: 账号=%s, exchange_account=%d, account=%d, 商品=%s(%s), 本地快照 active=%t, stock=%s, remain=%d",
 					task.ID,
-					accountName,
+					maskedAccountName,
 					task.ExchangeAccountID,
 					task.ExchangeAccount.AccountID,
 					task.PrizeName,
@@ -139,7 +160,7 @@ func (s *ExchangeScheduler) executeProductGroup(prizeID string, tasks []*models.
 				log.Printf(
 					"【抢兑调度器】任务 %d 开始抢兑: 账号=%s, exchange_account=%d, account=%d, 商品=%s(%s)",
 					task.ID,
-					accountName,
+					maskedAccountName,
 					task.ExchangeAccountID,
 					task.ExchangeAccount.AccountID,
 					task.PrizeName,
@@ -148,8 +169,8 @@ func (s *ExchangeScheduler) executeProductGroup(prizeID string, tasks []*models.
 			}
 
 			limiter <- struct{}{}
+			limiterAcquired = true
 			if stopped, reason := getStopReason(); stopped {
-				<-limiter
 				if reason == "" {
 					reason = "商品已无库存，跳过抢兑"
 				}
@@ -161,6 +182,7 @@ func (s *ExchangeScheduler) executeProductGroup(prizeID string, tasks []*models.
 
 			success, message, execTime := s.executeTask(task)
 			<-limiter
+			limiterAcquired = false
 			if execTime < 0 {
 				log.Printf("【抢兑调度器】任务 %d 跳过执行: %s", task.ID, message)
 				return
@@ -174,7 +196,7 @@ func (s *ExchangeScheduler) executeProductGroup(prizeID string, tasks []*models.
 				log.Printf(
 					"【抢兑调度器】任务 %d 抢兑成功: 账号=%s, exchange_account=%d, account=%d, 商品=%s(%s), 耗时=%dms, 结果=%s",
 					task.ID,
-					accountName,
+					maskedAccountName,
 					task.ExchangeAccountID,
 					task.ExchangeAccount.AccountID,
 					task.PrizeName,
@@ -193,7 +215,7 @@ func (s *ExchangeScheduler) executeProductGroup(prizeID string, tasks []*models.
 				log.Printf(
 					"【抢兑调度器】任务 %d 抢兑失败: 账号=%s, exchange_account=%d, account=%d, 商品=%s(%s), 原因=%s, 耗时=%dms",
 					task.ID,
-					accountName,
+					maskedAccountName,
 					task.ExchangeAccountID,
 					task.ExchangeAccount.AccountID,
 					task.PrizeName,
@@ -277,7 +299,7 @@ func (s *ExchangeScheduler) executeTask(task *models.ExchangeTask) (bool, string
 	if !locked {
 		return false, reason, 0
 	}
-	success, message, execTime := performExchange(account, prizeID, s.tokenMgr)
+	success, message, execTime := performExchangeWithControls(account, prizeID, s.tokenMgr, s.leaseStore)
 	if !success {
 		release()
 	}
@@ -304,13 +326,41 @@ func (s *ExchangeScheduler) resolveTaskPrizeID(task *models.ExchangeTask) string
 		task.PrizeID = product.PrizeID
 		task.ProductID = product.ID
 		task.Product = *product
-		_ = s.exchangeTaskRepo.Update(task)
+		_ = s.exchangeTaskRepo.UpdatePrizeSnapshot(task.ID, product.ID, product.PrizeID, product.PrizeName)
 		log.Printf("【抢兑调度器】任务 %d 已自动修正商品ID为 %s，避免使用历史 memo 导致 404", task.ID, product.PrizeID)
 	}
 	return product.PrizeID
 }
 
-// shouldStopExchange 判断是否应该停止抢兑
+// reportSkippedTask 记录被调度层跳过的任务结果，避免重复入队时前端完全无感知。
+func (s *ExchangeScheduler) reportSkippedTask(task *models.ExchangeTask, message string) {
+	if task == nil {
+		return
+	}
+	_ = s.exchangeTaskRepo.UpdateLastResult(task.ID, message)
+	_ = s.exchangeTaskRepo.UpdateStatus(task.ID, string(models.ExchangeTaskPending))
+	createExchangeSystemLog(
+		s.taskLogRepo,
+		task.UserID,
+		task.ExchangeAccount.AccountID,
+		task.PrizeName,
+		exchangeAccountName(&task.ExchangeAccount),
+		false,
+		message,
+		0,
+	)
+	s.hub.SendToUser(task.UserID, ws.Message{
+		Type: "exchange_result",
+		Data: map[string]interface{}{
+			"task_id":      task.ID,
+			"prize_name":   task.PrizeName,
+			"success":      false,
+			"message":      message,
+			"execution_ms": 0,
+		},
+	})
+}
+
 func (s *ExchangeScheduler) shouldStopExchange(message string) bool {
 	// 以下商品级库存/上下架状态应该停止当前商品后续账号抢兑。
 	// 账号级结果（如当前账号已兑换、云朵不足）不停止其他账号。
@@ -325,7 +375,7 @@ func (s *ExchangeScheduler) shouldStopExchange(message string) bool {
 	}
 
 	for _, pattern := range stopPatterns {
-		if contains(message, pattern) {
+		if strings.Contains(message, pattern) {
 			return true
 		}
 	}
@@ -354,6 +404,9 @@ func (s *ExchangeScheduler) recordResult(task *models.ExchangeTask, success bool
 
 	if err := s.exchangeRecordRepo.Create(record); err != nil {
 		log.Printf("【抢兑调度器】记录抢兑结果失败: %v", err)
+	}
+	if s.metrics != nil {
+		s.metrics.RecordExchangeAttempt(success, exchangeFailureReasonLabel(message), time.Duration(execTime)*time.Millisecond)
 	}
 	s.exchangeTaskRepo.UpdateAttempt(task.ID, success, message)
 	createExchangeSystemLog(

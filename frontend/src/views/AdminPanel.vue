@@ -1,15 +1,25 @@
 <template>
   <div class="admin-panel-container">
-    <el-card shadow="hover" class="admin-shell">
+    <el-card
+      shadow="hover"
+      class="admin-shell"
+    >
       <template #header>
         <div class="card-header">
           <span>管理员面板</span>
         </div>
       </template>
 
-      <el-tabs v-model="activeTab" @tab-change="handleTabChange" class="admin-tabs">
+      <el-tabs
+        v-model="activeTab"
+        class="admin-tabs"
+        @tab-change="handleTabChange"
+      >
         <!-- 账号概况 -->
-        <el-tab-pane label="账号概况" name="summaries">
+        <el-tab-pane
+          label="账号概况"
+          name="summaries"
+        >
           <div class="tab-content">
             <AdminSummaryList
               :is-mobile="isMobile"
@@ -25,7 +35,10 @@
         </el-tab-pane>
 
         <!-- 任务管理 -->
-        <el-tab-pane label="任务管理" name="tasks">
+        <el-tab-pane
+          label="任务管理"
+          name="tasks"
+        >
           <div class="tab-content">
             <p style="color: #666; margin-bottom: 16px">
               下架的任务将不会被手动执行和定时任务执行。
@@ -41,12 +54,15 @@
         </el-tab-pane>
 
         <!-- 抢兑配置 -->
-        <el-tab-pane label="抢兑配置" name="exchange">
+        <el-tab-pane
+          label="抢兑配置"
+          name="exchange"
+        >
           <div class="tab-content">
             <AdminExchangeConfig
+              v-model:selected-account-id="selectedAccountId"
               :config="exchangeConfig"
               :source-accounts="availableProductSourceAccounts"
-              v-model:selected-account-id="selectedAccountId"
               :update-products-loading="updateProductsLoading"
               :monthly-exchange-loading="monthlyExchangeLoading"
               @change="patchExchangeConfig"
@@ -58,7 +74,10 @@
         </el-tab-pane>
 
         <!-- 用户管理 -->
-        <el-tab-pane label="用户管理" name="users">
+        <el-tab-pane
+          label="用户管理"
+          name="users"
+        >
           <div class="tab-content">
             <AdminUserList
               :is-mobile="isMobile"
@@ -78,14 +97,20 @@
         </el-tab-pane>
 
         <!-- 统计概览 -->
-        <el-tab-pane label="统计概览" name="stats">
+        <el-tab-pane
+          label="统计概览"
+          name="stats"
+        >
           <div class="tab-content">
             <AdminStatsOverview :stats="statsOverview" />
           </div>
         </el-tab-pane>
 
         <!-- 公告管理 -->
-        <el-tab-pane label="公告管理" name="announcements">
+        <el-tab-pane
+          label="公告管理"
+          name="announcements"
+        >
           <div class="tab-content">
             <AdminAnnouncementList
               :is-mobile="isMobile"
@@ -102,95 +127,38 @@
       </el-tabs>
     </el-card>
 
-    <!-- 修改角色对话框 -->
-    <el-dialog v-model="roleDialogVisible" title="修改用户角色" width="400px">
-      <el-form :model="roleForm" label-width="80px">
-        <el-form-item label="角色">
-          <el-radio-group v-model="roleForm.role">
-            <el-radio label="user">普通用户</el-radio>
-            <el-radio label="admin">管理员</el-radio>
-          </el-radio-group>
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <el-button @click="roleDialogVisible = false">取消</el-button>
-        <el-button type="primary" @click="handleRoleSubmit">确定</el-button>
-      </template>
-    </el-dialog>
+    <AdminRoleDialog
+      v-model="roleDialogVisible"
+      v-model:form="roleForm"
+      @submit="handleRoleSubmit"
+    />
 
-    <!-- 重置密码对话框 -->
-    <el-dialog v-model="passwordDialogVisible" title="重置用户密码" width="420px">
-      <el-form :model="passwordForm" label-width="90px">
-        <el-form-item label="用户">
-          <el-input v-model="passwordForm.username" disabled />
-        </el-form-item>
-        <el-form-item label="新密码">
-          <el-input v-model="passwordForm.password" type="password" show-password placeholder="至少12位，包含至少三类字符" />
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <el-button @click="passwordDialogVisible = false">取消</el-button>
-        <el-button type="primary" @click="handlePasswordSubmit">确定重置</el-button>
-      </template>
-    </el-dialog>
+    <AdminResetPasswordDialog
+      v-model="passwordDialogVisible"
+      v-model:form="passwordForm"
+      @submit="handlePasswordSubmit"
+    />
 
-    <!-- 公告管理对话框 -->
-    <el-dialog v-model="announcementDialogVisible" :title="isEditingAnnouncement ? '编辑公告' : '发布公告'" width="700px">
-      <el-form :model="announcementForm" label-position="top" :rules="announcementRules" ref="announcementFormRef">
-        <el-form-item label="公告标题" prop="title">
-          <el-input v-model="announcementForm.title" placeholder="请输入公告标题" maxlength="100" show-word-limit />
-        </el-form-item>
-        <el-form-item label="公告内容" prop="content">
-          <el-input
-            v-model="announcementForm.content"
-            type="textarea"
-            :rows="6"
-            placeholder="请输入公告内容"
-            maxlength="2000"
-            show-word-limit
-          />
-        </el-form-item>
-        <el-form-item>
-          <div class="form-options">
-            <el-checkbox v-model="announcementForm.is_popup" label="弹窗显示" border />
-            <el-checkbox v-model="announcementForm.is_top" label="置顶" border />
-            <el-checkbox v-if="isEditingAnnouncement" v-model="announcementForm.is_published" label="发布状态" border />
-          </div>
-        </el-form-item>
-        <el-form-item v-if="announcementForm.is_popup" class="tip-item">
-          <el-alert
-            title="弹窗公告说明"
-            type="info"
-            :closable="false"
-            description="开启弹窗后，仅置顶且未读的弹窗公告会自动弹出一次；其他已发布公告会展示在首页公告列表中。"
-          />
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <el-button @click="announcementDialogVisible = false">取消</el-button>
-        <el-button type="primary" @click="submitAnnouncementForm" :loading="announcementSubmitting">确定</el-button>
-      </template>
-    </el-dialog>
+    <AdminAnnouncementDialog
+      v-model="announcementDialogVisible"
+      v-model:form="announcementForm"
+      :is-editing="isEditingAnnouncement"
+      :loading="announcementSubmitting"
+      :rules="announcementRules"
+      @submit="submitAnnouncementForm"
+    />
 
-    <!-- 查看公告对话框 -->
-    <el-dialog v-model="viewAnnouncementVisible" title="公告详情" width="600px" class="view-dialog">
-      <div class="view-content">
-        <h3 class="view-title">{{ currentAnnouncement?.title }}</h3>
-        <div class="view-meta">
-          <el-tag v-if="currentAnnouncement?.is_top" type="danger" size="small">置顶</el-tag>
-          <el-tag v-if="currentAnnouncement?.is_popup" type="warning" size="small">弹窗</el-tag>
-          <span class="view-time">{{ formatDate(currentAnnouncement?.created_at) }}</span>
-        </div>
-        <div class="view-body">{{ currentAnnouncement?.content }}</div>
-      </div>
-    </el-dialog>
+    <AdminAnnouncementViewDialog
+      v-model="viewAnnouncementVisible"
+      :announcement="currentAnnouncement"
+      :format-date="formatDate"
+    />
   </div>
 </template>
 
 <script setup lang="ts">
-import '@/styles/element/admin'
 import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage, ElMessageBox, type TabPaneName } from 'element-plus'
 import {
   type Account,
   type AccountSummary,
@@ -228,6 +196,11 @@ import AdminExchangeConfig from '@/components/admin/AdminExchangeConfig.vue'
 import AdminUserList from '@/components/admin/AdminUserList.vue'
 import AdminStatsOverview from '@/components/admin/AdminStatsOverview.vue'
 import AdminAnnouncementList from '@/components/admin/AdminAnnouncementList.vue'
+import AdminRoleDialog from '@/components/admin/AdminRoleDialog.vue'
+import AdminResetPasswordDialog from '@/components/admin/AdminResetPasswordDialog.vue'
+import AdminAnnouncementDialog from '@/components/admin/AdminAnnouncementDialog.vue'
+import AdminAnnouncementViewDialog from '@/components/admin/AdminAnnouncementViewDialog.vue'
+import { operationQueuedMessage } from '@/api/operation'
 
 const activeTab = ref('summaries')
 const viewportWidth = ref(typeof window !== 'undefined' ? window.innerWidth : 1440)
@@ -295,7 +268,6 @@ const viewAnnouncementVisible = ref(false)
 const isEditingAnnouncement = ref(false)
 const announcementSubmitting = ref(false)
 const currentAnnouncement = ref<Announcement | null>(null)
-const announcementFormRef = ref()
 const announcementForm = reactive({
   id: 0,
   title: '',
@@ -309,13 +281,14 @@ const announcementRules = {
   content: [{ required: true, message: '请输入公告内容', trigger: 'blur' }]
 }
 
-const handleTabChange = (tab: string) => {
-  if (tab === 'summaries') loadSummaries()
-  else if (tab === 'tasks') loadTaskConfigs()
-  else if (tab === 'exchange') loadExchangeConfig()
-  else if (tab === 'users') loadUserList()
-  else if (tab === 'stats') loadStatsOverview()
-  else if (tab === 'announcements') loadAnnouncements()
+const handleTabChange = (tab: TabPaneName) => {
+  const tabName = String(tab)
+  if (tabName === 'summaries') loadSummaries()
+  else if (tabName === 'tasks') loadTaskConfigs()
+  else if (tabName === 'exchange') loadExchangeConfig()
+  else if (tabName === 'users') loadUserList()
+  else if (tabName === 'stats') loadStatsOverview()
+  else if (tabName === 'announcements') loadAnnouncements()
 }
 
 // Load account summaries
@@ -428,8 +401,8 @@ const handleUpdateProducts = async () => {
 const executeMonthlyExchange = async () => {
   monthlyExchangeLoading.value = true
   try {
-    await apiExecuteMonthlyExchange()
-    ElMessage.success('已开始执行兑换月卡任务')
+    const operation = await apiExecuteMonthlyExchange()
+    ElMessage.success(operationQueuedMessage(operation, '月卡兑换任务'))
   } catch (error: any) {
     ElMessage.error('执行兑换月卡失败：' + error.message)
   } finally {
@@ -561,9 +534,6 @@ const viewAnnouncement = (row: Announcement) => {
 }
 
 const submitAnnouncementForm = async () => {
-  const valid = await announcementFormRef.value?.validate().catch(() => false)
-  if (!valid) return
-
   announcementSubmitting.value = true
   try {
     if (isEditingAnnouncement.value) {
@@ -639,13 +609,6 @@ onUnmounted(() => {
 .admin-tabs :deep(.el-tabs__active-bar) { background: linear-gradient(90deg, #2563eb, #0ea5e9); }
 .tab-content { padding: 22px 0 0; display:flex; flex-direction:column; gap:20px; }
 .tab-content > p { margin:0; line-height:1.6; }
-.form-options { display:flex; gap:14px; flex-wrap:wrap; }
-.tip-item { margin-bottom:0; }
-.view-content { padding:10px 4px 4px; }
-.view-title { font-size:20px; font-weight:700; color:#0f172a; margin:0 0 16px; line-height:1.45; }
-.view-meta { display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-bottom:20px; padding-bottom:14px; border-bottom:1px solid rgba(148,163,184,.2); }
-.view-time { color:#64748b; font-size:13px; }
-.view-body { font-size:14px; line-height:1.8; color:#475569; white-space:pre-wrap; }
 :deep(.el-table) { border-radius:18px; overflow:hidden; --el-table-border-color: rgba(148,163,184,.18); --el-table-header-bg-color: rgba(248,250,252,.9); --el-table-row-hover-bg-color: rgba(239,246,255,.72); }
 :deep(.el-table .cell) { line-height:1.45; }
 :deep(.el-table th.el-table__cell) { color:#475569; font-size:13px; font-weight:700; }
@@ -663,8 +626,6 @@ onUnmounted(() => {
   .card-header { font-size:20px; }
   .admin-tabs :deep(.el-tabs__item) { height:40px; padding:0 14px; font-size:13px; }
   .tab-content { padding-top:16px; gap:14px; }
-  .form-options { flex-direction:column; gap:10px; }
-  .view-title { font-size:18px; }
   :deep(.el-col-6) { width:50%!important; max-width:50%!important; flex:0 0 50%!important; }
   :deep(.el-pagination) { justify-content:center; }
 }

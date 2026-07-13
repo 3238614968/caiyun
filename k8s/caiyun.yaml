@@ -9,6 +9,7 @@ metadata:
 #   --from-literal=mysql-password='<强随机应用数据库密码>' \
 #   --from-literal=redis-password='<强随机 Redis 密码>' \
 #   --from-literal=jwt-secret='<至少 32 字符随机 JWT 密钥>' \
+#   --from-literal=data-encryption-keys='v1=<32 字节随机数据密钥>' \
 #   --from-literal=worker-monitor-token='<强随机 Worker 监控 Token>' \
 #   --from-literal=smtp-password='<SMTP 密码，可为空>'
 apiVersion: v1
@@ -21,16 +22,36 @@ data:
   DB_USER: caiyun_app
   DB_HOST: mysql
   DB_PORT: "3306"
+  APP_ENV: production
+  DB_AUTO_MIGRATE: "false"
+  DATA_ENCRYPTION_CURRENT_VERSION: "v1"
+  # 仅信任实际 Ingress/网关的 IP 或 CIDR；直连默认 none，禁止 trust-all。
+  TRUSTED_PROXIES: "none"
   REDIS_HOST: redis
   REDIS_PORT: "6379"
-  TASK_QUEUE_BACKEND: "list"
+  TASK_QUEUE_BACKEND: "streams"
   TASK_QUEUE_STREAM_GROUP: "caiyun-workers"
   TASK_QUEUE_STREAM_MAXLEN: "100000"
+  # 多副本必须共享限流状态；Redis 故障时生产流量 fail-closed。
+  RATE_LIMIT_BACKEND: "redis"
+  RATE_LIMIT_REDIS_WINDOW: "1s"
+  # 容器日志仅写 JSON stdout，由集群日志系统采集。
+  LOG_FILE_PATH: ""
+  LOG_JSON_FORMAT: "true"
+  # WebSocket 跨 Pod 事件与至少一次投递参数。
+  WS_EVENT_CHANNEL: "caiyun:ws:events"
+  WS_MESSAGE_TTL: "24h"
+  WS_ACK_TIMEOUT: "5s"
+  WS_MAX_RETRIES: "3"
   ALLOWED_ORIGINS: "https://your-domain.example"
+  JWT_ISSUER: "caiyun-api"
+  JWT_AUDIENCE: "caiyun-web"
+  JWT_ACCESS_TTL: "15m"
+  JWT_REFRESH_TTL: "720h"
   TASK_SCHEDULE: "0 8 * * *"
   WORKER_MONITOR_HOST: "0.0.0.0"
   WORKER_MONITOR_PORT: "8081"
-  WORKER_MONITOR_ALLOW_PLAINTEXT: "false"
+  WORKER_MONITOR_ALLOW_PLAINTEXT: "true"
   SMTP_HOST: ""
   SMTP_PORT: "587"
   SMTP_USERNAME: ""
@@ -808,21 +829,23 @@ spec:
     - port: 6379
       targetPort: 6379
 ---
-apiVersion: apps/v1
-kind: Deployment
+apiVersion: batch/v1
+kind: Job
 metadata:
-  name: backend-api
+  name: caiyun-migrate
   namespace: caiyun
+  labels:
+    app: caiyun-migrate
 spec:
-  replicas: 2
-  selector:
-    matchLabels:
-      app: backend-api
+  backoffLimit: 2
+  activeDeadlineSeconds: 600
+  ttlSecondsAfterFinished: 600
   template:
     metadata:
       labels:
-        app: backend-api
+        app: caiyun-migrate
     spec:
+      restartPolicy: Never
       securityContext:
         runAsUser: 100
         runAsGroup: 100
@@ -830,11 +853,10 @@ spec:
         seccompProfile:
           type: RuntimeDefault
       containers:
-        - name: api
-          image: caiyun-api:2.1.0
+        - name: migrate
+          image: caiyun-backend:2.1.0
           imagePullPolicy: IfNotPresent
-          ports:
-            - containerPort: 8080
+          args: ["migrate"]
           securityContext:
             runAsNonRoot: true
             allowPrivilegeEscalation: false
@@ -851,11 +873,113 @@ spec:
                 secretKeyRef:
                   name: caiyun-secrets
                   key: mysql-password
+            - name: DATA_ENCRYPTION_KEYS
+              valueFrom:
+                secretKeyRef:
+                  name: caiyun-secrets
+                  key: data-encryption-keys
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          volumeMounts:
+            - name: migrate-tmp
+              mountPath: /tmp
+      volumes:
+        - name: migrate-tmp
+          emptyDir: {}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend-api
+  namespace: caiyun
+spec:
+  replicas: 2
+  revisionHistoryLimit: 5
+  minReadySeconds: 10
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app: backend-api
+  template:
+    metadata:
+      labels:
+        app: backend-api
+    spec:
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsUser: 100
+        runAsGroup: 100
+        fsGroup: 100
+        seccompProfile:
+          type: RuntimeDefault
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                labelSelector:
+                  matchLabels:
+                    app: backend-api
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app: backend-api
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app: backend-api
+      containers:
+        - name: api
+          image: caiyun-backend:2.1.0
+          imagePullPolicy: IfNotPresent
+          args: ["api"]
+          ports:
+            - containerPort: 8080
+          securityContext:
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          envFrom:
+            - configMapRef:
+                name: caiyun-config
+          env:
+            - name: INSTANCE_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: caiyun-secrets
+                  key: mysql-password
             - name: REDIS_PASSWORD
               valueFrom:
                 secretKeyRef:
                   name: caiyun-secrets
                   key: redis-password
+            - name: DATA_ENCRYPTION_KEYS
+              valueFrom:
+                secretKeyRef:
+                  name: caiyun-secrets
+                  key: data-encryption-keys
             - name: JWT_SECRET
               valueFrom:
                 secretKeyRef:
@@ -873,19 +997,24 @@ spec:
             limits:
               cpu: 500m
               memory: 512Mi
+          startupProbe:
+            httpGet:
+              path: /startupz
+              port: 8080
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 24
           readinessProbe:
             httpGet:
-              path: /health
+              path: /readyz
               port: 8080
-            initialDelaySeconds: 10
             periodSeconds: 10
             timeoutSeconds: 3
             failureThreshold: 3
           livenessProbe:
             httpGet:
-              path: /health
+              path: /livez
               port: 8080
-            initialDelaySeconds: 30
             periodSeconds: 20
             timeoutSeconds: 3
             failureThreshold: 3
@@ -902,7 +1031,14 @@ metadata:
   name: backend-worker
   namespace: caiyun
 spec:
-  replicas: 1
+  replicas: 2
+  revisionHistoryLimit: 5
+  minReadySeconds: 10
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
   selector:
     matchLabels:
       app: backend-worker
@@ -911,16 +1047,40 @@ spec:
       labels:
         app: backend-worker
     spec:
+      terminationGracePeriodSeconds: 60
       securityContext:
         runAsUser: 100
         runAsGroup: 100
         fsGroup: 100
         seccompProfile:
           type: RuntimeDefault
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                labelSelector:
+                  matchLabels:
+                    app: backend-worker
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app: backend-worker
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app: backend-worker
       containers:
         - name: worker
-          image: caiyun-worker:2.1.0
+          image: caiyun-backend:2.1.0
           imagePullPolicy: IfNotPresent
+          args: ["worker"]
           ports:
             - containerPort: 8081
           securityContext:
@@ -934,6 +1094,10 @@ spec:
             - configMapRef:
                 name: caiyun-config
           env:
+            - name: INSTANCE_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
             - name: DB_PASSWORD
               valueFrom:
                 secretKeyRef:
@@ -944,6 +1108,11 @@ spec:
                 secretKeyRef:
                   name: caiyun-secrets
                   key: redis-password
+            - name: DATA_ENCRYPTION_KEYS
+              valueFrom:
+                secretKeyRef:
+                  name: caiyun-secrets
+                  key: data-encryption-keys
             - name: WORKER_MONITOR_TOKEN
               valueFrom:
                 secretKeyRef:
@@ -956,19 +1125,24 @@ spec:
             limits:
               cpu: "1"
               memory: 1Gi
+          startupProbe:
+            httpGet:
+              path: /startupz
+              port: 8081
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 24
           readinessProbe:
             httpGet:
-              path: /health
+              path: /readyz
               port: 8081
-            initialDelaySeconds: 10
             periodSeconds: 10
             timeoutSeconds: 3
             failureThreshold: 3
           livenessProbe:
             httpGet:
-              path: /health
+              path: /livez
               port: 8081
-            initialDelaySeconds: 30
             periodSeconds: 20
             timeoutSeconds: 3
             failureThreshold: 3
@@ -986,6 +1160,13 @@ metadata:
   namespace: caiyun
 spec:
   replicas: 2
+  revisionHistoryLimit: 5
+  minReadySeconds: 10
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
   selector:
     matchLabels:
       app: frontend
@@ -994,12 +1175,35 @@ spec:
       labels:
         app: frontend
     spec:
+      terminationGracePeriodSeconds: 30
       securityContext:
         runAsUser: 101
         runAsGroup: 101
         fsGroup: 101
         seccompProfile:
           type: RuntimeDefault
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                labelSelector:
+                  matchLabels:
+                    app: frontend
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app: frontend
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app: frontend
       containers:
         - name: frontend
           image: caiyun-frontend:2.1.0
@@ -1090,6 +1294,17 @@ spec:
   selector:
     matchLabels:
       app: backend-api
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: backend-worker-pdb
+  namespace: caiyun
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: backend-worker
 ---
 apiVersion: policy/v1
 kind: PodDisruptionBudget

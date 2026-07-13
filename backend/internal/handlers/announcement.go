@@ -37,7 +37,7 @@ func (h *AnnouncementHandler) CreateAnnouncement(c *gin.Context) {
 		return
 	}
 
-	announcement, err := h.announcementService.CreateAnnouncement(req.Title, req.Content, req.IsPopup, req.IsTop)
+	announcement, err := h.announcementService.CreateAnnouncementContext(c.Request.Context(), req.Title, req.Content, req.IsPopup, req.IsTop)
 	if err != nil {
 		respondInternalServer(c)
 		return
@@ -70,7 +70,7 @@ func (h *AnnouncementHandler) UpdateAnnouncement(c *gin.Context) {
 		return
 	}
 
-	announcement, err := h.announcementService.UpdateAnnouncement(uint(id), req.Title, req.Content, req.IsPopup, req.IsTop, req.IsPublished)
+	announcement, err := h.announcementService.UpdateAnnouncementContext(c.Request.Context(), uint(id), req.Title, req.Content, req.IsPopup, req.IsTop, req.IsPublished)
 	if err != nil {
 		respondInternalServer(c)
 		return
@@ -88,7 +88,7 @@ func (h *AnnouncementHandler) DeleteAnnouncement(c *gin.Context) {
 		return
 	}
 
-	if err := h.announcementService.DeleteAnnouncement(uint(id)); err != nil {
+	if err := h.announcementService.DeleteAnnouncementContext(c.Request.Context(), uint(id)); err != nil {
 		respondInternalServer(c)
 		return
 	}
@@ -105,7 +105,7 @@ func (h *AnnouncementHandler) GetAnnouncement(c *gin.Context) {
 		return
 	}
 
-	announcement, err := h.announcementService.GetAnnouncement(uint(id))
+	announcement, err := h.announcementService.GetAnnouncementContext(c.Request.Context(), uint(id))
 	if err != nil {
 		respondError(c, http.StatusNotFound, "公告不存在")
 		return
@@ -118,7 +118,7 @@ func (h *AnnouncementHandler) GetAnnouncement(c *gin.Context) {
 
 // GetAllAnnouncements 获取所有公告
 func (h *AnnouncementHandler) GetAllAnnouncements(c *gin.Context) {
-	announcements, err := h.announcementService.GetAllAnnouncements()
+	announcements, err := h.announcementService.GetAllAnnouncementsContext(c.Request.Context())
 	if err != nil {
 		respondInternalServer(c)
 		return
@@ -132,7 +132,7 @@ func (h *AnnouncementHandler) GetAllAnnouncements(c *gin.Context) {
 
 // GetPublishedAnnouncements 获取已发布的公告
 func (h *AnnouncementHandler) GetPublishedAnnouncements(c *gin.Context) {
-	announcements, err := h.announcementService.GetPublishedAnnouncements()
+	announcements, err := h.announcementService.GetPublishedAnnouncementsContext(c.Request.Context())
 	if err != nil {
 		respondInternalServer(c)
 		return
@@ -146,7 +146,7 @@ func (h *AnnouncementHandler) GetPublishedAnnouncements(c *gin.Context) {
 
 // GetPopupAnnouncement 获取弹窗公告列表
 func (h *AnnouncementHandler) GetPopupAnnouncement(c *gin.Context) {
-	announcements, err := h.announcementService.GetPopupAnnouncements()
+	announcements, err := h.announcementService.GetPopupAnnouncementsContext(c.Request.Context())
 	if err != nil || len(announcements) == 0 {
 		apiresponse.Success(c, gin.H{
 			"has_popup":     false,

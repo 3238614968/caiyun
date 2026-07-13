@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"caiyun/internal/services"
+	appErrors "caiyun/pkg/errors"
 	apiresponse "caiyun/pkg/response"
 	"errors"
 	"net/http"
@@ -155,12 +156,22 @@ func (h *AdminHandler) UpdateUserRole(c *gin.Context) {
 		return
 	}
 
-	if err := h.adminService.UpdateUserRole(uint(userID), &req); err != nil {
-		if err == services.ErrUserNotFound {
+	currentUserID, ok := getUserID(c)
+	if !ok {
+		return
+	}
+
+	if err := h.adminService.UpdateUserRole(uint(userID), currentUserID, &req); err != nil {
+		switch {
+		case errors.Is(err, services.ErrUserNotFound):
 			respondError(c, http.StatusNotFound, "用户不存在")
-			return
+		case errors.Is(err, services.ErrCannotDemoteSelf):
+			respondError(c, http.StatusBadRequest, "不能将自己的管理员角色降级")
+		case errors.Is(err, services.ErrCannotRemoveLastAdmin):
+			respondError(c, http.StatusBadRequest, "不能移除最后一个管理员")
+		default:
+			respondInternalServer(c)
 		}
-		respondInternalServer(c)
 		return
 	}
 
@@ -235,12 +246,17 @@ func (h *AdminHandler) DeleteUser(c *gin.Context) {
 		return
 	}
 
-	if err := h.adminService.DeleteUser(uint(userID), currentUserID.(uint)); err != nil {
-		if err == services.ErrCannotDeleteSelf {
+	if err := h.adminService.DeleteUserContext(c.Request.Context(), uint(userID), currentUserID.(uint)); err != nil {
+		switch {
+		case errors.Is(err, services.ErrCannotDeleteSelf):
 			respondError(c, http.StatusBadRequest, "不能删除自己")
-			return
+		case errors.Is(err, services.ErrCannotRemoveLastAdmin):
+			respondError(c, http.StatusBadRequest, "不能移除最后一个管理员")
+		case errors.Is(err, services.ErrUserNotFound):
+			respondError(c, http.StatusNotFound, "用户不存在")
+		default:
+			respondInternalServer(c)
 		}
-		respondInternalServer(c)
 		return
 	}
 
@@ -255,8 +271,13 @@ func (h *AdminHandler) DeleteAccount(c *gin.Context) {
 		return
 	}
 
-	if err := h.adminService.DeleteAccount(uint(accountID)); err != nil {
-		respondInternalServer(c)
+	if err := h.adminService.DeleteAccountContext(c.Request.Context(), uint(accountID)); err != nil {
+		if errors.Is(err, services.ErrAccountNotFound) {
+			respondBusinessError(c, http.StatusNotFound, appErrors.BusinessCodeAccountNotFound, "账号不存在")
+		} else {
+			_ = c.Error(err)
+			respondInternalServer(c)
+		}
 		return
 	}
 

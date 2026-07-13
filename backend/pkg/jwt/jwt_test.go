@@ -26,6 +26,36 @@ func TestManagerGenerateAndValidateTokenVersion(t *testing.T) {
 	if claims.UserID != 42 || claims.Username != "alice" || claims.Role != "admin" || claims.TokenVersion != 7 {
 		t.Fatalf("unexpected claims: %+v", claims)
 	}
+	if claims.Issuer != defaultIssuer || (len(claims.Audience) != 1 || claims.Audience[0] != defaultAudience) || claims.ID == "" {
+		t.Fatalf("missing registered identity claims: %+v", claims.RegisteredClaims)
+	}
+}
+
+func TestManagerGenerateAccessTokenIncludesSessionAndConfiguredIssuer(t *testing.T) {
+	manager := NewManager("test-secret-at-least-16-bytes").SetIssuerAudience("issuer.example", "web.example")
+	token, err := manager.GenerateAccessToken(42, "alice", "user", 2, "session-123", time.Hour)
+	if err != nil {
+		t.Fatalf("GenerateAccessToken() error = %v", err)
+	}
+	claims, err := manager.ValidateToken(token)
+	if err != nil {
+		t.Fatalf("ValidateToken() error = %v", err)
+	}
+	if claims.SessionID != "session-123" || claims.Issuer != "issuer.example" || (len(claims.Audience) != 1 || claims.Audience[0] != "web.example") || claims.ID == "" {
+		t.Fatalf("unexpected claims: %+v", claims)
+	}
+}
+
+func TestManagerRejectsDifferentAudience(t *testing.T) {
+	issuer := NewManager("test-secret-at-least-16-bytes").SetIssuerAudience("issuer.example", "web.example")
+	validator := NewManager("test-secret-at-least-16-bytes").SetIssuerAudience("issuer.example", "other.example")
+	token, err := issuer.GenerateToken(1, "alice", "user", 0, time.Hour)
+	if err != nil {
+		t.Fatalf("GenerateToken() error = %v", err)
+	}
+	if _, err := validator.ValidateToken(token); !errors.Is(err, ErrInvalidToken) {
+		t.Fatalf("ValidateToken() error = %v, want ErrInvalidToken", err)
+	}
 }
 
 func TestManagerRejectsExpiredToken(t *testing.T) {

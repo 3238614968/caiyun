@@ -18,12 +18,13 @@ func (s *ExchangeScheduler) logQueuedTasks(slot string, tasks []*models.Exchange
 		if accountName == "" {
 			accountName = fmt.Sprintf("exchange-account-%d", task.ExchangeAccountID)
 		}
+		maskedAccountName := maskExchangeAccountName(accountName)
 
 		log.Printf(
 			"【抢兑调度器】%s 队列任务: task=%d, 账号=%s, exchange_account=%d, account=%d, 商品=%s(%s), 抢兑时间=%s/%s",
 			slot,
 			task.ID,
-			accountName,
+			maskedAccountName,
 			task.ExchangeAccountID,
 			task.ExchangeAccount.AccountID,
 			task.PrizeName,
@@ -97,6 +98,7 @@ func (s *ExchangeScheduler) preheatAccountsForTasks(slot string, tasks []*models
 			if accountName == "" {
 				accountName = fmt.Sprintf("account-%d", accountID)
 			}
+			maskedAccountName := maskExchangeAccountName(accountName)
 
 			limiter <- struct{}{}
 			start := time.Now()
@@ -105,7 +107,7 @@ func (s *ExchangeScheduler) preheatAccountsForTasks(slot string, tasks []*models
 			<-limiter
 
 			if err != nil {
-				log.Printf("【抢兑调度器】%s JWT 预热失败: 账号=%s, account=%d, 原因=%v, 耗时=%dms", slot, accountName, accountID, err, elapsed)
+				log.Printf("【抢兑调度器】%s JWT 预热失败: 账号=%s, account=%d, 原因=%v, 耗时=%dms", slot, maskedAccountName, accountID, err, elapsed)
 				resultMu.Lock()
 				failureCount++
 				resultMu.Unlock()
@@ -117,7 +119,7 @@ func (s *ExchangeScheduler) preheatAccountsForTasks(slot string, tasks []*models
 				if tokenInfo != nil && tokenInfo.ErrorMsg != "" {
 					reason = tokenInfo.ErrorMsg
 				}
-				log.Printf("【抢兑调度器】%s JWT 预热失败: 账号=%s, account=%d, 原因=%s, 耗时=%dms", slot, accountName, accountID, reason, elapsed)
+				log.Printf("【抢兑调度器】%s JWT 预热失败: 账号=%s, account=%d, 原因=%s, 耗时=%dms", slot, maskedAccountName, accountID, reason, elapsed)
 				resultMu.Lock()
 				failureCount++
 				resultMu.Unlock()
@@ -127,7 +129,7 @@ func (s *ExchangeScheduler) preheatAccountsForTasks(slot string, tasks []*models
 			log.Printf(
 				"【抢兑调度器】%s JWT 预热完成: 账号=%s, account=%d, 状态=%s, 过期时间=%s, 耗时=%dms",
 				slot,
-				accountName,
+				maskedAccountName,
 				accountID,
 				tokenInfo.HealthStatus,
 				formatExchangeWarmupExpiry(tokenInfo.ExpiresAt),

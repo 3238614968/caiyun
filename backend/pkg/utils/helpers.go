@@ -1,4 +1,4 @@
-﻿package utils
+package utils
 
 import (
 	"crypto/md5"
@@ -23,17 +23,17 @@ func Substr(s string, start, length int) string {
 	if start < 0 {
 		start = 0
 	}
-	
+
 	runes := []rune(s)
 	if start >= len(runes) {
 		return ""
 	}
-	
+
 	end := start + length
 	if end > len(runes) {
 		end = len(runes)
 	}
-	
+
 	return string(runes[start:end])
 }
 
@@ -42,16 +42,16 @@ func Truncate(s string, maxLen int) string {
 	if maxLen <= 0 {
 		return s
 	}
-	
+
 	runes := []rune(s)
 	if len(runes) <= maxLen {
 		return s
 	}
-	
+
 	if maxLen <= 3 {
 		return string(runes[:maxLen])
 	}
-	
+
 	return string(runes[:maxLen-3]) + "..."
 }
 
@@ -70,15 +70,15 @@ func CamelCase(s string) string {
 	if s == "" {
 		return s
 	}
-	
+
 	words := strings.FieldsFunc(s, func(r rune) bool {
 		return r == '_' || r == '-' || r == ' '
 	})
-	
+
 	if len(words) == 0 {
 		return s
 	}
-	
+
 	var result strings.Builder
 	result.WriteString(strings.ToLower(words[0]))
 	for _, word := range words[1:] {
@@ -89,14 +89,14 @@ func CamelCase(s string) string {
 			}
 		}
 	}
-	
+
 	return result.String()
 }
 
 // SnakeCase 转蛇形命名
 func SnakeCase(s string) string {
 	var result strings.Builder
-	
+
 	for i, r := range s {
 		if r >= 'A' && r <= 'Z' {
 			if i > 0 {
@@ -107,7 +107,7 @@ func SnakeCase(s string) string {
 			result.WriteRune(r)
 		}
 	}
-	
+
 	return result.String()
 }
 
@@ -128,23 +128,23 @@ func BytesToInt(b []byte) (int, error) {
 // FormatNumber 格式化数字（千分位）
 func FormatNumber(n int64) string {
 	numStr := fmt.Sprintf("%d", n)
-	
+
 	sign := ""
 	if numStr[0] == '-' {
 		sign = "-"
 		numStr = numStr[1:]
 	}
-	
+
 	var result strings.Builder
 	digits := len(numStr)
-	
+
 	for i, digit := range numStr {
 		if i > 0 && (digits-i)%3 == 0 {
 			result.WriteRune(',')
 		}
 		result.WriteRune(digit)
 	}
-	
+
 	return sign + result.String()
 }
 
@@ -155,14 +155,14 @@ func RandomString(length int, charset string) (string, error) {
 	if length <= 0 {
 		return "", nil
 	}
-	
+
 	if charset == "" {
 		charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
 	}
-	
+
 	result := make([]byte, length)
 	charsetLen := big.NewInt(int64(len(charset)))
-	
+
 	for i := 0; i < length; i++ {
 		n, err := rand.Int(rand.Reader, charsetLen)
 		if err != nil {
@@ -170,7 +170,7 @@ func RandomString(length int, charset string) (string, error) {
 		}
 		result[i] = charset[n.Int64()]
 	}
-	
+
 	return string(result), nil
 }
 
@@ -179,12 +179,12 @@ func RandomNumber(min, max int64) (int64, error) {
 	if min > max {
 		min, max = max, min
 	}
-	
+
 	n, err := rand.Int(rand.Reader, big.NewInt(max-min+1))
 	if err != nil {
 		return 0, err
 	}
-	
+
 	return n.Int64() + min, nil
 }
 
@@ -195,11 +195,11 @@ func UUID() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	
+
 	// Set version (4) and variant bits
 	uuid[6] = (uuid[6] & 0x0f) | 0x40
 	uuid[8] = (uuid[8] & 0x3f) | 0x80
-	
+
 	return fmt.Sprintf("%x-%x-%x-%x-%x", uuid[0:4], uuid[4:6], uuid[6:8], uuid[8:10], uuid[10:]), nil
 }
 
@@ -444,14 +444,14 @@ func MapValues(m map[string]interface{}) []interface{} {
 func UniqueSlice[T comparable](slice []T) []T {
 	result := make([]T, 0)
 	seen := make(map[T]bool)
-	
+
 	for _, v := range slice {
 		if !seen[v] {
 			seen[v] = true
 			result = append(result, v)
 		}
 	}
-	
+
 	return result
 }
 
@@ -469,17 +469,17 @@ func ContainsSlice[T comparable](slice []T, item T) bool {
 func IntersectSlice[T comparable](a, b []T) []T {
 	result := make([]T, 0)
 	set := make(map[T]bool)
-	
+
 	for _, v := range a {
 		set[v] = true
 	}
-	
+
 	for _, v := range b {
 		if set[v] {
 			result = append(result, v)
 		}
 	}
-	
+
 	return result
 }
 
@@ -487,17 +487,17 @@ func IntersectSlice[T comparable](a, b []T) []T {
 func DiffSlice[T comparable](a, b []T) []T {
 	result := make([]T, 0)
 	setB := make(map[T]bool)
-	
+
 	for _, v := range b {
 		setB[v] = true
 	}
-	
+
 	for _, v := range a {
 		if !setB[v] {
 			result = append(result, v)
 		}
 	}
-	
+
 	return result
 }
 
@@ -506,9 +506,9 @@ func ChunkSlice[T any](slice []T, size int) [][]T {
 	if size <= 0 {
 		return nil
 	}
-	
+
 	result := make([][]T, 0, (len(slice)+size-1)/size)
-	
+
 	for i := 0; i < len(slice); i += size {
 		end := i + size
 		if end > len(slice) {
@@ -516,6 +516,6 @@ func ChunkSlice[T any](slice []T, size int) [][]T {
 		}
 		result = append(result, slice[i:end])
 	}
-	
+
 	return result
 }

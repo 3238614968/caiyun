@@ -7,7 +7,7 @@ RUN npm ci
 
 COPY . .
 
-RUN npm run build
+RUN npm run build && npm run bundle:budget
 
 FROM nginxinc/nginx-unprivileged:1.27-alpine
 

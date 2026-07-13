@@ -1,4 +1,4 @@
-﻿package tasks
+package tasks
 
 import (
 	"encoding/json"
@@ -368,12 +368,12 @@ func (t *BlindboxTask) getBlindboxUser() (*BlindboxUserInfo, error) {
 func (t *BlindboxTask) openBlindbox() {
 	url := "https://caiyun.feixin.10086.cn/ycloud/blindbox/draw/openBox?from=main"
 	headers := map[string]string{
-		"Content-Type":    "application/json",
-		"accept":          "application/json",
-		"jwttoken":        t.jwtToken,
+		"Content-Type":     "application/json",
+		"accept":           "application/json",
+		"jwttoken":         t.jwtToken,
 		"x-requested-with": "cn.cj.pe",
-		"referer":         "https://caiyun.feixin.10086.cn:7071/portal/caiyunOfficialAccount/index.html?path=blindBox&sourceid=1015",
-		"origin":          "https://caiyun.feixin.10086.cn",
+		"referer":          "https://caiyun.feixin.10086.cn:7071/portal/caiyunOfficialAccount/index.html?path=blindBox&sourceid=1015",
+		"origin":           "https://caiyun.feixin.10086.cn",
 	}
 	body := map[string]interface{}{
 		"from": "main",

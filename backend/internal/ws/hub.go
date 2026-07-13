@@ -1,23 +1,27 @@
 package ws
 
 import (
-	"caiyun/internal/repository"
+	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net"
 	"net/http"
 	"net/url"
-	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
+	"caiyun/internal/envutil"
+	"caiyun/internal/repository"
+
+	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 )
 
 var upgrader = websocket.Upgrader{
-	ReadBufferSize:  1024,
-	WriteBufferSize: 1024,
+	ReadBufferSize: 1024, WriteBufferSize: 1024,
 	CheckOrigin: func(r *http.Request) bool {
 		origin := r.Header.Get("Origin")
 		if origin == "" {
@@ -26,11 +30,7 @@ var upgrader = websocket.Upgrader{
 		if sameOriginHost(origin, r.Host) {
 			return true
 		}
-		allowedOrigins := strings.TrimSpace(os.Getenv("ALLOWED_ORIGINS"))
-		if allowedOrigins == "" {
-			return false
-		}
-		for _, allowed := range strings.Split(allowedOrigins, ",") {
+		for _, allowed := range strings.Split(envutil.String("ALLOWED_ORIGINS", ""), ",") {
 			if strings.TrimSpace(allowed) == origin {
 				return true
 			}
@@ -44,20 +44,15 @@ func sameOriginHost(origin, requestHost string) bool {
 	if err != nil || parsed.Host == "" || requestHost == "" {
 		return false
 	}
-
-	originHost := strings.ToLower(parsed.Hostname())
-	originPort := parsed.Port()
+	originHost, originPort := strings.ToLower(parsed.Hostname()), parsed.Port()
 	if originPort == "" {
 		originPort = defaultPort(parsed.Scheme)
 	}
-
 	host, port, err := net.SplitHostPort(requestHost)
 	if err != nil {
-		host = requestHost
-		port = ""
+		host, port = requestHost, ""
 	}
 	host = strings.ToLower(strings.Trim(host, "[]"))
-
 	if originHost != host {
 		return false
 	}
@@ -78,72 +73,140 @@ func defaultPort(scheme string) string {
 	}
 }
 
-// Message WebSocket消息结构
+// Message is the versioned, at-least-once WebSocket delivery envelope.
 type Message struct {
-	Type   string      `json:"type"` // task_progress, task_complete, notification, queue_status
-	Data   interface{} `json:"data"`
-	UserID uint        `json:"user_id,omitempty"` // 可选，用于指定接收用户
+	Type        string      `json:"type"`
+	Data        interface{} `json:"data"`
+	UserID      uint        `json:"user_id,omitempty"`
+	MessageID   string      `json:"message_id,omitempty"`
+	Sequence    uint64      `json:"sequence,omitempty"`
+	CreatedAtMS int64       `json:"created_at,omitempty"`
+	ExpiresAtMS int64       `json:"expires_at,omitempty"`
+	PublisherID string      `json:"publisher_id,omitempty"`
 }
 
-// Client 单个WebSocket连接
+type pendingDelivery struct {
+	data      []byte
+	attempts  int
+	nextRetry time.Time
+	expiresAt time.Time
+}
+
 type Client struct {
-	hub    *Hub
-	conn   *websocket.Conn
-	send   chan []byte
-	userID uint
+	hub       *Hub
+	conn      *websocket.Conn
+	send      chan []byte
+	userID    uint
+	pendingMu sync.Mutex
+	pending   map[string]*pendingDelivery
 }
 
-// Hub 管理所有WebSocket连接，按userID分组
 type Hub struct {
-	mu         sync.RWMutex
-	clients    map[uint]map[*Client]bool // userID -> clients
-	register   chan *Client
-	unregister chan *Client
-	stopCh     chan struct{}
-	stopOnce   sync.Once
-	offlineSem chan struct{}
-	wsRepo     *repository.WSMessageRepository // WebSocket消息仓库
+	mu          sync.RWMutex
+	clients     map[uint]map[*Client]bool
+	register    chan *Client
+	unregister  chan *Client
+	stopCh      chan struct{}
+	runDone     chan struct{}
+	stopOnce    sync.Once
+	offlineSem  chan struct{}
+	offlineWG   sync.WaitGroup
+	operationWG sync.WaitGroup
+	clientWG    sync.WaitGroup
+	stopped     bool
+	wsRepo      *repository.WSMessageRepository
+	eventBus    *redisEventBus
+	seen        map[string]time.Time
+	fallbackSeq atomic.Uint64
 }
 
-// 全局单例
 var globalHub *Hub
 var hubOnce sync.Once
 
-// GetHub 获取全局Hub实例
 func GetHub() *Hub {
 	hubOnce.Do(func() {
-		globalHub = &Hub{
-			clients:    make(map[uint]map[*Client]bool),
-			register:   make(chan *Client, 64),
-			unregister: make(chan *Client, 64),
-			stopCh:     make(chan struct{}),
-			offlineSem: make(chan struct{}, 4),
-		}
+		globalHub = newHub()
 		go globalHub.run()
 	})
 	return globalHub
 }
 
-// Stop 停止 Hub 主循环并关闭所有客户端连接。通常在 API 进程优雅退出时调用。
+func newHub() *Hub {
+	return &Hub{
+		clients: make(map[uint]map[*Client]bool), register: make(chan *Client, 64),
+		unregister: make(chan *Client, 64), stopCh: make(chan struct{}), runDone: make(chan struct{}),
+		offlineSem: make(chan struct{}, 4), seen: make(map[string]time.Time),
+	}
+}
+
+// ConfigureEventBus starts one Redis subscription per API/Worker process.
+func (h *Hub) ConfigureEventBus(parent context.Context, transport EventTransport, channel, nodeID string) error {
+	if h == nil {
+		return fmt.Errorf("WebSocket hub is nil")
+	}
+	bus, err := newRedisEventBus(parent, transport, channel, nodeID, h)
+	if err != nil {
+		return fmt.Errorf("启动 WebSocket 事件总线失败: %w", err)
+	}
+	h.mu.Lock()
+	if h.stopped {
+		h.mu.Unlock()
+		bus.Stop()
+		return fmt.Errorf("WebSocket hub already stopped")
+	}
+	old := h.eventBus
+	h.eventBus = bus
+	h.mu.Unlock()
+	if old != nil {
+		old.Stop()
+	}
+	return nil
+}
+
 func (h *Hub) Stop() {
 	if h == nil {
 		return
 	}
 	h.stopOnce.Do(func() {
-		close(h.stopCh)
 		h.mu.Lock()
-		defer h.mu.Unlock()
+		h.stopped = true
+		bus := h.eventBus
+		h.eventBus = nil
+		h.mu.Unlock()
+		if bus != nil {
+			bus.Stop()
+		}
+		close(h.stopCh)
+		<-h.runDone
+		h.offlineWG.Wait()
+		h.operationWG.Wait()
+
+		h.mu.Lock()
+		all := make(map[*Client]struct{})
 		for _, conns := range h.clients {
 			for client := range conns {
-				close(client.send)
-				_ = client.conn.Close()
+				all[client] = struct{}{}
 			}
 		}
+		for {
+			select {
+			case client := <-h.register:
+				all[client] = struct{}{}
+			default:
+				goto drained
+			}
+		}
+	drained:
 		h.clients = make(map[uint]map[*Client]bool)
+		h.mu.Unlock()
+		for client := range all {
+			close(client.send)
+			_ = client.conn.Close()
+		}
+		h.clientWG.Wait()
 	})
 }
 
-// SetWSMessageRepository 设置WebSocket消息仓库（用于消息持久化）
 func (h *Hub) SetWSMessageRepository(repo *repository.WSMessageRepository) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -151,162 +214,271 @@ func (h *Hub) SetWSMessageRepository(repo *repository.WSMessageRepository) {
 }
 
 func (h *Hub) run() {
+	defer close(h.runDone)
 	for {
 		select {
 		case client := <-h.register:
 			h.mu.Lock()
+			if h.stopped {
+				h.mu.Unlock()
+				_ = client.conn.Close()
+				continue
+			}
 			if h.clients[client.userID] == nil {
 				h.clients[client.userID] = make(map[*Client]bool)
 			}
 			h.clients[client.userID][client] = true
-			wsRepo := h.wsRepo
-			connCount := len(h.clients[client.userID])
+			repo, count := h.wsRepo, len(h.clients[client.userID])
 			h.mu.Unlock()
-			log.Printf("[WS] 用户 %d 已连接，当前连接数: %d", client.userID, connCount)
-
-			// 用户上线时推送离线消息
-			if wsRepo != nil {
-				h.scheduleOfflineDelivery(client.userID, wsRepo)
+			log.Printf("[WS] 用户 %d 已连接，当前连接数: %d", client.userID, count)
+			if repo != nil {
+				h.scheduleOfflineDelivery(client, repo)
 			}
-
 		case client := <-h.unregister:
 			h.mu.Lock()
-			if conns, ok := h.clients[client.userID]; ok {
-				if _, exists := conns[client]; exists {
+			if conns := h.clients[client.userID]; conns != nil {
+				if _, ok := conns[client]; ok {
 					delete(conns, client)
 					close(client.send)
-					if len(conns) == 0 {
-						delete(h.clients, client.userID)
-					}
+				}
+				if len(conns) == 0 {
+					delete(h.clients, client.userID)
 				}
 			}
 			h.mu.Unlock()
-			log.Printf("[WS] 用户 %d 已断开", client.userID)
 		case <-h.stopCh:
 			return
 		}
 	}
 }
 
-func (h *Hub) scheduleOfflineDelivery(userID uint, wsRepo *repository.WSMessageRepository) {
+func (h *Hub) scheduleOfflineDelivery(client *Client, repo *repository.WSMessageRepository) {
+	if h.isStopped() {
+		return
+	}
 	select {
 	case h.offlineSem <- struct{}{}:
+		h.offlineWG.Add(1)
 		go func() {
+			defer h.offlineWG.Done()
 			defer func() { <-h.offlineSem }()
-			h.deliverOfflineMessages(userID, wsRepo)
+			h.deliverOfflineMessages(client, repo)
 		}()
 	default:
-		log.Printf("[WS] 离线消息投递并发已满，跳过本次上线投递 user_id=%d", userID)
+		log.Printf("[WS] 离线消息投递并发已满，稍后由重连补偿 user_id=%d", client.userID)
 	}
 }
 
-// deliverOfflineMessages 推送离线消息给用户
-func (h *Hub) deliverOfflineMessages(userID uint, wsRepo *repository.WSMessageRepository) {
-	// 获取未读消息
-	messages, err := wsRepo.GetUndeliveredMessages(userID, 50)
-	if err != nil {
-		log.Printf("[WS] 获取用户 %d 的离线消息失败: %v", userID, err)
-		return
-	}
+func (h *Hub) isStopped() bool { h.mu.RLock(); defer h.mu.RUnlock(); return h.stopped }
 
-	if len(messages) == 0 {
-		return
-	}
-
-	log.Printf("[WS] 推送 %d 条离线消息给用户 %d", len(messages), userID)
-
-	for _, msg := range messages {
-		// 解析消息数据
-		var data interface{}
-		if err := json.Unmarshal([]byte(msg.Data), &data); err != nil {
-			data = msg.Data
-		}
-
-		// 发送消息
-		h.SendToUser(userID, Message{
-			Type: msg.Type,
-			Data: data,
-		})
-
-		// 标记为已送达
-		if err := wsRepo.MarkAsDelivered(msg.ID); err != nil {
-			log.Printf("[WS] 标记消息 %d 为已送达失败: %v", msg.ID, err)
-		}
-	}
-}
-
-// SendToUser 向指定用户的所有连接推送消息（支持持久化）
-func (h *Hub) SendToUser(userID uint, msg Message) {
-	data, err := json.Marshal(msg)
-	if err != nil {
-		log.Printf("[WS] 序列化消息失败: %v", err)
-		return
-	}
-
+func (h *Hub) beginOperation() bool {
 	h.mu.RLock()
-	conns := h.clients[userID]
-	clients := make([]*Client, 0, len(conns))
-	for client := range conns {
-		clients = append(clients, client)
+	defer h.mu.RUnlock()
+	if h.stopped {
+		return false
 	}
-	wsRepo := h.wsRepo
-	h.mu.RUnlock()
+	h.operationWG.Add(1)
+	return true
+}
 
-	// 检查用户是否在线
-	isOnline := len(clients) > 0
-
-	// 如果用户不在线且启用了持久化，保存消息到数据库
-	if !isOnline && wsRepo != nil {
-		err := wsRepo.SaveMessage(userID, msg.Type, msg.Data)
-		if err != nil {
-			log.Printf("[WS] 保存离线消息失败: %v", err)
-		} else {
-			log.Printf("[WS] 用户 %d 不在线，消息已持久化", userID)
-		}
+func (h *Hub) deliverOfflineMessages(client *Client, repo *repository.WSMessageRepository) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	messages, err := repo.WithContext(ctx).GetUndeliveredMessages(client.userID, 50)
+	if err != nil {
+		log.Printf("[WS] 获取用户 %d 离线消息失败: %v", client.userID, err)
 		return
 	}
+	for _, stored := range messages {
+		if h.isStopped() {
+			return
+		}
+		var data interface{}
+		if err := json.Unmarshal([]byte(stored.Data), &data); err != nil {
+			data = stored.Data
+		}
+		expires := int64(0)
+		if stored.ExpiresAt != nil {
+			expires = stored.ExpiresAt.UnixMilli()
+		}
+		messageID := stored.MessageID
+		if messageID == "" {
+			messageID = fmt.Sprintf("legacy-%d", stored.ID)
+		}
+		msg := Message{Type: stored.Type, Data: data, UserID: stored.UserID, MessageID: messageID,
+			Sequence: stored.Sequence, CreatedAtMS: stored.CreatedAt.UnixMilli(), ExpiresAtMS: expires}
+		payload, marshalErr := json.Marshal(msg)
+		if marshalErr != nil {
+			continue
+		}
+		client.enqueue(msg, payload)
+	}
+}
 
-	// 发送给所有连接
-	delivered := false
-	for _, client := range clients {
-		select {
-		case client.send <- data:
-			delivered = true
-		default:
-			h.tryUnregister(client)
+func (h *Hub) prepareMessage(userID uint, msg Message) Message {
+	now := time.Now()
+	ttl := envutil.Duration("WS_MESSAGE_TTL", 24*time.Hour)
+	if ttl <= 0 {
+		ttl = 24 * time.Hour
+	}
+	msg.UserID = userID
+	if msg.MessageID == "" {
+		msg.MessageID = uuid.NewString()
+	}
+	if msg.CreatedAtMS == 0 {
+		msg.CreatedAtMS = now.UnixMilli()
+	}
+	if msg.ExpiresAtMS == 0 {
+		msg.ExpiresAtMS = now.Add(ttl).UnixMilli()
+	}
+	h.mu.RLock()
+	bus := h.eventBus
+	h.mu.RUnlock()
+	if msg.Sequence == 0 && userID != 0 {
+		if bus != nil {
+			if seq, err := bus.nextSequence(userID); err == nil {
+				msg.Sequence = seq
+			} else {
+				log.Printf("[WS] 分配用户序号失败: %v", err)
+			}
+		}
+		if msg.Sequence == 0 {
+			msg.Sequence = h.fallbackSeq.Add(1)
 		}
 	}
+	if bus != nil {
+		msg.PublisherID = bus.nodeID
+	}
+	return msg
+}
 
-	// 如果发送失败且启用了持久化，保存消息
-	if !delivered && wsRepo != nil {
-		err := wsRepo.SaveMessage(userID, msg.Type, msg.Data)
+func (h *Hub) SendToUser(userID uint, msg Message) {
+	if userID == 0 || !h.beginOperation() {
+		return
+	}
+	defer h.operationWG.Done()
+	msg = h.prepareMessage(userID, msg)
+	h.mu.RLock()
+	repo, bus := h.wsRepo, h.eventBus
+	h.mu.RUnlock()
+	if repo != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		err := repo.WithContext(ctx).SaveMessageEnvelope(userID, msg.Type, msg.Data, msg.MessageID, msg.Sequence, time.UnixMilli(msg.ExpiresAtMS))
+		cancel()
 		if err != nil {
-			log.Printf("[WS] 保存未送达消息失败: %v", err)
+			log.Printf("[WS] 持久化消息失败 message_id=%s: %v", msg.MessageID, err)
+		}
+	}
+	h.deliverNewEnvelope(msg)
+	if bus != nil {
+		if err := bus.publish(msg); err != nil {
+			log.Printf("[WS] 跨节点发布失败 message_id=%s: %v", msg.MessageID, err)
 		}
 	}
 }
 
-// Broadcast 向所有连接广播消息
 func (h *Hub) Broadcast(msg Message) {
-	data, err := json.Marshal(msg)
+	if !h.beginOperation() {
+		return
+	}
+	defer h.operationWG.Done()
+	msg = h.prepareMessage(0, msg)
+	h.mu.RLock()
+	bus := h.eventBus
+	h.mu.RUnlock()
+	h.deliverNewEnvelope(msg)
+	if bus != nil {
+		if err := bus.publish(msg); err != nil {
+			log.Printf("[WS] 跨节点广播失败 message_id=%s: %v", msg.MessageID, err)
+		}
+	}
+}
+
+func (h *Hub) acceptEnvelope(msg Message) {
+	if !h.beginOperation() {
+		return
+	}
+	defer h.operationWG.Done()
+	h.deliverNewEnvelope(msg)
+}
+
+func (h *Hub) deliverNewEnvelope(msg Message) {
+	if msg.ExpiresAtMS > 0 && time.Now().UnixMilli() >= msg.ExpiresAtMS {
+		return
+	}
+	if !h.markSeen(msg.MessageID, msg.ExpiresAtMS) {
+		return
+	}
+	payload, err := json.Marshal(msg)
 	if err != nil {
 		return
 	}
-
 	h.mu.RLock()
 	clients := make([]*Client, 0)
-	for _, conns := range h.clients {
-		for client := range conns {
+	if msg.UserID == 0 {
+		for _, conns := range h.clients {
+			for client := range conns {
+				clients = append(clients, client)
+			}
+		}
+	} else {
+		for client := range h.clients[msg.UserID] {
 			clients = append(clients, client)
 		}
 	}
 	h.mu.RUnlock()
-
 	for _, client := range clients {
-		select {
-		case client.send <- data:
-		default:
+		if !client.enqueue(msg, payload) {
 			h.tryUnregister(client)
+		}
+	}
+}
+
+func (h *Hub) markSeen(messageID string, expiresAtMS int64) bool {
+	if messageID == "" {
+		return true
+	}
+	now := time.Now()
+	expiry := now.Add(24 * time.Hour)
+	if expiresAtMS > 0 {
+		expiry = time.UnixMilli(expiresAtMS)
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if existing, ok := h.seen[messageID]; ok && existing.After(now) {
+		return false
+	}
+	h.seen[messageID] = expiry
+	if len(h.seen) > 4096 {
+		for id, exp := range h.seen {
+			if !exp.After(now) {
+				delete(h.seen, id)
+			}
+		}
+	}
+	return true
+}
+
+func (h *Hub) acknowledge(userID uint, messageID string) {
+	if messageID == "" || !h.beginOperation() {
+		return
+	}
+	defer h.operationWG.Done()
+	h.mu.RLock()
+	clients := make([]*Client, 0)
+	for client := range h.clients[userID] {
+		clients = append(clients, client)
+	}
+	repo := h.wsRepo
+	h.mu.RUnlock()
+	for _, client := range clients {
+		client.ack(messageID)
+	}
+	if repo != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if _, err := repo.WithContext(ctx).MarkAsDeliveredByMessageID(userID, messageID); err != nil {
+			log.Printf("[WS] ACK 持久化失败 user_id=%d message_id=%s: %v", userID, messageID, err)
 		}
 	}
 }
@@ -315,86 +487,167 @@ func (h *Hub) tryUnregister(client *Client) {
 	select {
 	case h.unregister <- client:
 	default:
-		log.Printf("[WS] unregister 队列已满，跳过阻塞客户端 user_id=%d", client.userID)
+		log.Printf("[WS] unregister 队列已满 user_id=%d", client.userID)
 	}
 }
 
-// HandleWebSocket 处理WebSocket升级请求
 func (h *Hub) HandleWebSocket(w http.ResponseWriter, r *http.Request, userID uint) {
+	if !h.beginOperation() {
+		http.Error(w, "service shutting down", http.StatusServiceUnavailable)
+		return
+	}
+	defer h.operationWG.Done()
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		log.Printf("[WS] 升级失败: %v", err)
 		return
 	}
-
-	client := &Client{
-		hub:    h,
-		conn:   conn,
-		send:   make(chan []byte, 256),
-		userID: userID,
-	}
-
-	// 注册路径使用非阻塞发送，避免 run loop 阻塞时 HandleWebSocket 卡住。
+	client := &Client{hub: h, conn: conn, send: make(chan []byte, 256), userID: userID, pending: make(map[string]*pendingDelivery)}
 	select {
 	case h.register <- client:
 	case <-h.stopCh:
 		_ = conn.Close()
 		return
 	default:
-		log.Printf("[WS] register 队列已满，拒绝用户 %d 的连接", userID)
 		_ = conn.Close()
 		return
 	}
-
-	go client.writePump()
-	go client.readPump()
+	h.clientWG.Add(2)
+	go func() { defer h.clientWG.Done(); client.writePump() }()
+	go func() { defer h.clientWG.Done(); client.readPump() }()
 }
 
-// readPump 读取客户端消息（主要用于保持连接和处理ping/pong）
+func (c *Client) enqueue(msg Message, data []byte) bool {
+	if msg.MessageID != "" && msg.Type != "pong" {
+		timeout := envutil.Duration("WS_ACK_TIMEOUT", 5*time.Second)
+		if timeout <= 0 {
+			timeout = 5 * time.Second
+		}
+		expires := time.Time{}
+		if msg.ExpiresAtMS > 0 {
+			expires = time.UnixMilli(msg.ExpiresAtMS)
+		}
+		c.pendingMu.Lock()
+		c.pending[msg.MessageID] = &pendingDelivery{data: append([]byte(nil), data...), attempts: 1, nextRetry: time.Now().Add(timeout), expiresAt: expires}
+		c.pendingMu.Unlock()
+	}
+	select {
+	case c.send <- data:
+		return true
+	default:
+		c.ack(msg.MessageID)
+		return false
+	}
+}
+
+func (c *Client) ack(messageID string) {
+	c.pendingMu.Lock()
+	delete(c.pending, messageID)
+	c.pendingMu.Unlock()
+}
+
+func (c *Client) retryDue(now time.Time) [][]byte {
+	maxRetries := envutil.Int("WS_MAX_RETRIES", 3)
+	if maxRetries < 1 {
+		maxRetries = 1
+	}
+	timeout := envutil.Duration("WS_ACK_TIMEOUT", 5*time.Second)
+	if timeout <= 0 {
+		timeout = 5 * time.Second
+	}
+	var due [][]byte
+	c.pendingMu.Lock()
+	defer c.pendingMu.Unlock()
+	for id, p := range c.pending {
+		if !p.expiresAt.IsZero() && !p.expiresAt.After(now) {
+			delete(c.pending, id)
+			continue
+		}
+		if now.Before(p.nextRetry) {
+			continue
+		}
+		if p.attempts >= maxRetries {
+			delete(c.pending, id)
+			continue
+		}
+		p.attempts++
+		p.nextRetry = now.Add(timeout)
+		due = append(due, append([]byte(nil), p.data...))
+	}
+	return due
+}
+
 func (c *Client) readPump() {
-	defer func() {
-		c.hub.tryUnregister(c)
-		c.conn.Close()
-	}()
-
+	defer func() { c.hub.tryUnregister(c); _ = c.conn.Close() }()
 	c.conn.SetReadLimit(4096)
-	c.conn.SetReadDeadline(time.Now().Add(60 * time.Second))
-	c.conn.SetPongHandler(func(string) error {
-		c.conn.SetReadDeadline(time.Now().Add(60 * time.Second))
-		return nil
-	})
-
+	_ = c.conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+	c.conn.SetPongHandler(func(string) error { return c.conn.SetReadDeadline(time.Now().Add(60 * time.Second)) })
 	for {
-		_, _, err := c.conn.ReadMessage()
+		_, payload, err := c.conn.ReadMessage()
 		if err != nil {
-			break
+			return
+		}
+		_ = c.conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+		var command struct {
+			Type      string `json:"type"`
+			MessageID string `json:"message_id"`
+		}
+		if json.Unmarshal(payload, &command) == nil && command.Type == "ack" {
+			c.hub.acknowledge(c.userID, command.MessageID)
+			continue
+		}
+		if isApplicationPing(payload) {
+			pong, _ := json.Marshal(Message{Type: "pong", Data: map[string]interface{}{"ts": time.Now().UnixMilli()}})
+			select {
+			case c.send <- pong:
+			default:
+				return
+			}
 		}
 	}
 }
 
-// writePump 向客户端写入消息
-func (c *Client) writePump() {
-	ticker := time.NewTicker(30 * time.Second)
-	defer func() {
-		ticker.Stop()
-		c.conn.Close()
-	}()
+func isApplicationPing(payload []byte) bool {
+	if len(payload) == 0 || len(payload) > 1024 {
+		return false
+	}
+	var msg Message
+	if json.Unmarshal(payload, &msg) != nil {
+		return false
+	}
+	return msg.Type == "ping"
+}
 
+func (c *Client) writePump() {
+	heartbeat := time.NewTicker(30 * time.Second)
+	retryEvery := envutil.Duration("WS_ACK_TIMEOUT", 5*time.Second) / 2
+	if retryEvery < 500*time.Millisecond {
+		retryEvery = 500 * time.Millisecond
+	}
+	retry := time.NewTicker(retryEvery)
+	defer func() { heartbeat.Stop(); retry.Stop(); _ = c.conn.Close() }()
+	write := func(kind int, data []byte) error {
+		_ = c.conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+		return c.conn.WriteMessage(kind, data)
+	}
 	for {
 		select {
 		case message, ok := <-c.send:
-			c.conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
 			if !ok {
-				c.conn.WriteMessage(websocket.CloseMessage, []byte{})
+				_ = write(websocket.CloseMessage, nil)
 				return
 			}
-			if err := c.conn.WriteMessage(websocket.TextMessage, message); err != nil {
+			if write(websocket.TextMessage, message) != nil {
 				return
 			}
-
-		case <-ticker.C:
-			c.conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
-			if err := c.conn.WriteMessage(websocket.PingMessage, nil); err != nil {
+		case <-retry.C:
+			for _, message := range c.retryDue(time.Now()) {
+				if write(websocket.TextMessage, message) != nil {
+					return
+				}
+			}
+		case <-heartbeat.C:
+			if write(websocket.PingMessage, nil) != nil {
 				return
 			}
 		}

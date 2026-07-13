@@ -64,6 +64,9 @@ const (
 	// AccountHealthCheckCron 账号健康检查定时任务表达式（每6小时）
 	AccountHealthCheckCron = "0 */6 * * *"
 
+	// ArchiveHistoryCron 历史日志/抢兑记录归档任务表达式（每天凌晨2点）
+	ArchiveHistoryCron = "0 2 * * *"
+
 	// StatsRetentionDays 统计数据保留天数
 	StatsRetentionDays = 30
 

@@ -9,7 +9,14 @@ import (
 )
 
 func (api *CaiyunAPI) ensureMarketDeviceID() {
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	api.ensureMarketDeviceIDContext(context.Background())
+}
+
+func (api *CaiyunAPI) ensureMarketDeviceIDContext(ctx context.Context) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
 	_ = api.client.EnsureShumeiDeviceID(ctx)
 }

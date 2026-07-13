@@ -3,7 +3,11 @@ package repository
 import (
 	"caiyun/internal/models"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
+	"fmt"
+	"strings"
 	"time"
 
 	"gorm.io/gorm"
@@ -41,7 +45,11 @@ func (r *UserRepository) WithContext(ctx context.Context) *UserRepository {
 
 // Create 创建用户
 func (r *UserRepository) Create(user *models.User) error {
-	return r.db.Create(user).Error
+	if user == nil {
+		return fmt.Errorf("user is nil")
+	}
+	prepareUserIdentity(user)
+	return mapUserIdentityWriteError(r.db.Create(user).Error)
 }
 
 // FindByID 根据ID查找用户
@@ -57,7 +65,7 @@ func (r *UserRepository) FindByID(id uint) (*models.User, error) {
 // FindByUsername 根据用户名查找用户
 func (r *UserRepository) FindByUsername(username string) (*models.User, error) {
 	var user models.User
-	err := r.db.Where("username = ?", username).First(&user).Error
+	err := r.db.Where("normalized_username = ?", NormalizeUsername(username)).First(&user).Error
 	if err != nil {
 		return nil, err
 	}
@@ -66,8 +74,12 @@ func (r *UserRepository) FindByUsername(username string) (*models.User, error) {
 
 // FindByEmail 根据邮箱查找用户
 func (r *UserRepository) FindByEmail(email string) (*models.User, error) {
+	normalized := NormalizeEmail(email)
+	if normalized == nil {
+		return nil, gorm.ErrRecordNotFound
+	}
 	var user models.User
-	err := r.db.Where("email = ?", email).First(&user).Error
+	err := r.db.Where("normalized_email = ?", *normalized).First(&user).Error
 	if err != nil {
 		return nil, err
 	}
@@ -76,7 +88,11 @@ func (r *UserRepository) FindByEmail(email string) (*models.User, error) {
 
 // Update 更新用户
 func (r *UserRepository) Update(user *models.User) error {
-	return r.db.Save(user).Error
+	if user == nil {
+		return fmt.Errorf("user is nil")
+	}
+	prepareUserIdentity(user)
+	return mapUserIdentityWriteError(r.db.Save(user).Error)
 }
 
 // UpdatePasswordAndRevokeSessions 更新用户密码并递增会话版本，使旧 JWT 立即失效。
@@ -87,6 +103,23 @@ func (r *UserRepository) UpdatePasswordAndRevokeSessions(userID uint, hashedPass
 			"password":      hashedPassword,
 			"token_version": gorm.Expr("token_version + ?", 1),
 		}).Error
+}
+
+// UpdateRoleAndRevokeSessions 更新用户角色并递增会话版本，使旧 JWT 立即失效。
+func (r *UserRepository) UpdateRoleAndRevokeSessions(userID uint, role string) error {
+	return r.db.Model(&models.User{}).
+		Where("id = ?", userID).
+		Updates(map[string]interface{}{
+			"role":          role,
+			"token_version": gorm.Expr("token_version + ?", 1),
+		}).Error
+}
+
+// CountByRole 统计指定角色用户数量。
+func (r *UserRepository) CountByRole(role string) (int64, error) {
+	var count int64
+	err := r.db.Model(&models.User{}).Where("role = ?", role).Count(&count).Error
+	return count, err
 }
 
 // Delete 删除用户
@@ -117,15 +150,52 @@ func (r *UserRepository) FindByRole(role string) ([]*models.User, error) {
 // ExistsByUsername 检查用户名是否存在
 func (r *UserRepository) ExistsByUsername(username string) (bool, error) {
 	var count int64
-	err := r.db.Model(&models.User{}).Where("username = ?", username).Count(&count).Error
+	err := r.db.Model(&models.User{}).Where("normalized_username = ?", NormalizeUsername(username)).Count(&count).Error
 	return count > 0, err
 }
 
 // ExistsByEmail 检查邮箱是否存在
 func (r *UserRepository) ExistsByEmail(email string) (bool, error) {
+	normalized := NormalizeEmail(email)
+	if normalized == nil {
+		return false, nil
+	}
 	var count int64
-	err := r.db.Model(&models.User{}).Where("email = ?", email).Count(&count).Error
+	err := r.db.Model(&models.User{}).Where("normalized_email = ?", *normalized).Count(&count).Error
 	return count > 0, err
+}
+
+func prepareUserIdentity(user *models.User) {
+	user.Username = strings.TrimSpace(user.Username)
+	user.NormalizedUsername = NormalizeUsername(user.Username)
+	user.Email = strings.TrimSpace(user.Email)
+	user.NormalizedEmail = NormalizeEmail(user.Email)
+}
+
+// AnonymizeAndDelete removes reusable identity data and revokes all token
+// versions before soft-deleting the user. It must be called inside a Unit of
+// Work together with dependent-data cleanup.
+func (r *UserRepository) AnonymizeAndDelete(id uint) error {
+	stamp := fmt.Sprintf("deleted-%d-%d", id, time.Now().UnixNano())
+	digest := sha256.Sum256([]byte(stamp))
+	anonymizedUsername := fmt.Sprintf("deleted-%d-%s", id, hex.EncodeToString(digest[:6]))
+	result := r.db.Model(&models.User{}).
+		Where("id = ?", id).
+		Updates(map[string]interface{}{
+			"username":            anonymizedUsername,
+			"normalized_username": NormalizeUsername(anonymizedUsername),
+			"email":               "",
+			"normalized_email":    nil,
+			"password":            hex.EncodeToString(digest[:]),
+			"token_version":       gorm.Expr("token_version + ?", 1),
+		})
+	if result.Error != nil {
+		return mapUserIdentityWriteError(result.Error)
+	}
+	if result.RowsAffected == 0 {
+		return gorm.ErrRecordNotFound
+	}
+	return r.db.Delete(&models.User{}, id).Error
 }
 
 func (r *UserRepository) GetLoginFailure(keyHash string) (int, time.Time, error) {

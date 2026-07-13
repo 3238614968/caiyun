@@ -11,9 +11,16 @@
 
     <div class="content">
       <!-- 选项卡 -->
-      <el-tabs v-model="activeTab" type="border-card" class="exchange-tabs">
+      <el-tabs
+        v-model="activeTab"
+        type="border-card"
+        class="exchange-tabs"
+      >
         <!-- 商品列表 -->
-        <el-tab-pane label="商品中心" name="products">
+        <el-tab-pane
+          label="商品中心"
+          name="products"
+        >
           <ProductGallery
             v-model:keyword="searchKeyword"
             v-model:category="currentCategory"
@@ -21,7 +28,7 @@
             :products="filteredProducts"
             :categories="categories"
             :exchange-config="exchangeConfig"
-            :get-product-image-url="getProductImageUrl"
+            :get-product-image-source="getProductImageSource"
             @search="handleSearch"
             @reserve="handleReserveProduct"
             @immediate="handleImmediateExchange"
@@ -29,8 +36,11 @@
           />
         </el-tab-pane>
 
-        <!-- 兑换账号管理 -->
-        <el-tab-pane label="兑换账号" name="accounts">
+        <!-- 账号规则管理 -->
+        <el-tab-pane
+          label="抢兑规则"
+          name="accounts"
+        >
           <ExchangeAccountList
             :is-mobile="isMobile"
             :accounts="accounts"
@@ -41,24 +51,26 @@
         </el-tab-pane>
 
         <!-- 抢兑任务管理 -->
-        <el-tab-pane label="抢兑任务" name="tasks">
-          <ExchangeTaskList
+        <el-tab-pane
+          label="抢兑任务"
+          name="tasks"
+        >
+          <ExchangeTaskManager
+            v-model:filters="taskFilters"
             :is-mobile="isMobile"
-            :tasks="tasks"
+            :tasks="filteredTasks"
+            @add="showCreateTaskDialog()"
             @execute="executeTask"
             @delete="deleteTask"
           />
         </el-tab-pane>
 
         <!-- 领奖专区 -->
-        <el-tab-pane label="领奖专区" name="rewards">
-          <div class="rewards-section">
-            <el-empty description="领奖专区功能开发中，敬请期待...">
-              <template #image>
-                <el-icon :size="60" color="#909399"><Present /></el-icon>
-              </template>
-            </el-empty>
-          </div>
+        <el-tab-pane
+          label="领奖专区"
+          name="rewards"
+        >
+          <ExchangeRewardsPlaceholder />
         </el-tab-pane>
       </el-tabs>
     </div>
@@ -69,7 +81,10 @@
       :is-mobile="isMobile"
       :selected-product="selectedProduct"
       :accounts="accounts"
-      @submit="createTask"
+      :products="products"
+      :user-accounts="userAccounts"
+      :user-accounts-loading="userAccountsLoading"
+      @submit="submitCreateTask"
     />
 
     <ImmediateExchangeDialog
@@ -78,7 +93,9 @@
       :is-mobile="isMobile"
       :selected-product="selectedProduct"
       :accounts="accounts"
-      @submit="confirmImmediateExchange"
+      :user-accounts="userAccounts"
+      :user-accounts-loading="userAccountsLoading"
+      @submit="submitImmediateExchange"
     />
 
     <ExchangeAccountDialog
@@ -98,29 +115,34 @@
       @search-accounts="searchAccounts"
       @submit="saveAccount"
     />
+
+    <BatchCreateTaskResultDialog
+      v-model="batchTaskResultDialogVisible"
+      :is-mobile="isMobile"
+      :display="batchTaskResultDisplay"
+      :retryable="hasRetryableCreateTaskFailures"
+      :retry-loading="retryFailedCreateTaskLoading"
+      @retry="retryFailedCreateTaskItems"
+    />
   </div>
 </template>
 
 <script setup lang="ts">
-import '@/styles/element/exchange'
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Present } from '@element-plus/icons-vue'
 import {
   searchProducts,
   getProductCategories,
-  getExchangeAccounts,
-  addExchangeAccount,
-  updateExchangeAccount,
-  deleteExchangeAccount,
-  createExchangeTask,
+  getExchangeRules,
+  addExchangeRule,
+  updateExchangeRule,
+  deleteExchangeRule,
   getExchangeTasks,
   deleteExchangeTask,
   executeExchangeTask,
-  immediateExchange,
   getExchangeConfigPublic,
   type ExchangeConfig,
-  type ExchangeAccount,
+  type ExchangeRule,
   type ExchangeTask,
   type Product
 } from '@/api/exchange'
@@ -129,13 +151,19 @@ import { useAuthStore } from '@/store/auth'
 import { useExchangeMedia } from '@/composables/exchange/useExchangeMedia'
 import { useExchangeForms } from '@/composables/exchange/useExchangeForms'
 import { useExchangeDisplay } from '@/composables/exchange/useExchangeDisplay'
+import { useExchangeTaskFilters } from '@/composables/exchange/useExchangeTaskFilters'
+import { useExchangeTaskActions } from '@/composables/exchange/useExchangeTaskActions'
+import { createExchangeReservationPreset } from '@/composables/exchange/useExchangeReservationPreset'
+import { operationQueuedMessage } from '@/api/operation'
 import ProductGallery from '@/components/exchange/ProductGallery.vue'
 import ExchangeHeader from '@/components/exchange/ExchangeHeader.vue'
 import ExchangeAccountList from '@/components/exchange/ExchangeAccountList.vue'
-import ExchangeTaskList from '@/components/exchange/ExchangeTaskList.vue'
+import ExchangeTaskManager from '@/components/exchange/ExchangeTaskManager.vue'
 import CreateExchangeTaskDialog from '@/components/exchange/CreateExchangeTaskDialog.vue'
 import ImmediateExchangeDialog from '@/components/exchange/ImmediateExchangeDialog.vue'
 import ExchangeAccountDialog from '@/components/exchange/ExchangeAccountDialog.vue'
+import BatchCreateTaskResultDialog from '@/components/exchange/BatchCreateTaskResultDialog.vue'
+import ExchangeRewardsPlaceholder from '@/components/exchange/ExchangeRewardsPlaceholder.vue'
 
 // 状态
 const activeTab = ref('products')
@@ -144,12 +172,11 @@ const currentCategory = ref('')
 const exchangeConfig = ref<ExchangeConfig | null>(null)
 const categories = ref<string[]>([])
 const products = ref<Product[]>([])
-const accounts = ref<ExchangeAccount[]>([])
+const accounts = ref<ExchangeRule[]>([])
 const tasks = ref<ExchangeTask[]>([])
 const userAccounts = ref<Account[]>([])
 const userAccountsLoading = ref(false)
 const compactAccountDialog = ref(false)
-
 // 用户权限
 const authStore = useAuthStore()
 const isAdmin = computed(() => authStore.user?.role === 'admin')
@@ -162,7 +189,7 @@ const {
   isMobile,
   checkMobile,
   loadLocalImageMap,
-  getProductImageUrl
+  getProductImageSource
 } = useExchangeMedia()
 
 const {
@@ -174,6 +201,7 @@ const {
   taskForm,
   accountForm,
   isEditingAccount,
+  resetTaskForm,
   resetAccountForm
 } = useExchangeForms()
 
@@ -182,6 +210,11 @@ const {
   totalSuccess,
   totalFail
 } = useExchangeDisplay(products, tasks, currentCategory, searchKeyword)
+
+const {
+  taskFilters,
+  filteredTasks
+} = useExchangeTaskFilters(tasks)
 
 const accountDialogWidth = computed(() => {
   if (isMobile.value) return '95%'
@@ -195,6 +228,23 @@ const accountDialogTop = computed(() => (
 const accountDialogControlSize = computed(() => (
   isMobile.value || compactAccountDialog.value ? 'default' : 'large'
 ))
+
+const sortCloudAccounts = (list: Account[]) => {
+  const getTime = (value?: string) => {
+    const time = value ? new Date(value).getTime() : 0
+    return Number.isNaN(time) ? 0 : time
+  }
+
+  return [...list].sort((a, b) => {
+    const activeDiff = Number(Boolean(b.is_active)) - Number(Boolean(a.is_active))
+    if (activeDiff !== 0) return activeDiff
+
+    const cloudDiff = Number(b.cloud_count || 0) - Number(a.cloud_count || 0)
+    if (cloudDiff !== 0) return cloudDiff
+
+    return getTime(b.created_at) - getTime(a.created_at)
+  })
+}
 
 const syncViewportState = () => {
   checkMobile()
@@ -250,10 +300,10 @@ const loadCategories = async () => {
 
 const loadAccounts = async () => {
   try {
-    const res = await getExchangeAccounts()
-    accounts.value = res.accounts || []
+    const res = await getExchangeRules()
+    accounts.value = res.rules || res.accounts || []
   } catch (error: any) {
-    ElMessage.error('加载兑换账号失败：' + error.message)
+    ElMessage.error('加载抢兑规则失败：' + error.message)
   }
 }
 
@@ -280,7 +330,7 @@ const loadUserAccounts = async (force = false) => {
   userAccountsLoading.value = true
   try {
     const res = await getAccounts(1, 200)
-    userAccounts.value = (res.accounts || []).filter((account) => !!account?.id)
+    userAccounts.value = sortCloudAccounts((res.accounts || []).filter((account) => !!account?.id))
     syncDefaultAccountSelection()
   } catch (error: any) {
     userAccounts.value = []
@@ -290,17 +340,44 @@ const loadUserAccounts = async (force = false) => {
   }
 }
 
+const {
+  batchTaskResultDialogVisible,
+  batchTaskResultDisplay,
+  retryFailedCreateTaskLoading,
+  selectableCloudAccounts,
+  hasRetryableCreateTaskFailures,
+  getTaskAccountCount,
+  prepareTaskForm,
+  createTask,
+  retryFailedCreateTaskItems,
+  confirmImmediateExchange: runImmediateExchange
+} = useExchangeTaskActions({
+  isAdmin,
+  products,
+  accounts,
+  userAccounts,
+  selectedProduct,
+  taskForm,
+  resetTaskForm,
+  loadProducts,
+  loadAccounts,
+  loadTasks,
+  loadUserAccounts,
+  syncDefaultProductSelection
+})
+
 // 管理员搜索所有账号
 const searchAccounts = async (keyword: string) => {
   if (!isAdmin.value) return
-  if (!keyword || keyword.length < 2) {
+  const trimmedKeyword = keyword.trim()
+  if (!trimmedKeyword) {
     allAccountsSearchResults.value = []
     return
   }
   accountSearchLoading.value = true
   try {
-    const res = await searchAllAccounts(keyword, 20)
-    allAccountsSearchResults.value = res.accounts || []
+    const res = await searchAllAccounts(trimmedKeyword, 20)
+    allAccountsSearchResults.value = [...(res.accounts || [])].sort((a, b) => Number(Boolean(b.is_active)) - Number(Boolean(a.is_active)))
   } catch (error: any) {
     console.error('搜索账号失败：', error.message)
   } finally {
@@ -312,16 +389,9 @@ const handleSearch = () => {
   // 搜索已在前端完成，无需额外请求
 }
 
-const showCreateTaskDialog = (product: Product) => {
-  // 检查是否有兑换账号
-  if (accounts.value.length === 0) {
-    ElMessage.warning('请先添加兑换账号')
-    activeTab.value = 'accounts'
-    return
-  }
-  selectedProduct.value = product
-  taskForm.value.product_id = product.id
-  taskForm.value.exchange_account_id = accounts.value[0]?.id || 0
+const showCreateTaskDialog = async (product?: Product) => {
+  const prepared = await prepareTaskForm(product, 'fixed', 1)
+  if (!prepared) return
   taskDialogVisible.value = true
 }
 
@@ -344,6 +414,10 @@ const showAddAccountDialog = async () => {
     await loadUserAccounts(true)
     if (userAccounts.value.length === 0) {
       ElMessage.warning('暂无云盘账号，请先到账号页面添加')
+      return
+    }
+    if (selectableCloudAccounts.value.length === 0) {
+      ElMessage.warning('暂无可用云盘账号，请先启用账号后再添加抢兑规则')
       return
     }
   } else {
@@ -370,132 +444,63 @@ const loadExchangeConfig = async () => {
   }
 }
 
-const handleImmediateExchange = async (product: any) => {
-  // 检查是否有兑换账号
-  if (accounts.value.length === 0) {
-    ElMessage.warning('请先添加兑换账号')
-    activeTab.value = 'accounts'
-    return
-  }
+const handleImmediateExchange = async (product: Product) => {
+  const prepared = await prepareTaskForm(product, 'fixed', 1)
+  if (!prepared) return
 
-  // 如果只有一个账号，直接兑换；否则让用户选择
-  if (accounts.value.length === 1) {
-    try {
-      await ElMessageBox.confirm(
-        `确定要立即兑换 "${product.prize_name}" 吗？`,
-        '确认兑换',
-        {
-          confirmButtonText: '确定',
-          cancelButtonText: '取消',
-          type: 'warning'
-        }
-      )
-      await immediateExchange({
-        exchange_account_id: accounts.value[0].id,
-        product_id: product.id
-      })
-      ElMessage.success('兑换任务已启动')
-    } catch (error: any) {
-      if (error !== 'cancel') {
-        ElMessage.error('兑换失败：' + error.message)
-      }
-    }
-  } else {
-    // 多个账号，弹出选择框
-    selectedProduct.value = product
-    taskForm.value.product_id = product.id
-    taskForm.value.exchange_account_id = accounts.value[0]?.id || 0
+  if (getTaskAccountCount() > 1) {
     immediateExchangeDialogVisible.value = true
-  }
-}
-
-// 预定商品（创建定时抢兑任务）
-const handleReserveProduct = async (product: any) => {
-  // 检查是否有兑换账号
-  if (accounts.value.length === 0) {
-    ElMessage.warning('请先添加兑换账号')
-    activeTab.value = 'accounts'
     return
   }
 
-  // 判断商品分类，设置不同的抢兑时间
-  let exchangeTime = '10:00:00' // 默认10点
-  const category = product.category || ''
-  const prizeName = product.prize_name || ''
-
-  // Group 10 奶茶券是每周五 10:30
-  if (category.includes('奶茶') || category.includes('饮品') || prizeName.includes('茶') || prizeName.includes('喜茶') || prizeName.includes('蜜雪')) {
-    // 检查今天是否是周五
-    const today = new Date().getDay()
-    if (today === 5) { // 周五
-      exchangeTime = '10:30:00'
-    }
-  }
-
-  // 如果只有一个账号，直接创建预定任务
-  if (accounts.value.length === 1) {
-    try {
-      await ElMessageBox.confirm(
-        `确定要预定 "${product.prize_name}" 吗？\n系统将在 ${exchangeTime.substring(0, 5)} 自动尝试抢兑。`,
-        '确认预定',
-        {
-          confirmButtonText: '确定',
-          cancelButtonText: '取消',
-          type: 'warning'
-        }
-      )
-      // 创建抢兑任务（长期任务，持续尝试）
-      await createExchangeTask({
-        exchange_account_id: accounts.value[0].id,
-        product_id: product.id,
-        task_type: 'long_term',
-        max_attempts: 10
-      })
-      ElMessage.success('预定成功，将在指定时间自动抢兑')
-      loadTasks()
-    } catch (error: any) {
-      if (error !== 'cancel') {
-        ElMessage.error('预定失败：' + error.message)
+  try {
+    await ElMessageBox.confirm(
+      `确定要立即兑换 "${product.prize_name}" 吗？`,
+      '确认兑换',
+      {
+        confirmButtonText: '确定',
+        cancelButtonText: '取消',
+        type: 'warning'
       }
+    )
+    await submitImmediateExchange()
+  } catch (error: any) {
+    if (error !== 'cancel') {
+      console.error('立即兑换确认失败：', error)
     }
-  } else {
-    // 多个账号，弹出选择框
-    selectedProduct.value = product
-    taskForm.value.product_id = product.id
-    taskForm.value.exchange_account_id = accounts.value[0]?.id || 0
-    taskForm.value.task_type = 'long_term'
-    taskForm.value.max_attempts = 10
-    taskDialogVisible.value = true
-    ElMessage.info(`已为您选择长期抢兑模式，将在 ${exchangeTime.substring(0, 5)} 开始自动抢兑`)
   }
 }
 
-const createTask = async () => {
-  try {
-    await createExchangeTask(taskForm.value)
-    ElMessage.success('创建任务成功')
+// 预定商品（创建长期抢兑任务）
+const handleReserveProduct = async (product: Product) => {
+  const preset = createExchangeReservationPreset(product)
+  const prepared = await prepareTaskForm(product, 'long_term', 10)
+  if (!prepared) return
+
+  taskForm.value.scheduled_exchange_time = preset.exchangeTime
+  taskForm.value.restock_cycle = preset.restockCycle
+  taskForm.value.restock_weekday = preset.restockWeekday
+  taskForm.value.restock_day_of_month = preset.restockDayOfMonth
+  taskForm.value.restock_times = preset.restockTimes
+  taskForm.value.custom_cron = preset.customCron
+  taskForm.value.calendar_policy = preset.calendarPolicy
+  taskDialogVisible.value = true
+  ElMessage.info(`请确认预定配置：抢兑时间 ${preset.exchangeTime.substring(0, 5)}，补货周期可在弹窗中调整`)
+}
+
+const submitCreateTask = async () => {
+  const success = await createTask()
+  if (success) {
     taskDialogVisible.value = false
-    loadTasks()
-  } catch (error: any) {
-    ElMessage.error('创建任务失败：' + error.message)
   }
 }
 
-const confirmImmediateExchange = async () => {
-  if (!taskForm.value.exchange_account_id) {
-    ElMessage.warning('请选择兑换账号')
-    return
-  }
-  try {
-    await immediateExchange({
-      exchange_account_id: taskForm.value.exchange_account_id,
-      product_id: taskForm.value.product_id
-    })
-    ElMessage.success('兑换任务已启动')
+const submitImmediateExchange = async () => {
+  const success = await runImmediateExchange()
+  if (success) {
     immediateExchangeDialogVisible.value = false
-  } catch (error: any) {
-    ElMessage.error('兑换失败：' + error.message)
   }
+  return success
 }
 
 const saveAccount = async () => {
@@ -512,28 +517,28 @@ const saveAccount = async () => {
 
   try {
     if (isEditingAccount.value) {
-      await updateExchangeAccount(editingAccountId.value!, {
+      await updateExchangeRule(editingAccountId.value!, {
         remark,
         exchange_time_1: accountForm.value.exchange_time_1,
         exchange_time_2: accountForm.value.exchange_time_2,
         is_active: accountForm.value.is_active,
         product_id: accountForm.value.product_id
       })
-      ElMessage.success('更新账号成功')
+      ElMessage.success('更新抢兑规则成功')
     } else {
-      await addExchangeAccount({
+      await addExchangeRule({
         account_id: accountForm.value.account_id,
         remark,
         exchange_time_1: accountForm.value.exchange_time_1,
         exchange_time_2: accountForm.value.exchange_time_2,
         product_id: accountForm.value.product_id
       })
-      ElMessage.success('添加账号成功')
+      ElMessage.success('添加抢兑规则成功')
     }
     accountDialogVisible.value = false
     await Promise.all([loadAccounts(), loadTasks()])
   } catch (error: any) {
-    ElMessage.error('保存账号失败：' + error.message)
+    ElMessage.error('保存抢兑规则失败：' + error.message)
   }
 }
 
@@ -572,10 +577,10 @@ const editAccount = async (row: any) => {
 
 const deleteAccount = async (id: number) => {
   try {
-    await ElMessageBox.confirm('确定要删除这个兑换账号吗？', '提示', {
+    await ElMessageBox.confirm('确定要删除这个抢兑规则吗？', '提示', {
       type: 'warning'
     })
-    await deleteExchangeAccount(id)
+    await deleteExchangeRule(id)
     ElMessage.success('删除成功')
     await Promise.all([loadAccounts(), loadTasks()])
   } catch (error: any) {
@@ -602,8 +607,8 @@ const deleteTask = async (id: number) => {
 
 const executeTask = async (id: number) => {
   try {
-    await executeExchangeTask(id)
-    ElMessage.success('任务执行成功')
+    const operation = await executeExchangeTask(id)
+    ElMessage.success(operationQueuedMessage(operation))
     loadTasks()
   } catch (error: any) {
     ElMessage.error('执行失败：' + error.message)
@@ -638,7 +643,6 @@ onUnmounted(() => {
 .exchange-tabs :deep(.el-tabs__nav) { flex-wrap:nowrap; }
 .exchange-tabs :deep(.el-tabs__item) { height:42px; padding:0 18px; font-size:14px; font-weight:600; white-space:nowrap; }
 .exchange-tabs :deep(.el-tabs__content) { padding:8px 0 0; }
-.rewards-section { padding-top:0; min-height:220px; display:flex; align-items:center; justify-content:center; }
 :deep(.el-table) { border-radius:18px; overflow:hidden; --el-table-border-color: rgba(148,163,184,.18); --el-table-header-bg-color: rgba(248,250,252,.9); --el-table-row-hover-bg-color: rgba(239,246,255,.74); }
 :deep(.el-table .cell) { line-height:1.45; }
 :deep(.account-dialog .el-dialog) { max-width: calc(100vw - 32px); }

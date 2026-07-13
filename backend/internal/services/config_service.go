@@ -1,221 +1,124 @@
-﻿package services
+package services
 
 import (
-	"caiyun/internal/repository"
-	"caiyun/pkg/config"
 	"fmt"
 	"strconv"
 	"sync"
+
+	"caiyun/internal/envutil"
+	"caiyun/internal/repository"
 )
 
-// ConfigService 配置服务（支持 env 和数据库）
+// ConfigService provides database-over-environment business configuration.
+// Environment parsing is centralized in envutil; startup configuration remains owned by bootstrap.
 type ConfigService struct {
 	configRepo *repository.SystemConfigRepository
-	cfg        *config.Config
 	mu         sync.RWMutex
 	cache      map[string]interface{}
 }
 
-// NewConfigService 创建配置服务
 func NewConfigService(configRepo *repository.SystemConfigRepository) *ConfigService {
-	return &ConfigService{
-		configRepo: configRepo,
-		cfg:        config.Global(),
-		cache:      make(map[string]interface{}),
-	}
+	return &ConfigService{configRepo: configRepo, cache: make(map[string]interface{})}
 }
 
-// GetInt 获取整数配置（优先数据库，其次 env，最后默认值）
-func (s *ConfigService) GetInt(key string, defaultVal int) int {
+func (s *ConfigService) GetInt(key string, fallback int) int {
 	s.mu.RLock()
-	if val, ok := s.cache[key]; ok {
-		s.mu.RUnlock()
-		if v, ok := val.(int); ok {
-			return v
+	value, ok := s.cache[key]
+	s.mu.RUnlock()
+	if ok {
+		if typed, valid := value.(int); valid {
+			return typed
 		}
 	}
-	s.mu.RUnlock()
-
-	// 尝试从数据库读取
 	if s.configRepo != nil {
-		dbConfig, err := s.configRepo.GetByKey(key)
-		if err == nil && dbConfig.KeyValue != "" {
-			if val, err := strconv.Atoi(dbConfig.KeyValue); err == nil {
-				s.mu.Lock()
-				s.cache[key] = val
-				s.mu.Unlock()
-				return val
+		if cfg, err := s.configRepo.GetByKey(key); err == nil && cfg.KeyValue != "" {
+			if parsed, parseErr := strconv.Atoi(cfg.KeyValue); parseErr == nil {
+				s.setCached(key, parsed)
+				return parsed
 			}
 		}
 	}
-
-	// 从环境变量读取（通过 config 包）
-	switch key {
-	case "TASK_CONCURRENCY":
-		return s.cfg.Task.Concurrency
-	case "EXCHANGE_CONCURRENCY":
-		return s.cfg.Exchange.Concurrency
-	case "EXCHANGE_MAX_GLOBAL_CONCURRENCY":
-		return s.cfg.Exchange.MaxGlobalConcurrency
-	case "EXCHANGE_DEFAULT_TIMEOUT":
-		return s.cfg.Exchange.DefaultTimeout
-	}
-
-	// 返回默认值
-	return defaultVal
+	return envutil.Int(key, fallback)
 }
 
-// GetString 获取字符串配置
-func (s *ConfigService) GetString(key, defaultVal string) string {
+func (s *ConfigService) GetString(key, fallback string) string {
 	s.mu.RLock()
-	if val, ok := s.cache[key]; ok {
-		s.mu.RUnlock()
-		if v, ok := val.(string); ok {
-			return v
-		}
-	}
+	value, ok := s.cache[key]
 	s.mu.RUnlock()
-
-	// 尝试从数据库读取
-	if s.configRepo != nil {
-		dbConfig, err := s.configRepo.GetByKey(key)
-		if err == nil && dbConfig.KeyValue != "" {
-			s.mu.Lock()
-			s.cache[key] = dbConfig.KeyValue
-			s.mu.Unlock()
-			return dbConfig.KeyValue
+	if ok {
+		if typed, valid := value.(string); valid {
+			return typed
 		}
 	}
-
-	// 从环境变量读取
-	switch key {
-	case "JWT_SECRET":
-		return s.cfg.JWT.Secret
-	case "REDIS_HOST":
-		return s.cfg.Redis.Host
-	case "REDIS_PORT":
-		return s.cfg.Redis.Port
-	case "EXCHANGE_SCHEDULE_TIME_1":
-		return s.cfg.Exchange.ScheduleTime1
-	case "EXCHANGE_SCHEDULE_TIME_2":
-		return s.cfg.Exchange.ScheduleTime2
-	case "EXCHANGE_UPDATE_TIME":
-		return s.cfg.Exchange.UpdateTime
+	if s.configRepo != nil {
+		if cfg, err := s.configRepo.GetByKey(key); err == nil && cfg.KeyValue != "" {
+			s.setCached(key, cfg.KeyValue)
+			return cfg.KeyValue
+		}
 	}
-
-	return defaultVal
+	return envutil.String(key, fallback)
 }
 
-// GetBool 获取布尔配置
-func (s *ConfigService) GetBool(key string, defaultVal bool) bool {
+func (s *ConfigService) GetBool(key string, fallback bool) bool {
 	s.mu.RLock()
-	if val, ok := s.cache[key]; ok {
-		s.mu.RUnlock()
-		if v, ok := val.(bool); ok {
-			return v
-		}
-	}
+	value, ok := s.cache[key]
 	s.mu.RUnlock()
-
-	// 尝试从数据库读取
-	if s.configRepo != nil {
-		dbConfig, err := s.configRepo.GetByKey(key)
-		if err == nil && dbConfig.KeyValue != "" {
-			val := dbConfig.KeyValue == "true" || dbConfig.KeyValue == "1" || dbConfig.KeyValue == "yes"
-			s.mu.Lock()
-			s.cache[key] = val
-			s.mu.Unlock()
-			return val
+	if ok {
+		if typed, valid := value.(bool); valid {
+			return typed
 		}
 	}
-
-	// 从环境变量读取
-	switch key {
-	case "EXCHANGE_AUTO_UPDATE_PRODUCTS":
-		return s.cfg.Exchange.AutoUpdateProducts
-	case "EXCHANGE_ENABLE_PRIORITY":
-		return s.cfg.Exchange.EnablePriority
-	case "EXCHANGE_AUTO_RETRY_FAILED":
-		return s.cfg.Exchange.AutoRetryFailed
+	if s.configRepo != nil {
+		if cfg, err := s.configRepo.GetByKey(key); err == nil && cfg.KeyValue != "" {
+			parsed := cfg.KeyValue == "true" || cfg.KeyValue == "1" || cfg.KeyValue == "yes"
+			s.setCached(key, parsed)
+			return parsed
+		}
 	}
-
-	return defaultVal
+	return envutil.Bool(key, fallback)
 }
 
-// SetInt 设置整数配置到数据库
 func (s *ConfigService) SetInt(key string, value int, description string) error {
-	s.mu.Lock()
-	delete(s.cache, key)
-	s.mu.Unlock()
-
-	if s.configRepo == nil {
-		return fmt.Errorf("配置仓库未初始化")
-	}
-
-	return s.configRepo.UpdateByKey(key, fmt.Sprintf("%d", value), description)
+	return s.set(key, strconv.Itoa(value), description)
 }
-
-// SetString 设置字符串配置到数据库
 func (s *ConfigService) SetString(key, value, description string) error {
-	s.mu.Lock()
-	delete(s.cache, key)
-	s.mu.Unlock()
-
+	return s.set(key, value, description)
+}
+func (s *ConfigService) SetBool(key string, value bool, description string) error {
+	return s.set(key, strconv.FormatBool(value), description)
+}
+func (s *ConfigService) set(key, value, description string) error {
+	s.InvalidateCache(key)
 	if s.configRepo == nil {
 		return fmt.Errorf("配置仓库未初始化")
 	}
-
 	return s.configRepo.UpdateByKey(key, value, description)
 }
-
-// SetBool 设置布尔配置到数据库
-func (s *ConfigService) SetBool(key string, value bool, description string) error {
+func (s *ConfigService) setCached(key string, value interface{}) {
 	s.mu.Lock()
-	delete(s.cache, key)
-	s.mu.Unlock()
-
-	if s.configRepo == nil {
-		return fmt.Errorf("配置仓库未初始化")
-	}
-
-	strVal := "false"
-	if value {
-		strVal = "true"
-	}
-	return s.configRepo.UpdateByKey(key, strVal, description)
-}
-
-// InvalidateCache 使缓存失效
-func (s *ConfigService) InvalidateCache(key string) {
-	s.mu.Lock()
-	delete(s.cache, key)
+	s.cache[key] = value
 	s.mu.Unlock()
 }
-
-// ClearCache 清空所有缓存
+func (s *ConfigService) InvalidateCache(key string) { s.mu.Lock(); delete(s.cache, key); s.mu.Unlock() }
 func (s *ConfigService) ClearCache() {
 	s.mu.Lock()
 	s.cache = make(map[string]interface{})
 	s.mu.Unlock()
 }
-
-// ReloadFromDB 从数据库重新加载配置到缓存
 func (s *ConfigService) ReloadFromDB() error {
 	if s.configRepo == nil {
 		return fmt.Errorf("配置仓库未初始化")
 	}
-
 	configs, err := s.configRepo.GetAll()
 	if err != nil {
 		return err
 	}
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
+	fresh := make(map[string]interface{}, len(configs))
 	for _, cfg := range configs {
-		s.cache[cfg.KeyName] = cfg.KeyValue
+		fresh[cfg.KeyName] = cfg.KeyValue
 	}
-
+	s.mu.Lock()
+	s.cache = fresh
+	s.mu.Unlock()
 	return nil
 }

@@ -1,3 +1,33 @@
+x-backend-image: &backend-image
+  image: ${CAIYUN_BACKEND_IMAGE:-caiyun-backend:local}
+  build:
+    context: ./backend
+    dockerfile: Dockerfile
+
+x-backend-environment: &backend-environment
+  APP_ENV: production
+  DB_AUTO_MIGRATE: "false"
+  DB_HOST: mysql
+  DB_PORT: 3306
+  DB_USER: ${MYSQL_USER:-caiyun_app}
+  DB_PASSWORD: ${MYSQL_PASSWORD:?MYSQL_PASSWORD is required}
+  DB_NAME: caiyun
+  REDIS_HOST: redis
+  REDIS_PORT: 6379
+  REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD is required}
+  DATA_ENCRYPTION_KEYS: ${DATA_ENCRYPTION_KEYS:?DATA_ENCRYPTION_KEYS is required}
+  DATA_ENCRYPTION_CURRENT_VERSION: ${DATA_ENCRYPTION_CURRENT_VERSION:?DATA_ENCRYPTION_CURRENT_VERSION is required}
+  TRUSTED_PROXIES: ${TRUSTED_PROXIES:-none}
+  RATE_LIMIT_BACKEND: ${RATE_LIMIT_BACKEND:-redis}
+  RATE_LIMIT_REDIS_WINDOW: ${RATE_LIMIT_REDIS_WINDOW:-1s}
+  LOG_FILE_PATH: ""
+  LOG_JSON_FORMAT: "true"
+  WS_EVENT_CHANNEL: ${WS_EVENT_CHANNEL:-caiyun:ws:events}
+  WS_MESSAGE_TTL: ${WS_MESSAGE_TTL:-24h}
+  WS_ACK_TIMEOUT: ${WS_ACK_TIMEOUT:-5s}
+  WS_MAX_RETRIES: ${WS_MAX_RETRIES:-3}
+  TZ: Asia/Shanghai
+
 services:
   mysql:
     image: mysql:8.0
@@ -14,8 +44,7 @@ services:
     volumes:
       - mysql-data:/var/lib/mysql
       - ./backend/scripts/init_caiyun_database.sql:/docker-entrypoint-initdb.d/001_init_caiyun_database.sql:ro
-    networks:
-      - caiyun-network
+    networks: [caiyun-network]
     healthcheck:
       test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-u", "root", "-p${MYSQL_ROOT_PASSWORD}"]
       interval: 10s
@@ -37,8 +66,7 @@ services:
       - "127.0.0.1:6379:6379"
     volumes:
       - redis-data:/data
-    networks:
-      - caiyun-network
+    networks: [caiyun-network]
     healthcheck:
       test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
       interval: 10s
@@ -50,30 +78,39 @@ services:
           memory: 512m
           cpus: "0.5"
 
-  backend-api:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile.api
-    container_name: caiyun-api
-    restart: unless-stopped
-    ports:
-      - "127.0.0.1:8080:8080"
+  # 发布门禁：迁移成功后 API/Worker 才会启动；业务进程自身禁止自动迁移。
+  backend-migrate:
+    <<: *backend-image
+    container_name: caiyun-migrate
+    restart: "no"
+    command: ["migrate"]
     depends_on:
       mysql:
         condition: service_healthy
+    environment:
+      <<: *backend-environment
+    networks: [caiyun-network]
+
+  backend-api:
+    <<: *backend-image
+    container_name: caiyun-api
+    restart: unless-stopped
+    command: ["api"]
+    ports:
+      - "127.0.0.1:8080:8080"
+    depends_on:
+      backend-migrate:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
     environment:
-      DB_HOST: mysql
-      DB_PORT: 3306
-      DB_USER: ${MYSQL_USER:-caiyun_app}
-      DB_PASSWORD: ${MYSQL_PASSWORD:?MYSQL_PASSWORD is required}
-      DB_NAME: caiyun
-      REDIS_HOST: redis
-      REDIS_PORT: 6379
-      REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD is required}
-      TASK_QUEUE_BACKEND: ${TASK_QUEUE_BACKEND:-list}
+      <<: *backend-environment
+      TASK_QUEUE_BACKEND: ${TASK_QUEUE_BACKEND:-streams}
       JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required}
+      JWT_ISSUER: ${JWT_ISSUER:-caiyun-api}
+      JWT_AUDIENCE: ${JWT_AUDIENCE:-caiyun-web}
+      JWT_ACCESS_TTL: ${JWT_ACCESS_TTL:-15m}
+      JWT_REFRESH_TTL: ${JWT_REFRESH_TTL:-720h}
       SMTP_HOST: ${SMTP_HOST:-}
       SMTP_PORT: ${SMTP_PORT:-587}
       SMTP_USERNAME: ${SMTP_USERNAME:-}
@@ -82,11 +119,11 @@ services:
       SMTP_FROM_NAME: ${SMTP_FROM_NAME:-移动云盘}
       SMTP_USE_TLS: ${SMTP_USE_TLS:-false}
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost,http://127.0.0.1}
-      TASK_CONCURRENCY: 10
-    networks:
-      - caiyun-network
+      TASK_CONCURRENCY: ${TASK_CONCURRENCY:-10}
+      INSTANCE_ID: compose-api
+    networks: [caiyun-network]
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/health || exit 1"]
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/readyz >/dev/null || exit 1"]
       interval: 15s
       timeout: 5s
       retries: 5
@@ -98,38 +135,30 @@ services:
           cpus: "1.0"
 
   backend-worker:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile.worker
+    <<: *backend-image
     container_name: caiyun-worker
     restart: unless-stopped
+    command: ["worker"]
     ports:
       - "127.0.0.1:8081:8081"
     depends_on:
-      mysql:
-        condition: service_healthy
+      backend-migrate:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
     environment:
-      DB_HOST: mysql
-      DB_PORT: 3306
-      DB_USER: ${MYSQL_USER:-caiyun_app}
-      DB_PASSWORD: ${MYSQL_PASSWORD:?MYSQL_PASSWORD is required}
-      DB_NAME: caiyun
-      REDIS_HOST: redis
-      REDIS_PORT: 6379
-      REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD is required}
-      TASK_QUEUE_BACKEND: ${TASK_QUEUE_BACKEND:-list}
+      <<: *backend-environment
+      TASK_QUEUE_BACKEND: ${TASK_QUEUE_BACKEND:-streams}
       WORKER_MONITOR_TOKEN: ${WORKER_MONITOR_TOKEN:?WORKER_MONITOR_TOKEN is required}
-      TASK_CONCURRENCY: 10
-      TASK_SCHEDULE: "0 8 * * *"
-      WORKER_MONITOR_HOST: 0.0.0.0
-      WORKER_MONITOR_PORT: 8081
-      WORKER_MONITOR_ALLOW_PLAINTEXT: "false"
-    networks:
-      - caiyun-network
+      TASK_CONCURRENCY: ${TASK_CONCURRENCY:-10}
+      TASK_SCHEDULE: ${TASK_SCHEDULE:-0 8 * * *}
+      WORKER_MONITOR_HOST: ${WORKER_MONITOR_HOST:-0.0.0.0}
+      WORKER_MONITOR_PORT: ${WORKER_MONITOR_PORT:-8081}
+      WORKER_MONITOR_ALLOW_PLAINTEXT: ${WORKER_MONITOR_ALLOW_PLAINTEXT:-true}
+      INSTANCE_ID: compose-worker
+    networks: [caiyun-network]
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8081/health || exit 1"]
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8081/readyz >/dev/null || exit 1"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -149,9 +178,9 @@ services:
     ports:
       - "127.0.0.1:80:8080"
     depends_on:
-      - backend-api
-    networks:
-      - caiyun-network
+      backend-api:
+        condition: service_healthy
+    networks: [caiyun-network]
     deploy:
       resources:
         limits:
@@ -171,8 +200,7 @@ services:
       - grafana-data:/var/lib/grafana
       - ./backend/configs/grafana_dashboard.json:/var/lib/grafana/dashboards/caiyun.json:ro
       - ./backend/configs/grafana_provisioning:/etc/grafana/provisioning:ro
-    networks:
-      - caiyun-network
+    networks: [caiyun-network]
     deploy:
       resources:
         limits:

@@ -1,17 +1,27 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 )
 
 // GetProductList 获取商品列表
 func (api *CaiyunAPI) GetProductList() (*CaiyunResponse, error) {
+	return api.GetProductListContext(context.Background())
+}
+
+// GetProductListContext gets products while allowing callers to cancel device
+// initialization and the upstream HTTP request.
+func (api *CaiyunAPI) GetProductListContext(ctx context.Context) (*CaiyunResponse, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	const productListURL = "https://m.mcloud.139.com/market/signin/page/exchangeList?client=app&clientVersion=12.5.3"
 
-	api.ensureMarketDeviceID()
+	api.ensureMarketDeviceIDContext(ctx)
 
-	resp, err := api.client.Get(productListURL, map[string]string{
+	resp, err := api.client.GetWithContext(ctx, productListURL, map[string]string{
 		"showloading":     "true",
 		"Accept-Encoding": "gzip, deflate",
 	})

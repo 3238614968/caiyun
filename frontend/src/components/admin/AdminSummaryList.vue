@@ -1,50 +1,122 @@
 <template>
   <div>
-    <div class="responsive-data-shell" v-loading="loading">
-      <el-table v-if="!isMobile" :data="summaries" stripe style="width: 100%">
-        <el-table-column prop="phone" label="手机号" width="130" />
-        <el-table-column prop="owner_username" label="所属用户" width="100" />
-        <el-table-column prop="cloud_count" label="当前云朵" width="100">
+    <div
+      v-loading="loading"
+      class="responsive-data-shell"
+    >
+      <el-table
+        v-if="!isMobile"
+        :data="summaries"
+        stripe
+        style="width: 100%"
+      >
+        <el-table-column
+          prop="phone"
+          label="手机号"
+          width="130"
+        />
+        <el-table-column
+          prop="owner_username"
+          label="所属用户"
+          width="100"
+        />
+        <el-table-column
+          prop="cloud_count"
+          label="当前云朵"
+          width="100"
+        >
           <template #default="{ row }">
             <span style="font-weight: 600; color: #3b82f6">{{ row.cloud_count }}</span>
           </template>
         </el-table-column>
-        <el-table-column prop="today_gained" label="今日获得" width="100">
+        <el-table-column
+          prop="today_gained"
+          label="今日获得"
+          width="100"
+        >
           <template #default="{ row }">
-            <span v-if="row.today_gained > 0" style="color: #10b981">+{{ row.today_gained }}</span>
+            <span
+              v-if="row.today_gained > 0"
+              style="color: #10b981"
+            >+{{ row.today_gained }}</span>
             <span v-else>0</span>
           </template>
         </el-table-column>
-        <el-table-column prop="yesterday_gained" label="昨日获得" width="100">
+        <el-table-column
+          prop="yesterday_gained"
+          label="昨日获得"
+          width="100"
+        >
           <template #default="{ row }">
-            <span v-if="row.yesterday_gained > 0" style="color: #10b981">+{{ row.yesterday_gained }}</span>
+            <span
+              v-if="row.yesterday_gained > 0"
+              style="color: #10b981"
+            >+{{ row.yesterday_gained }}</span>
             <span v-else>0</span>
           </template>
         </el-table-column>
-        <el-table-column label="今日任务" width="140">
+        <el-table-column
+          label="今日任务"
+          width="140"
+        >
           <template #default="{ row }">
-            <el-tag type="success" size="small">成功 {{ row.success_count }}</el-tag>
-            <el-tag v-if="row.failed_count > 0" type="danger" size="small" style="margin-left: 4px">
+            <el-tag
+              type="success"
+              size="small"
+            >
+              成功 {{ row.success_count }}
+            </el-tag>
+            <el-tag
+              v-if="row.failed_count > 0"
+              type="danger"
+              size="small"
+              style="margin-left: 4px"
+            >
               失败 {{ row.failed_count }}
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="状态" width="80">
+        <el-table-column
+          label="状态"
+          width="80"
+        >
           <template #default="{ row }">
-            <el-tag :type="row.is_active ? 'success' : 'info'" size="small">
+            <el-tag
+              :type="row.is_active ? 'success' : 'info'"
+              size="small"
+            >
               {{ row.is_active ? '激活' : '停用' }}
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column prop="last_executed_at" label="最后执行" width="160">
-          <template #default="{ row }">{{ row.last_executed_at || '-' }}</template>
+        <el-table-column
+          prop="last_executed_at"
+          label="最后执行"
+          width="160"
+        >
+          <template #default="{ row }">
+            {{ row.last_executed_at || '-' }}
+          </template>
         </el-table-column>
-        <el-table-column prop="remark" label="备注" />
-        <el-table-column prop="created_at" label="添加时间" width="160" />
+        <el-table-column
+          prop="remark"
+          label="备注"
+        />
+        <el-table-column
+          prop="created_at"
+          label="添加时间"
+          width="160"
+        />
       </el-table>
 
-      <div v-else class="mobile-admin-list">
-        <el-empty v-if="summaries.length === 0" description="暂无账号概况" />
+      <div
+        v-else
+        class="mobile-admin-list"
+      >
+        <el-empty
+          v-if="summaries.length === 0"
+          description="暂无账号概况"
+        />
         <template v-else>
           <el-card
             v-for="row in summaries"
@@ -54,10 +126,17 @@
           >
             <div class="mobile-admin-card-head">
               <div>
-                <div class="mobile-admin-card-title">{{ row.phone }}</div>
-                <div class="mobile-admin-card-meta">{{ row.owner_username || '-' }}</div>
+                <div class="mobile-admin-card-title">
+                  {{ row.phone }}
+                </div>
+                <div class="mobile-admin-card-meta">
+                  {{ row.owner_username || '-' }}
+                </div>
               </div>
-              <el-tag :type="row.is_active ? 'success' : 'info'" effect="light">
+              <el-tag
+                :type="row.is_active ? 'success' : 'info'"
+                effect="light"
+              >
                 {{ row.is_active ? '激活' : '停用' }}
               </el-tag>
             </div>
@@ -88,8 +167,19 @@
               </div>
             </div>
             <div class="mobile-admin-inline-tags">
-              <el-tag type="success" size="small">成功 {{ row.success_count }}</el-tag>
-              <el-tag v-if="row.failed_count > 0" type="danger" size="small">失败 {{ row.failed_count }}</el-tag>
+              <el-tag
+                type="success"
+                size="small"
+              >
+                成功 {{ row.success_count }}
+              </el-tag>
+              <el-tag
+                v-if="row.failed_count > 0"
+                type="danger"
+                size="small"
+              >
+                失败 {{ row.failed_count }}
+              </el-tag>
             </div>
           </el-card>
         </template>

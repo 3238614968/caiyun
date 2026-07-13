@@ -1,10 +1,19 @@
 <template>
   <div class="not-found-container">
     <div class="not-found-content">
-      <h1 class="error-code">404</h1>
-      <h2 class="error-title">页面未找到</h2>
-      <p class="error-description">抱歉，您访问的页面不存在或已被移除。</p>
-      <button class="back-home-btn" @click="goHome">
+      <h1 class="error-code">
+        404
+      </h1>
+      <h2 class="error-title">
+        页面未找到
+      </h2>
+      <p class="error-description">
+        抱歉，您访问的页面不存在或已被移除。
+      </p>
+      <button
+        class="back-home-btn"
+        @click="goHome"
+      >
         返回首页
       </button>
     </div>

@@ -1,8 +1,15 @@
-﻿<template>
-  <el-form :inline="true" :model="model" class="search-form">
+<template>
+  <el-form
+    :inline="true"
+    :model="model"
+    class="search-form"
+  >
     <slot />
     <el-form-item>
-      <el-button type="primary" @click="handleSearch">
+      <el-button
+        type="primary"
+        @click="handleSearch"
+      >
         <el-icon><Search /></el-icon>
         搜索
       </el-button>

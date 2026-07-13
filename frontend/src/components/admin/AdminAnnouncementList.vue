@@ -1,44 +1,113 @@
 <template>
   <div class="announcement-content">
     <div class="announcement-header">
-      <el-button type="primary" @click="$emit('create')">
+      <el-button
+        type="primary"
+        @click="$emit('create')"
+      >
         <el-icon><Plus /></el-icon>
         发布公告
       </el-button>
     </div>
-    <div class="responsive-data-shell" v-loading="loading">
-      <el-table v-if="!isMobile" :data="announcements" stripe style="width: 100%">
-        <el-table-column type="index" width="50" />
-        <el-table-column prop="title" label="标题" min-width="200">
+    <div
+      v-loading="loading"
+      class="responsive-data-shell"
+    >
+      <el-table
+        v-if="!isMobile"
+        :data="announcements"
+        stripe
+        style="width: 100%"
+      >
+        <el-table-column
+          type="index"
+          width="50"
+        />
+        <el-table-column
+          prop="title"
+          label="标题"
+          min-width="200"
+        >
           <template #default="{ row }">
             <div class="title-cell">
-              <el-tag v-if="row.is_top" type="danger" size="small" effect="dark">置顶</el-tag>
-              <el-tag v-if="row.is_popup" type="warning" size="small" class="ml-2">弹窗</el-tag>
+              <el-tag
+                v-if="row.is_top"
+                type="danger"
+                size="small"
+                effect="dark"
+              >
+                置顶
+              </el-tag>
+              <el-tag
+                v-if="row.is_popup"
+                type="warning"
+                size="small"
+                class="ml-2"
+              >
+                弹窗
+              </el-tag>
               <span class="title-text">{{ row.title }}</span>
             </div>
           </template>
         </el-table-column>
-        <el-table-column prop="is_published" label="状态" width="100">
+        <el-table-column
+          prop="is_published"
+          label="状态"
+          width="100"
+        >
           <template #default="{ row }">
             <el-tag :type="row.is_published ? 'success' : 'info'">
               {{ row.is_published ? '已发布' : '已下架' }}
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column prop="created_at" label="创建时间" width="180">
-          <template #default="{ row }">{{ formatDate(row.created_at) }}</template>
-        </el-table-column>
-        <el-table-column label="操作" width="200" fixed="right">
+        <el-table-column
+          prop="created_at"
+          label="创建时间"
+          width="180"
+        >
           <template #default="{ row }">
-            <el-button size="small" @click="$emit('view', row)">查看</el-button>
-            <el-button size="small" type="primary" @click="$emit('edit', row)">编辑</el-button>
-            <el-button size="small" type="danger" @click="$emit('delete', row)">删除</el-button>
+            {{ formatDate(row.created_at) }}
+          </template>
+        </el-table-column>
+        <el-table-column
+          label="操作"
+          width="200"
+          fixed="right"
+        >
+          <template #default="{ row }">
+            <el-button
+              size="small"
+              @click="$emit('view', row)"
+            >
+              查看
+            </el-button>
+            <el-button
+              size="small"
+              type="primary"
+              @click="$emit('edit', row)"
+            >
+              编辑
+            </el-button>
+            <el-button
+              size="small"
+              type="danger"
+              @click="$emit('delete', row)"
+            >
+              删除
+            </el-button>
           </template>
         </el-table-column>
       </el-table>
 
-      <div v-else class="mobile-admin-list">
-        <el-empty v-if="announcements.length === 0" description="暂无公告" />
+      <div
+        v-else
+        class="mobile-admin-list"
+      >
+        <el-empty
+          v-if="announcements.length === 0"
+          description="暂无公告"
+        />
         <template v-else>
           <el-card
             v-for="row in announcements"
@@ -48,13 +117,30 @@
           >
             <div class="mobile-admin-card-head">
               <div>
-                <div class="mobile-admin-card-title">{{ row.title }}</div>
+                <div class="mobile-admin-card-title">
+                  {{ row.title }}
+                </div>
                 <div class="mobile-admin-inline-tags">
-                  <el-tag v-if="row.is_top" type="danger" size="small" effect="dark">置顶</el-tag>
-                  <el-tag v-if="row.is_popup" type="warning" size="small">弹窗</el-tag>
+                  <el-tag
+                    v-if="row.is_top"
+                    type="danger"
+                    size="small"
+                    effect="dark"
+                  >
+                    置顶
+                  </el-tag>
+                  <el-tag
+                    v-if="row.is_popup"
+                    type="warning"
+                    size="small"
+                  >
+                    弹窗
+                  </el-tag>
                 </div>
               </div>
-              <el-tag :type="row.is_published ? 'success' : 'info'">{{ row.is_published ? '已发布' : '已下架' }}</el-tag>
+              <el-tag :type="row.is_published ? 'success' : 'info'">
+                {{ row.is_published ? '已发布' : '已下架' }}
+              </el-tag>
             </div>
             <div class="mobile-admin-card-grid">
               <div class="mobile-admin-card-row">
@@ -67,9 +153,21 @@
               </div>
             </div>
             <div class="mobile-admin-card-actions">
-              <el-button @click="$emit('view', row)">查看</el-button>
-              <el-button type="primary" @click="$emit('edit', row)">编辑</el-button>
-              <el-button type="danger" @click="$emit('delete', row)">删除</el-button>
+              <el-button @click="$emit('view', row)">
+                查看
+              </el-button>
+              <el-button
+                type="primary"
+                @click="$emit('edit', row)"
+              >
+                编辑
+              </el-button>
+              <el-button
+                type="danger"
+                @click="$emit('delete', row)"
+              >
+                删除
+              </el-button>
             </div>
           </el-card>
         </template>

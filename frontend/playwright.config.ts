@@ -1,12 +1,20 @@
+import fs from 'node:fs'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
+
 import { defineConfig, devices } from '@playwright/test'
 
 const port = Number(process.env.PLAYWRIGHT_PORT || 4173)
 const baseURL = process.env.PLAYWRIGHT_BASE_URL || `http://127.0.0.1:${port}`
+const configDir = path.dirname(fileURLToPath(import.meta.url))
+const distIndex = path.resolve(configDir, 'dist/index.html')
+const shouldBuildBeforePreview = !process.env.PLAYWRIGHT_SKIP_BUILD && (!!process.env.CI || !fs.existsSync(distIndex))
+const previewCommand = `npm run preview -- --host 127.0.0.1 --port ${port}`
 
 const webServer = process.env.PLAYWRIGHT_SKIP_WEBSERVER
   ? undefined
   : {
-      command: `npm run build && npm run preview -- --host 127.0.0.1 --port ${port}`,
+      command: shouldBuildBeforePreview ? `npm run build && ${previewCommand}` : previewCommand,
       url: baseURL,
       reuseExistingServer: !process.env.CI,
       timeout: 120_000

@@ -6,6 +6,7 @@ import (
 	corehttp "caiyun/internal/core/http"
 	"caiyun/internal/models"
 	"caiyun/internal/repository"
+	"context"
 	"encoding/json"
 	"fmt"
 	"time"
@@ -45,7 +46,11 @@ func (s *ProductService) GetCategories() ([]string, error) {
 
 // UpdateProducts 从云盘接口拉取商品并写入本地。
 func (s *ProductService) UpdateProducts(accountID uint, userID uint, isAdmin bool) (int64, error) {
-	account, err := s.accountRepo.GetByID(accountID)
+	return s.UpdateProductsContext(context.Background(), accountID, userID, isAdmin)
+}
+
+func (s *ProductService) UpdateProductsContext(ctx context.Context, accountID uint, userID uint, isAdmin bool) (int64, error) {
+	account, err := s.accountRepo.WithContext(ctx).GetByID(accountID)
 	if err != nil {
 		return 0, fmt.Errorf("获取账号失败: %w", err)
 	}
@@ -53,13 +58,19 @@ func (s *ProductService) UpdateProducts(accountID uint, userID uint, isAdmin boo
 		return 0, fmt.Errorf("账号不存在")
 	}
 
-	return syncProductsFromCloud(s.productRepo, s.accountRepo, accountID)
+	return syncProductsFromCloudContext(ctx, s.productRepo, s.accountRepo, accountID)
 }
 
 func syncProductsFromCloud(productRepo *repository.ProductRepository, accountRepo *repository.AccountRepository, accountID uint) (int64, error) {
+	return syncProductsFromCloudContext(context.Background(), productRepo, accountRepo, accountID)
+}
+
+func syncProductsFromCloudContext(ctx context.Context, productRepo *repository.ProductRepository, accountRepo *repository.AccountRepository, accountID uint) (int64, error) {
 	if productRepo == nil || accountRepo == nil {
 		return 0, fmt.Errorf("商品或账号仓储未初始化")
 	}
+	productRepo = productRepo.WithContext(ctx)
+	accountRepo = accountRepo.WithContext(ctx)
 
 	account, err := accountRepo.GetByID(accountID)
 	if err != nil {
@@ -89,7 +100,7 @@ func syncProductsFromCloud(productRepo *repository.ProductRepository, accountRep
 	}
 	client.SetJWTToken(jwtToken)
 
-	resp, err := api.NewCaiyunAPI(client).GetProductList()
+	resp, err := api.NewCaiyunAPI(client).GetProductListContext(ctx)
 	if err != nil {
 		return 0, fmt.Errorf("获取商品列表失败: %w", err)
 	}
@@ -178,7 +189,7 @@ func syncProductsFromCloud(productRepo *repository.ProductRepository, accountRep
 
 			products = append(products, &models.Product{
 				PrizeID:             prizeID,
-				PrizedName:          item.PrizeName,
+				PrizeName:           item.PrizeName,
 				POrder:              item.POrder,
 				Category:            category,
 				DailyRemainderCount: item.DailyRemainderCount,

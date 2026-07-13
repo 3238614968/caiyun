@@ -5,21 +5,19 @@ import (
 	"log"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
+
+	"caiyun/internal/envutil"
 
 	"github.com/joho/godotenv"
 )
 
-// LoadEnvFile loads .env when present.
-// It first checks the current working directory, then the executable directory.
-// 宝塔/进程管理器有时不会把工作目录切到二进制所在目录，第二个查找路径可避免 .env 未加载导致启动失败。
+// LoadEnvFile loads .env when present, first from cwd and then the executable directory.
 func LoadEnvFile() {
 	if err := godotenv.Load(); err == nil {
 		return
 	}
-
 	exePath, err := os.Executable()
 	if err == nil {
 		if resolved, resolveErr := filepath.EvalSymlinks(exePath); resolveErr == nil {
@@ -31,50 +29,14 @@ func LoadEnvFile() {
 			return
 		}
 	}
-
 	log.Println("未找到 .env 文件，使用环境变量和默认配置")
 }
 
-func GetEnv(key, defaultValue string) string {
-	if value, exists := os.LookupEnv(key); exists {
-		return value
-	}
-	return defaultValue
-}
-
-func GetBoolEnv(key string, defaultValue bool) bool {
-	value := strings.TrimSpace(strings.ToLower(GetEnv(key, "")))
-	if value == "" {
-		return defaultValue
-	}
-	return value == "true" || value == "1" || value == "yes" || value == "on"
-}
-
-func GetIntEnv(key string, defaultValue int) int {
-	value := strings.TrimSpace(GetEnv(key, ""))
-	if value == "" {
-		return defaultValue
-	}
-	parsed, err := strconv.Atoi(value)
-	if err != nil {
-		return defaultValue
-	}
-	return parsed
-}
-
+func GetEnv(key, defaultValue string) string        { return envutil.RawString(key, defaultValue) }
+func GetBoolEnv(key string, defaultValue bool) bool { return envutil.Bool(key, defaultValue) }
+func GetIntEnv(key string, defaultValue int) int    { return envutil.Int(key, defaultValue) }
 func GetDurationEnv(key string, defaultValue time.Duration) time.Duration {
-	value := strings.TrimSpace(GetEnv(key, ""))
-	if value == "" {
-		return defaultValue
-	}
-	if duration, err := time.ParseDuration(value); err == nil && duration > 0 {
-		return duration
-	}
-	seconds, err := strconv.Atoi(value)
-	if err != nil || seconds <= 0 {
-		return defaultValue
-	}
-	return time.Duration(seconds) * time.Second
+	return envutil.Duration(key, defaultValue)
 }
 
 // minSecretLength 是 HS256 等对称签名密钥的最小安全长度（字节）。

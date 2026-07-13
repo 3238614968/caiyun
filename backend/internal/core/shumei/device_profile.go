@@ -246,7 +246,18 @@ func FetchDeviceID(ctx context.Context, client *stdhttp.Client, endpoint string)
 		return "", fmt.Errorf("generate shumei device profile failed: %w", err)
 	}
 
-	time.Sleep(time.Duration(randomInt(500, 1500)) * time.Millisecond)
+	delay := time.NewTimer(time.Duration(randomInt(500, 1500)) * time.Millisecond)
+	select {
+	case <-ctx.Done():
+		if !delay.Stop() {
+			select {
+			case <-delay.C:
+			default:
+			}
+		}
+		return "", ctx.Err()
+	case <-delay.C:
+	}
 
 	req, err := stdhttp.NewRequestWithContext(ctx, stdhttp.MethodPost, endpoint, bytes.NewBufferString(payload))
 	if err != nil {

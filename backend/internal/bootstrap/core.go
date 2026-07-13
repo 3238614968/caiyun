@@ -1,14 +1,17 @@
 package bootstrap
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"log"
 	"time"
 
 	"caiyun/internal/cache"
 	"caiyun/internal/constants"
 	"caiyun/internal/core/auth"
 	corehttp "caiyun/internal/core/http"
+	"caiyun/internal/dbmigrate"
 	"caiyun/internal/repository"
 	"caiyun/internal/services"
 	"caiyun/pkg/database"
@@ -46,6 +49,7 @@ func (c *Core) Close() error {
 
 type Repositories struct {
 	User            *repository.UserRepository
+	RefreshSession  *repository.RefreshSessionRepository
 	Account         *repository.AccountRepository
 	TaskLog         *repository.TaskLogRepository
 	CloudStats      *repository.CloudStatsRepository
@@ -58,10 +62,16 @@ type Repositories struct {
 	AuditLog        *repository.AuditLogRepository
 	Announcement    *repository.AnnouncementRepository
 	WSMessage       *repository.WSMessageRepository
+	Operation       *repository.OperationRepository
 	Schema          *repository.SchemaRepository
 }
 
 func InitCore() (*Core, error) {
+	autoMigrate, err := resolveEmbeddedMigrationPolicy()
+	if err != nil {
+		return nil, fmt.Errorf("数据库迁移配置无效: %w", err)
+	}
+
 	db, err := database.NewMySQL(database.Config{
 		Host: GetEnv("DB_HOST", "localhost"),
 		Port: GetEnv("DB_PORT", "3306"),
@@ -77,6 +87,15 @@ func InitCore() (*Core, error) {
 	})
 	if err != nil {
 		return nil, fmt.Errorf("数据库连接失败: %w", err)
+	}
+
+	if autoMigrate {
+		if err := dbmigrate.RunEmbedded(context.Background(), db, log.Default()); err != nil {
+			_ = closeGormDB(db)
+			return nil, fmt.Errorf("数据库自动迁移失败: %w", err)
+		}
+	} else {
+		log.Println("API/Worker 已跳过嵌入式数据库迁移，仅进行结构校验；生产迁移必须使用专用 migrator")
 	}
 
 	redisCache, err := cache.NewRedisCache(cache.RedisConfig{
@@ -98,6 +117,7 @@ func InitCore() (*Core, error) {
 
 	repos := Repositories{
 		User:            repository.NewUserRepository(db),
+		RefreshSession:  repository.NewRefreshSessionRepository(db),
 		Account:         repository.NewAccountRepository(db),
 		TaskLog:         repository.NewTaskLogRepository(db),
 		CloudStats:      repository.NewCloudStatsRepository(db),
@@ -110,6 +130,7 @@ func InitCore() (*Core, error) {
 		AuditLog:        repository.NewAuditLogRepository(db),
 		Announcement:    repository.NewAnnouncementRepository(db),
 		WSMessage:       repository.NewWSMessageRepository(db),
+		Operation:       repository.NewOperationRepository(db),
 		Schema:          repository.NewSchemaRepository(db),
 	}
 
@@ -118,8 +139,7 @@ func InitCore() (*Core, error) {
 		_ = closeGormDB(db)
 		return nil, fmt.Errorf("数据库结构校验失败: %w", err)
 	}
-	// 注意：曾经在此处自动执行 ALTER TABLE 补齐缺失列，但运行时改 schema 在生产环境
-	// 与 DBA 流程冲突且难以审计。现在仅做校验：缺列会直接启动失败并提示执行 migrations。
+	// DDL 由非生产环境的内嵌 runner 或生产专用 migrator 执行；这里保留 schema 校验作为防线。
 	// TaskConfig 同步属于业务数据而非 DDL，仍可在启动时进行。
 	if err := repos.TaskConfig.SyncDefinitions(services.DefaultTaskConfigs()); err != nil {
 		_ = redisCache.Close()

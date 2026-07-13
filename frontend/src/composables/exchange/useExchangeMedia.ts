@@ -1,5 +1,6 @@
 import { ref } from 'vue'
 import type { Product } from '@/api/exchange'
+import { buildProductImageSource, type ProductImageSource } from '@/utils/product-image'
 
 export function useExchangeMedia() {
   const isMobile = ref(false)
@@ -21,13 +22,17 @@ export function useExchangeMedia() {
     }
   }
 
-  const getProductImageUrl = (product: Product | null | undefined): string => {
-    if (!product) return ''
+  const getProductImageSource = (product: Product | null | undefined): ProductImageSource => {
+    if (!product) return { src: '' }
     const prizeId = String(product.prize_id)
     if (localImageMap.value[prizeId]) {
-      return localImageMap.value[prizeId]
+      return buildProductImageSource(localImageMap.value[prizeId])
     }
-    return product.image_url || ''
+    return buildProductImageSource(product.image_url || '')
+  }
+
+  const getProductImageUrl = (product: Product | null | undefined): string => {
+    return getProductImageSource(product).src
   }
 
   return {
@@ -35,6 +40,7 @@ export function useExchangeMedia() {
     localImageMap,
     checkMobile,
     loadLocalImageMap,
+    getProductImageSource,
     getProductImageUrl
   }
 }

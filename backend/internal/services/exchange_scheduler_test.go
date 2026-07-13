@@ -41,3 +41,30 @@ func TestScheduledExecuteSlotTriggersEveryMinuteBoundary(t *testing.T) {
 		t.Fatalf("expected 10:30, got %02d:%02d", hour, minute)
 	}
 }
+
+func TestNextSchedulerWakeDelayTargetsPrepareBoundary(t *testing.T) {
+	now := time.Date(2026, 3, 17, 10, 29, 5, 0, time.Local)
+
+	delay := nextSchedulerWakeDelay(now)
+	if delay != 25*time.Second {
+		t.Fatalf("nextSchedulerWakeDelay() = %s, want %s", delay, 25*time.Second)
+	}
+}
+
+func TestNextSchedulerWakeDelayTargetsMinuteBoundary(t *testing.T) {
+	now := time.Date(2026, 3, 17, 10, 29, 40, 0, time.Local)
+
+	delay := nextSchedulerWakeDelay(now)
+	if delay != 20*time.Second {
+		t.Fatalf("nextSchedulerWakeDelay() = %s, want %s", delay, 20*time.Second)
+	}
+}
+
+func TestNextSchedulerWakeDelaySkipsCurrentBoundary(t *testing.T) {
+	now := time.Date(2026, 3, 17, 10, 30, 0, 0, time.Local)
+
+	delay := nextSchedulerWakeDelay(now)
+	if delay != 30*time.Second {
+		t.Fatalf("nextSchedulerWakeDelay() = %s, want %s", delay, 30*time.Second)
+	}
+}

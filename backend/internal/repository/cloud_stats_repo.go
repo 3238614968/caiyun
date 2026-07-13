@@ -12,6 +12,21 @@ type CloudStatsRepository struct {
 	db *gorm.DB
 }
 
+const (
+	defaultCloudStatsPageLimit = 200
+	maxCloudStatsPageLimit     = 1000
+)
+
+func normalizeCloudStatsPage(offset, limit int) (int, int) {
+	if offset < 0 {
+		offset = 0
+	}
+	if limit <= 0 || limit > maxCloudStatsPageLimit {
+		limit = defaultCloudStatsPageLimit
+	}
+	return offset, limit
+}
+
 func NewCloudStatsRepository(db *gorm.DB) *CloudStatsRepository {
 	return &CloudStatsRepository{db: db}
 }
@@ -91,8 +106,22 @@ func (r *CloudStatsRepository) FindByAccountIDAndDate(accountID uint, date strin
 	return &stats, nil
 }
 
-// FindByDateRange 根据日期范围查找统计记录
-func (r *CloudStatsRepository) FindByDateRange(startDate, endDate string) ([]*models.CloudStats, error) {
+// FindByDateRange 根据日期范围分页查找统计记录。
+func (r *CloudStatsRepository) FindByDateRange(startDate, endDate string, offset, limit int) ([]*models.CloudStats, int64, error) {
+	var stats []*models.CloudStats
+	var total int64
+	offset, limit = normalizeCloudStatsPage(offset, limit)
+
+	query := r.db.Model(&models.CloudStats{}).Where("date BETWEEN ? AND ?", startDate, endDate)
+	if err := query.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+	err := query.Preload("Account").Order("date DESC").Offset(offset).Limit(limit).Find(&stats).Error
+	return stats, total, err
+}
+
+// FindByDateRangeAll 根据日期范围加载全部统计记录；调用方应自行控制日期跨度。
+func (r *CloudStatsRepository) FindByDateRangeAll(startDate, endDate string) ([]*models.CloudStats, error) {
 	var stats []*models.CloudStats
 	err := r.db.Preload("Account").Where("date BETWEEN ? AND ?", startDate, endDate).Order("date DESC").Find(&stats).Error
 	return stats, err

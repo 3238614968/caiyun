@@ -2,26 +2,26 @@ package handlers
 
 import (
 	"caiyun/internal/models"
-	"caiyun/internal/monitor"
 	"caiyun/internal/queue"
 	"caiyun/internal/services"
+	appErrors "caiyun/pkg/errors"
 	"caiyun/pkg/response"
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
-	"runtime/debug"
 	"strconv"
-	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
 )
 
 type TaskHandler struct {
-	taskService    *services.TaskService
-	cloudService   *services.CloudService
-	accountService *services.AccountService
-	redisCache     interface {
+	taskService      *services.TaskService
+	cloudService     *services.CloudService
+	accountService   *services.AccountService
+	operationService *services.OperationService
+	redisCache       interface {
 		LLen(key string) int64
 		ZCard(key string) int64
 	}
@@ -57,6 +57,8 @@ type TaskLogsResponse struct {
 // @Accept json
 // @Produce json
 // @Param account_id query int false "账号ID"
+// @Param task_type query string false "任务类型"
+// @Param status query string false "状态"
 // @Param page query int false "页码" default(1)
 // @Param page_size query int false "每页数量" default(20)
 // @Success 200 {object} TaskLogsResponse
@@ -93,9 +95,12 @@ func (h *TaskHandler) GetTaskLogs(c *gin.Context) {
 		accountID = &accountIDUint
 	}
 
-	taskLogs, total, err := h.taskService.GetTaskLogs(userID.(uint), accountID, page, pageSize)
+	taskType := c.Query("task_type")
+	status := c.Query("status")
+
+	taskLogs, total, err := h.taskService.GetTaskLogsContext(c.Request.Context(), userID.(uint), accountID, taskType, status, page, pageSize)
 	if err != nil {
-		respondInternalServer(c)
+		respondTaskHandlerError(c, err)
 		return
 	}
 
@@ -128,7 +133,7 @@ func (h *TaskHandler) GetDashboard(c *gin.Context) {
 		return
 	}
 
-	dashboard, err := h.cloudService.GetDashboard(userID.(uint))
+	dashboard, err := h.cloudService.GetDashboardContext(c.Request.Context(), userID.(uint))
 	if err != nil {
 		respondInternalServer(c)
 		return
@@ -187,14 +192,14 @@ func (h *TaskHandler) GetCloudStats(c *gin.Context) {
 			respondError(c, http.StatusBadRequest, "无效的账号ID")
 			return
 		}
-		cloudStats, total, err = h.cloudService.GetCloudStatsByAccount(userID.(uint), uint(accountID), page, pageSize)
+		cloudStats, total, err = h.cloudService.GetCloudStatsByAccountContext(c.Request.Context(), userID.(uint), uint(accountID), page, pageSize)
 	} else {
 		// 获取用户的所有统计
-		cloudStats, total, err = h.cloudService.GetCloudStatsByUserID(userID.(uint), page, pageSize)
+		cloudStats, total, err = h.cloudService.GetCloudStatsByUserIDContext(c.Request.Context(), userID.(uint), page, pageSize)
 	}
 
 	if err != nil {
-		respondInternalServer(c)
+		respondTaskHandlerError(c, err)
 		return
 	}
 
@@ -232,9 +237,9 @@ func (h *TaskHandler) GetTrendData(c *gin.Context) {
 	var trendData []services.TrendPoint
 	var err error
 	if role, _ := c.Get("role"); role == "admin" {
-		trendData, err = h.cloudService.GetGlobalTrendData(days)
+		trendData, err = h.cloudService.GetGlobalTrendDataContext(c.Request.Context(), days)
 	} else {
-		trendData, err = h.cloudService.GetTrendData(userID.(uint), days)
+		trendData, err = h.cloudService.GetTrendDataContext(c.Request.Context(), userID.(uint), days)
 	}
 	if err != nil {
 		respondInternalServer(c)
@@ -260,97 +265,61 @@ type TrendDataResponse struct {
 // @Security BearerAuth
 // @Router /api/tasks/trigger-all [post]
 func (h *TaskHandler) TriggerAllTasks(c *gin.Context) {
-	// 获取用户ID
-	userID, exists := c.Get("user_id")
-	if !exists {
-		respondError(c, http.StatusUnauthorized, "未授权")
+	userID, ok := getUserID(c)
+	if !ok {
 		return
 	}
 
-	// 获取用户的所有激活账号
-	accounts, err := h.accountService.GetActiveAccounts(userID.(uint))
+	accounts, err := h.accountService.GetActiveAccountsContext(c.Request.Context(), userID)
 	if err != nil {
+		_ = c.Error(err)
 		respondInternalServer(c)
 		return
 	}
 
-	// 过滤今日未执行的账号
-	var toExecute []*models.Account
+	accountIDs := make([]uint, 0, len(accounts))
 	dailyTaskTypes := h.taskService.DailyTaskTypes()
 	for _, account := range accounts {
-		if !h.taskService.HasExecutedTodayForTaskTypes(account.ID, dailyTaskTypes) {
-			toExecute = append(toExecute, account)
+		if account == nil {
+			continue
+		}
+		executed, err := h.taskService.HasExecutedTodayForTaskTypesContext(c.Request.Context(), account.ID, dailyTaskTypes)
+		if err != nil {
+			respondTaskHandlerError(c, err)
+			return
+		}
+		if !executed {
+			accountIDs = append(accountIDs, account.ID)
 		}
 	}
-
-	if len(toExecute) == 0 {
+	if len(accountIDs) == 0 {
 		response.Message(c, "所有账号今日已执行过任务")
 		return
 	}
+	if h.operationService == nil {
+		respondInternalServer(c)
+		return
+	}
 
-	// 使用信号量控制并发数（最多3个账号同时执行，防止内存暴涨）
-	go func() {
-		const maxConcurrency = 3
-		sem := make(chan struct{}, maxConcurrency)
-		var wg sync.WaitGroup
-
-		for _, account := range toExecute {
-			sem <- struct{}{} // 获取信号量
-			wg.Add(1)
-
-			go func(acc *models.Account) {
-				defer wg.Done()
-				defer func() { <-sem }() // 释放信号量
-				tm := monitor.GetGlobalTaskMonitor()
-				const monitorTaskType = "trigger_all"
-				if tm != nil {
-					_ = tm.StartTask(acc.ID, monitorTaskType, 0)
-					_ = tm.UpdateTaskProgress(acc.ID, monitorTaskType, 0.1, "开始执行账号任务")
-				}
-
-				// panic recovery，防止单个账号崩溃导致整个进程退出
-				defer func() {
-					if r := recover(); r != nil {
-						// 打印完整堆栈信息，便于定位 nil pointer 等崩溃位置
-						fmt.Printf("[TriggerAll] 账号 %d 执行 panic: %v\n%s\n", acc.ID, r, debug.Stack())
-						if tm != nil {
-							_ = tm.FailTask(acc.ID, monitorTaskType, fmt.Errorf("panic: %v", r))
-						}
-					}
-				}()
-
-				fmt.Printf("[TriggerAll] 开始执行账号 %d 的任务\n", acc.ID)
-				// 自动刷新Token
-				_ = h.accountService.RefreshTokenIfNeeded(acc)
-				if tm != nil {
-					_ = tm.UpdateTaskProgress(acc.ID, monitorTaskType, 0.5, "账号鉴权刷新完成，开始执行任务")
-				}
-				// 执行任务，限制单账号执行时间，避免上游接口卡住导致后台 goroutine 永久占用。
-				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-				defer cancel()
-				if _, err := h.taskService.ExecuteTaskForAccountContext(ctx, acc); err != nil {
-					fmt.Printf("[TriggerAll] 账号 %d 执行失败: %v\n", acc.ID, err)
-					if tm != nil {
-						_ = tm.FailTask(acc.ID, monitorTaskType, err)
-					}
-				} else {
-					fmt.Printf("[TriggerAll] 账号 %d 任务执行完成\n", acc.ID)
-					if tm != nil {
-						_ = tm.CompleteTask(acc.ID, monitorTaskType, true, "账号任务执行完成")
-					}
-				}
-			}(account)
-		}
-
-		wg.Wait()
-		fmt.Printf("[TriggerAll] 全部 %d 个账号执行完成\n", len(toExecute))
-	}()
-
-	response.Message(c, fmt.Sprintf("已开始执行 %d 个账号的任务（%d 个已跳过），并发限制 3", len(toExecute), len(accounts)-len(toExecute)))
+	idempotencyKey, err := requestIdempotencyKey(c, fmt.Sprintf("account-task-batch:%d:%s", userID, time.Now().Format("2006-01-02")))
+	if err != nil {
+		respondError(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	operation, _, dispatchErr, err := h.operationService.Submit(c.Request.Context(), services.SubmitOperationRequest{
+		UserID:         userID,
+		OperationType:  models.OperationTypeAccountTaskBatch,
+		Payload:        services.AccountTaskBatchOperationPayload{AccountIDs: accountIDs},
+		IdempotencyKey: idempotencyKey,
+	})
+	if err != nil {
+		respondOperationSubmitError(c, err)
+		return
+	}
+	respondOperationAccepted(c, operation, dispatchErr)
 }
 
-// CalculateStats 手动计算统计数据
-// @Summary 手动计算统计数据
+// CalculateStats 手动计算统计数据// @Summary 手动计算统计数据
 // @Tags 数据统计
 // @Accept json
 // @Produce json
@@ -367,19 +336,19 @@ func (h *TaskHandler) CalculateStats(c *gin.Context) {
 
 	if role, _ := c.Get("role"); role == "admin" {
 		// 管理员首页展示全局数据，手动计算时同步刷新全站账号快照。
-		if err := h.cloudService.CalculateDailyStats(); err != nil {
+		if err := h.cloudService.CalculateDailyStatsContext(c.Request.Context()); err != nil {
 			respondInternalServer(c)
 			return
 		}
 	} else {
 		// 普通用户仅计算自己的每日统计，避免触发全站账号重算。
-		if err := h.cloudService.CalculateDailyStatsByUserID(userID.(uint)); err != nil {
+		if err := h.cloudService.CalculateDailyStatsByUserIDContext(c.Request.Context(), userID.(uint)); err != nil {
 			respondInternalServer(c)
 			return
 		}
 
 		// 更新差异值
-		if err := h.cloudService.UpdateCloudDiffs(userID.(uint)); err != nil {
+		if err := h.cloudService.UpdateCloudDiffsContext(c.Request.Context(), userID.(uint)); err != nil {
 			respondInternalServer(c)
 			return
 		}
@@ -404,7 +373,7 @@ func (h *TaskHandler) GetTotalCloudCount(c *gin.Context) {
 		return
 	}
 
-	total, err := h.cloudService.GetTotalCloudCount(userID.(uint))
+	total, err := h.cloudService.GetTotalCloudCountContext(c.Request.Context(), userID.(uint))
 	if err != nil {
 		respondInternalServer(c)
 		return
@@ -511,9 +480,9 @@ func (h *TaskHandler) GetTaskStatus(c *gin.Context) {
 	}
 
 	// 获取最近的任务日志作为任务状态
-	logs, _, err := h.taskService.GetTaskLogs(userID.(uint), nil, 1, 20)
+	logs, _, err := h.taskService.GetTaskLogsContext(c.Request.Context(), userID.(uint), nil, "", "", 1, 20)
 	if err != nil {
-		response.Success(c, TaskStatusResponse{Tasks: []TaskStatusItem{}})
+		respondTaskHandlerError(c, err)
 		return
 	}
 
@@ -536,4 +505,23 @@ func (h *TaskHandler) GetTaskStatus(c *gin.Context) {
 	}
 
 	response.Success(c, TaskStatusResponse{Tasks: items})
+}
+
+func (h *TaskHandler) SetOperationService(service *services.OperationService) {
+	h.operationService = service
+}
+func respondTaskHandlerError(c *gin.Context, err error) {
+	switch {
+	case errors.Is(err, services.ErrAccountNotFound):
+		respondBusinessError(c, http.StatusNotFound, appErrors.BusinessCodeAccountNotFound, "账号不存在")
+	case errors.Is(err, context.DeadlineExceeded):
+		respondBusinessError(c, http.StatusGatewayTimeout, appErrors.BusinessCodeTaskTimeout, "请求处理超时")
+	case errors.Is(err, context.Canceled):
+		respondBusinessError(c, http.StatusRequestTimeout, appErrors.BusinessCodeTaskTimeout, "请求已取消")
+	default:
+		if err != nil {
+			_ = c.Error(err)
+		}
+		respondInternalServer(c)
+	}
 }

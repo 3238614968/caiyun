@@ -3,6 +3,7 @@ package handlers
 import (
 	"net/http"
 
+	appErrors "caiyun/pkg/errors"
 	apiresponse "caiyun/pkg/response"
 
 	"github.com/gin-gonic/gin"
@@ -24,6 +25,10 @@ func respondError(c *gin.Context, statusCode int, message string) {
 	apiresponse.ErrorWithCode(c, statusCode, message)
 }
 
+func respondBusinessError(c *gin.Context, statusCode int, businessCode appErrors.BusinessCode, message string) {
+	apiresponse.ErrorWithBusinessCode(c, statusCode, string(businessCode), message)
+}
+
 func respondInternalServer(c *gin.Context) {
 	apiresponse.InternalServer(c, InternalServerErrorResponse().Message)
 }
@@ -33,12 +38,12 @@ func respondInternalServer(c *gin.Context) {
 func getUserID(c *gin.Context) (uint, bool) {
 	v, exists := c.Get("user_id")
 	if !exists {
-		respondError(c, http.StatusUnauthorized, "未授权")
+		respondBusinessError(c, http.StatusUnauthorized, appErrors.BusinessCodeAuthSessionExpired, "未授权")
 		return 0, false
 	}
 	id, ok := v.(uint)
 	if !ok {
-		respondError(c, http.StatusUnauthorized, "用户标识类型异常")
+		respondBusinessError(c, http.StatusUnauthorized, appErrors.BusinessCodeAuthSessionExpired, "用户标识类型异常")
 		return 0, false
 	}
 	return id, true

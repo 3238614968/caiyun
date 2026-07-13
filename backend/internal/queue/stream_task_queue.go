@@ -1,48 +1,61 @@
 package queue
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"caiyun/internal/cache"
+	"caiyun/internal/envutil"
 	"caiyun/internal/models"
 )
 
 const (
-	TaskStreamKey               = "task:queue:stream"
-	TaskStreamDelayedKey        = "task:queue:stream:delayed"
-	TaskStreamDeadLetterKey     = "task:queue:stream:dead"
-	DefaultStreamConsumerGroup  = "caiyun-workers"
-	DefaultStreamMaxLenApprox   = 100000
-	defaultStreamReadCount      = 1
-	defaultStreamRecoverBatch   = 100
-	streamPayloadField          = "payload"
-	streamDeadReasonField       = "reason"
-	streamDeadFailedAtField     = "failed_at"
-	streamDeadOriginalIDField   = "original_id"
-	streamDeadOriginalDataField = "original_payload"
-	streamConsumerNameEnv       = "TASK_QUEUE_STREAM_CONSUMER"
-	streamConsumerGroupEnv      = "TASK_QUEUE_STREAM_GROUP"
-	streamKeyEnv                = "TASK_QUEUE_STREAM_KEY"
-	streamDelayedKeyEnv         = "TASK_QUEUE_STREAM_DELAYED_KEY"
-	streamDeadKeyEnv            = "TASK_QUEUE_STREAM_DEAD_KEY"
-	streamMaxLenEnv             = "TASK_QUEUE_STREAM_MAXLEN"
+	TaskStreamKey                      = "task:queue:stream"
+	TaskStreamDelayedKey               = "task:queue:stream:delayed"
+	TaskStreamDeadLetterKey            = "task:queue:stream:dead"
+	DefaultStreamConsumerGroup         = "caiyun-workers"
+	DefaultStreamMaxLenApprox          = 100000
+	defaultStreamReadCount             = 1
+	defaultStreamRecoverBatch          = 100
+	streamPayloadField                 = "payload"
+	streamDeadReasonField              = "reason"
+	streamDeadFailedAtField            = "failed_at"
+	streamDeadOriginalIDField          = "original_id"
+	streamDeadOriginalDataField        = "original_payload"
+	streamDeadOriginalLengthField      = "original_payload_length"
+	streamDeadOriginalHashField        = "original_payload_sha256"
+	streamDeadOriginalTruncatedField   = "original_payload_truncated"
+	maxMalformedDeadLetterPayloadBytes = 64 * 1024
+	// The live task stream is deletion-backed: successful ACKs atomically XDEL.
+	// Never apply MAXLEN because Redis may trim undelivered or PEL entries.
+	mainTaskStreamMaxLenApprox int64 = 0
+	streamConsumerNameEnv            = "TASK_QUEUE_STREAM_CONSUMER"
+	streamConsumerGroupEnv           = "TASK_QUEUE_STREAM_GROUP"
+	streamKeyEnv                     = "TASK_QUEUE_STREAM_KEY"
+	streamDelayedKeyEnv              = "TASK_QUEUE_STREAM_DELAYED_KEY"
+	streamDeadKeyEnv                 = "TASK_QUEUE_STREAM_DEAD_KEY"
+	streamMaxLenEnv                  = "TASK_QUEUE_STREAM_MAXLEN"
 )
 
 type streamQueueStore interface {
 	XGroupCreateMkStream(stream, group, start string) error
 	XAdd(stream string, maxLenApprox int64, values map[string]interface{}) (string, error)
+	XAddBatch(stream string, maxLenApprox int64, values []map[string]interface{}) ([]string, error)
+	XAddWithDedupe(stream string, maxLenApprox int64, item cache.StreamEnqueueItem, expiration time.Duration) (string, bool, error)
+	XAddBatchWithDedupe(stream string, maxLenApprox int64, items []cache.StreamEnqueueItem, expiration time.Duration) ([]string, error)
 	XReadGroup(group, consumer, stream, id string, count int64, block time.Duration) ([]cache.StreamMessage, error)
-	XAck(stream, group string, ids ...string) (int64, error)
-	XDel(stream string, ids ...string) (int64, error)
+	XAckAndDelete(stream, group string, ids ...string) (int64, error)
+	XMoveToStream(source, group, id, destination string, maxLenApprox int64, values map[string]interface{}) (string, bool, error)
+	XMoveToZSet(source, group, id, destination, member string, score float64) (bool, error)
+	XPromoteZSetToStream(source, destination, member string, maxScore float64, maxLenApprox int64, values map[string]interface{}) (string, bool, error)
 	XAutoClaim(stream, group, consumer string, minIdle time.Duration, start string, count int64) ([]cache.StreamMessage, string, error)
 	XPendingCount(stream, group string) (int64, error)
 	XLen(stream string) int64
-	ZAdd(key string, score float64, member interface{}) error
 	ZRangeByScore(key string, min, max string, count int64) ([]string, error)
-	ZRem(key string, members ...interface{}) (int64, error)
 	ZCard(key string) int64
 	Del(keys ...string) error
 }
@@ -65,12 +78,12 @@ var _ ReliableTaskQueue = (*StreamTaskQueue)(nil)
 
 func StreamTaskQueueOptionsFromEnv() StreamTaskQueueOptions {
 	return StreamTaskQueueOptions{
-		StreamKey:     envString(streamKeyEnv, TaskStreamKey),
-		DelayedKey:    envString(streamDelayedKeyEnv, TaskStreamDelayedKey),
-		DeadLetterKey: envString(streamDeadKeyEnv, TaskStreamDeadLetterKey),
-		ConsumerGroup: envString(streamConsumerGroupEnv, DefaultStreamConsumerGroup),
-		ConsumerName:  envString(streamConsumerNameEnv, defaultStreamConsumerName()),
-		MaxLenApprox:  envInt64(streamMaxLenEnv, DefaultStreamMaxLenApprox),
+		StreamKey:     envutil.String(streamKeyEnv, TaskStreamKey),
+		DelayedKey:    envutil.String(streamDelayedKeyEnv, TaskStreamDelayedKey),
+		DeadLetterKey: envutil.String(streamDeadKeyEnv, TaskStreamDeadLetterKey),
+		ConsumerGroup: envutil.String(streamConsumerGroupEnv, DefaultStreamConsumerGroup),
+		ConsumerName:  envutil.String(streamConsumerNameEnv, defaultStreamConsumerName()),
+		MaxLenApprox:  envutil.Int64(streamMaxLenEnv, DefaultStreamMaxLenApprox),
 	}
 }
 
@@ -95,8 +108,13 @@ func (q *StreamTaskQueue) Metadata() TaskQueueMetadata {
 		ConsumerName:  q.opts.ConsumerName,
 		MaxLenApprox:  q.opts.MaxLenApprox,
 		Labels: map[string]string{
-			"delivery": "consumer-group",
-			"ack":      "xack+xdel",
+			"delivery":             "consumer-group",
+			"ack":                  "lua:xack+xdel",
+			"live_stream_trimming": "disabled",
+			"max_len_scope":        "dead-letter-only",
+			// Multi-key Lua operations require all configured keys (including
+			// dedupe keys) to share a hash tag when a Redis Cluster client is added.
+			"redis_cluster": "requires-same-hash-slot",
 		},
 	}
 }
@@ -143,18 +161,77 @@ func (q *StreamTaskQueue) Enqueue(accountID, userID uint, taskType string) error
 		CreatedAt:  time.Now().Unix(),
 		RetryCount: 0,
 	}
-	return q.enqueueMessage(&message)
+	return q.EnqueueMessage(&message)
+}
+
+func (q *StreamTaskQueue) EnqueueMessage(message *TaskMessage) error {
+	if message == nil {
+		return fmt.Errorf("任务消息为空")
+	}
+	if message.CreatedAt == 0 {
+		message.CreatedAt = time.Now().Unix()
+	}
+	return q.enqueueMessage(message)
 }
 
 func (q *StreamTaskQueue) EnqueueBatch(accounts []*models.Account, taskType string) error {
-	for _, account := range accounts {
-		if err := q.Enqueue(account.ID, account.UserID, taskType); err != nil {
+	if len(accounts) == 0 {
+		return nil
+	}
+	for index, account := range accounts {
+		if account == nil {
+			return fmt.Errorf("批量加入 Streams 队列失败: 第 %d 个账号为空", index+1)
+		}
+	}
+
+	items := make([]cache.StreamEnqueueItem, 0, len(accounts))
+	payloads := make([]map[string]interface{}, 0, len(accounts))
+	var dedupeTTL time.Duration
+	useDedupe := false
+	for index, account := range accounts {
+		message := TaskMessage{
+			AccountID:  account.ID,
+			UserID:     account.UserID,
+			TaskType:   taskType,
+			CreatedAt:  time.Now().Unix(),
+			RetryCount: 0,
+		}
+		claim := prepareTaskEnqueueDedupe(&message)
+		if index == 0 {
+			useDedupe = claim.Enabled
+			dedupeTTL = claim.TTL
+		} else if claim.Enabled != useDedupe {
+			return fmt.Errorf("批量加入 Streams 队列失败: 去重配置在构造批次时发生变化")
+		}
+		payload, err := encodeTaskMessage(&message)
+		if err != nil {
 			return fmt.Errorf("批量加入 Streams 队列失败: %w", err)
 		}
+		values := map[string]interface{}{streamPayloadField: payload}
+		payloads = append(payloads, values)
+		if claim.Enabled {
+			items = append(items, cache.StreamEnqueueItem{
+				Values:      values,
+				DedupeKey:   claim.Key,
+				DedupeValue: claim.Value,
+			})
+		}
+	}
+
+	if err := q.ensureGroup(); err != nil {
+		return err
+	}
+	if useDedupe {
+		if _, err := q.cache.XAddBatchWithDedupe(q.opts.StreamKey, mainTaskStreamMaxLenApprox, items, dedupeTTL); err != nil {
+			return fmt.Errorf("批量加入 Streams 队列失败: %w", err)
+		}
+		return nil
+	}
+	if _, err := q.cache.XAddBatch(q.opts.StreamKey, mainTaskStreamMaxLenApprox, payloads); err != nil {
+		return fmt.Errorf("批量加入 Streams 队列失败: %w", err)
 	}
 	return nil
 }
-
 func (q *StreamTaskQueue) Dequeue(timeout time.Duration) (*TaskMessage, error) {
 	if err := q.ensureGroup(); err != nil {
 		return nil, err
@@ -168,12 +245,26 @@ func (q *StreamTaskQueue) Dequeue(timeout time.Duration) (*TaskMessage, error) {
 		timeout,
 	)
 	if err != nil {
+		// Redis XREADGROUP returns redis.Nil for a normal BLOCK timeout. The
+		// cache layer converts it to a text error because it cannot import this
+		// package's sentinel without an import cycle. Normalize it here so the
+		// Worker can distinguish an idle queue from an actual Redis failure.
+		if strings.Contains(err.Error(), ErrQueueTimeout.Error()) {
+			return nil, ErrQueueTimeout
+		}
 		return nil, err
 	}
 	if len(messages) == 0 {
 		return nil, ErrQueueTimeout
 	}
-	return decodeStreamMessage(messages[0])
+	message, decodeErr := decodeStreamMessage(messages[0])
+	if decodeErr == nil {
+		return message, nil
+	}
+	if err := q.moveMalformedToDeadLetter(messages[0], decodeErr); err != nil {
+		return nil, fmt.Errorf("%v；异常消息转入死信队列失败: %w", decodeErr, err)
+	}
+	return nil, fmt.Errorf("%v；异常消息已转入死信队列", decodeErr)
 }
 
 func (q *StreamTaskQueue) Ack(message *TaskMessage) error {
@@ -183,11 +274,12 @@ func (q *StreamTaskQueue) Ack(message *TaskMessage) error {
 	if message.StreamID == "" {
 		return fmt.Errorf("Streams 消息缺少 StreamID")
 	}
-	if _, err := q.cache.XAck(q.opts.StreamKey, q.opts.ConsumerGroup, message.StreamID); err != nil {
-		return fmt.Errorf("确认 Streams 任务失败: %w", err)
+	acked, err := q.cache.XAckAndDelete(q.opts.StreamKey, q.opts.ConsumerGroup, message.StreamID)
+	if err != nil {
+		return fmt.Errorf("原子确认并删除 Streams 任务失败: %w", err)
 	}
-	if _, err := q.cache.XDel(q.opts.StreamKey, message.StreamID); err != nil {
-		return fmt.Errorf("删除已确认 Streams 任务失败: %w", err)
+	if acked != 1 {
+		return fmt.Errorf("原子确认并删除 Streams 任务冲突: 消息不在当前 consumer group PEL 中 (acked=%d)", acked)
 	}
 	return nil
 }
@@ -200,26 +292,52 @@ func (q *StreamTaskQueue) RequeueDelayed(message *TaskMessage, delay time.Durati
 	if message == nil {
 		return fmt.Errorf("任务消息为空")
 	}
-	if err := q.Ack(message); err != nil {
+	if message.StreamID == "" {
+		return fmt.Errorf("Streams 消息缺少 StreamID")
+	}
+	if err := q.ensureGroup(); err != nil {
 		return err
 	}
-
-	message.StreamID = ""
-	message.ProcessingAt = 0
 	if delay < 0 {
 		delay = 0
-	}
-	if delay == 0 {
-		return q.enqueueMessage(message)
 	}
 
 	payload, err := encodeTaskMessage(message)
 	if err != nil {
 		return err
 	}
+	if delay == 0 {
+		_, moved, err := q.cache.XMoveToStream(
+			q.opts.StreamKey,
+			q.opts.ConsumerGroup,
+			message.StreamID,
+			q.opts.StreamKey,
+			mainTaskStreamMaxLenApprox,
+			map[string]interface{}{streamPayloadField: payload},
+		)
+		if err != nil {
+			return fmt.Errorf("原子重入 Streams 队列失败: %w", err)
+		}
+		if !moved {
+			return fmt.Errorf("原子重入 Streams 队列失败: 原始处理中消息不存在")
+		}
+		return nil
+	}
+
 	availableAt := time.Now().Add(delay).Unix()
-	if err := q.cache.ZAdd(q.opts.DelayedKey, float64(availableAt), payload); err != nil {
-		return fmt.Errorf("加入 Streams 延迟队列失败: %w", err)
+	moved, err := q.cache.XMoveToZSet(
+		q.opts.StreamKey,
+		q.opts.ConsumerGroup,
+		message.StreamID,
+		q.opts.DelayedKey,
+		payload,
+		float64(availableAt),
+	)
+	if err != nil {
+		return fmt.Errorf("原子加入 Streams 延迟队列失败: %w", err)
+	}
+	if !moved {
+		return fmt.Errorf("原子加入 Streams 延迟队列失败: 原始处理中消息不存在")
 	}
 	return nil
 }
@@ -228,20 +346,37 @@ func (q *StreamTaskQueue) DeadLetter(message *TaskMessage, reason string) error 
 	if message == nil {
 		return fmt.Errorf("任务消息为空")
 	}
+	if message.StreamID == "" {
+		return fmt.Errorf("Streams 消息缺少 StreamID")
+	}
+	if err := q.ensureGroup(); err != nil {
+		return err
+	}
 
 	payload, err := encodeTaskMessage(message)
 	if err != nil {
 		return err
 	}
-	if _, err := q.cache.XAdd(q.opts.DeadLetterKey, q.opts.MaxLenApprox, map[string]interface{}{
-		streamDeadOriginalIDField:   message.StreamID,
-		streamDeadReasonField:       reason,
-		streamDeadFailedAtField:     time.Now().Unix(),
-		streamDeadOriginalDataField: payload,
-	}); err != nil {
-		return fmt.Errorf("写入 Streams 死信队列失败: %w", err)
+	_, moved, err := q.cache.XMoveToStream(
+		q.opts.StreamKey,
+		q.opts.ConsumerGroup,
+		message.StreamID,
+		q.opts.DeadLetterKey,
+		q.opts.MaxLenApprox,
+		map[string]interface{}{
+			streamDeadOriginalIDField:   message.StreamID,
+			streamDeadReasonField:       reason,
+			streamDeadFailedAtField:     time.Now().Unix(),
+			streamDeadOriginalDataField: payload,
+		},
+	)
+	if err != nil {
+		return fmt.Errorf("原子写入 Streams 死信队列失败: %w", err)
 	}
-	return q.Ack(message)
+	if !moved {
+		return fmt.Errorf("原子写入 Streams 死信队列失败: 原始处理中消息不存在")
+	}
+	return nil
 }
 
 func (q *StreamTaskQueue) RecoverStaleProcessing(visibilityTimeout time.Duration) (int, error) {
@@ -268,20 +403,29 @@ func (q *StreamTaskQueue) RecoverStaleProcessing(visibilityTimeout time.Duration
 	for _, streamMessage := range messages {
 		message, err := decodeStreamMessage(streamMessage)
 		if err != nil {
+			if deadErr := q.moveMalformedToDeadLetter(streamMessage, err); deadErr != nil {
+				return recovered, fmt.Errorf("恢复异常 Streams 消息时写入死信队列失败: %w", deadErr)
+			}
 			continue
 		}
-		if _, err := q.cache.XAck(q.opts.StreamKey, q.opts.ConsumerGroup, message.StreamID); err != nil {
+		payload, err := encodeTaskMessage(message)
+		if err != nil {
 			return recovered, err
 		}
-		if _, err := q.cache.XDel(q.opts.StreamKey, message.StreamID); err != nil {
+		_, moved, err := q.cache.XMoveToStream(
+			q.opts.StreamKey,
+			q.opts.ConsumerGroup,
+			message.StreamID,
+			q.opts.StreamKey,
+			mainTaskStreamMaxLenApprox,
+			map[string]interface{}{streamPayloadField: payload},
+		)
+		if err != nil {
 			return recovered, err
 		}
-		message.StreamID = ""
-		message.ProcessingAt = 0
-		if err := q.enqueueMessage(message); err != nil {
-			return recovered, err
+		if moved {
+			recovered++
 		}
-		recovered++
 	}
 
 	return recovered, nil
@@ -291,29 +435,97 @@ func (q *StreamTaskQueue) PromoteDueDelayed(limit int64) (int, error) {
 	if limit <= 0 {
 		limit = 100
 	}
+	if err := q.ensureGroup(); err != nil {
+		return 0, err
+	}
 
-	items, err := q.cache.ZRangeByScore(q.opts.DelayedKey, "-inf", fmt.Sprintf("%d", time.Now().Unix()), limit)
+	now := time.Now().Unix()
+	items, err := q.cache.ZRangeByScore(q.opts.DelayedKey, "-inf", fmt.Sprintf("%d", now), limit)
 	if err != nil {
 		return 0, err
 	}
 
 	promoted := 0
 	for _, item := range items {
-		removed, err := q.cache.ZRem(q.opts.DelayedKey, item)
+		_, moved, err := q.cache.XPromoteZSetToStream(
+			q.opts.DelayedKey,
+			q.opts.StreamKey,
+			item,
+			float64(now),
+			mainTaskStreamMaxLenApprox,
+			map[string]interface{}{streamPayloadField: item},
+		)
 		if err != nil {
 			return promoted, err
 		}
-		if removed == 0 {
-			continue
+		if moved {
+			promoted++
 		}
-		if err := q.enqueuePayload(item); err != nil {
-			_ = q.cache.ZAdd(q.opts.DelayedKey, float64(time.Now().Add(DefaultRetryBaseDelay).Unix()), item)
-			return promoted, err
-		}
-		promoted++
 	}
 
 	return promoted, nil
+}
+
+func (q *StreamTaskQueue) moveMalformedToDeadLetter(streamMessage cache.StreamMessage, cause error) error {
+	if strings.TrimSpace(streamMessage.ID) == "" {
+		return fmt.Errorf("异常 Streams 消息缺少 ID")
+	}
+	reason := "无法解析 Streams 任务消息"
+	if cause != nil {
+		reason = cause.Error()
+	}
+	if len(reason) > 512 {
+		reason = reason[:512]
+	}
+	originalPayload := ""
+	if value, ok := streamMessage.Values[streamPayloadField]; ok {
+		switch typed := value.(type) {
+		case string:
+			originalPayload = typed
+		case []byte:
+			originalPayload = string(typed)
+		default:
+			originalPayload = fmt.Sprint(typed)
+		}
+	} else if encoded, err := json.Marshal(streamMessage.Values); err == nil {
+		originalPayload = string(encoded)
+	}
+	originalPayload, originalLength, originalHash, originalTruncated := boundMalformedDeadLetterPayload(originalPayload)
+	_, moved, err := q.cache.XMoveToStream(
+		q.opts.StreamKey,
+		q.opts.ConsumerGroup,
+		streamMessage.ID,
+		q.opts.DeadLetterKey,
+		q.opts.MaxLenApprox,
+		map[string]interface{}{
+			streamDeadOriginalIDField:        streamMessage.ID,
+			streamDeadReasonField:            reason,
+			streamDeadFailedAtField:          time.Now().Unix(),
+			streamDeadOriginalDataField:      originalPayload,
+			streamDeadOriginalLengthField:    originalLength,
+			streamDeadOriginalHashField:      originalHash,
+			streamDeadOriginalTruncatedField: originalTruncated,
+		},
+	)
+	if err != nil {
+		return err
+	}
+	if !moved {
+		return fmt.Errorf("原始处理中消息不存在")
+	}
+	return nil
+}
+
+func boundMalformedDeadLetterPayload(payload string) (captured string, originalLength int, sha256Hex string, truncated bool) {
+	data := []byte(payload)
+	originalLength = len(data)
+	sum := sha256.Sum256(data)
+	sha256Hex = fmt.Sprintf("%x", sum[:])
+	if len(data) > maxMalformedDeadLetterPayloadBytes {
+		data = data[:maxMalformedDeadLetterPayloadBytes]
+		truncated = true
+	}
+	return string(data), originalLength, sha256Hex, truncated
 }
 
 func (q *StreamTaskQueue) GetQueueLength() (int64, error) {
@@ -350,24 +562,34 @@ func (q *StreamTaskQueue) Clear() error {
 	if err := q.cache.Del(q.opts.StreamKey, q.opts.DelayedKey, q.opts.DeadLetterKey); err != nil {
 		return err
 	}
+	if err := clearTaskDedupeKeys(q.cache); err != nil {
+		return err
+	}
 	return q.ensureGroup()
 }
 
 func (q *StreamTaskQueue) enqueueMessage(message *TaskMessage) error {
+	claim := prepareTaskEnqueueDedupe(message)
 	payload, err := encodeTaskMessage(message)
 	if err != nil {
 		return err
 	}
-	return q.enqueuePayload(payload)
-}
-
-func (q *StreamTaskQueue) enqueuePayload(payload string) error {
 	if err := q.ensureGroup(); err != nil {
 		return err
 	}
-	if _, err := q.cache.XAdd(q.opts.StreamKey, q.opts.MaxLenApprox, map[string]interface{}{
-		streamPayloadField: payload,
-	}); err != nil {
+	values := map[string]interface{}{streamPayloadField: payload}
+	if claim.Enabled {
+		_, _, err := q.cache.XAddWithDedupe(q.opts.StreamKey, mainTaskStreamMaxLenApprox, cache.StreamEnqueueItem{
+			Values:      values,
+			DedupeKey:   claim.Key,
+			DedupeValue: claim.Value,
+		}, claim.TTL)
+		if err != nil {
+			return fmt.Errorf("原子加入 Streams 队列失败: %w", err)
+		}
+		return nil
+	}
+	if _, err := q.cache.XAdd(q.opts.StreamKey, mainTaskStreamMaxLenApprox, values); err != nil {
 		return fmt.Errorf("加入 Streams 队列失败: %w", err)
 	}
 	return nil

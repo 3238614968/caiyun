@@ -1,0 +1,27 @@
+[Unit]
+Description=Caiyun Worker Service (unified binary)
+After=network-online.target mysql.service redis.service caiyun-api.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/www/wwwroot/caiyun
+EnvironmentFile=-/www/wwwroot/caiyun/.env
+Environment=APP_ENV=production
+Environment=DB_AUTO_MIGRATE=false
+Environment=LOG_FILE_PATH=/www/wwwroot/caiyun/logs
+ExecStart=/www/wwwroot/caiyun/caiyun-linux worker
+Restart=on-failure
+RestartSec=5s
+User=www
+Group=www
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ReadWritePaths=/www/wwwroot/caiyun /www/wwwroot/caiyun/logs
+LimitNOFILE=65535
+TimeoutStopSec=30s
+KillSignal=SIGTERM
+
+[Install]
+WantedBy=multi-user.target

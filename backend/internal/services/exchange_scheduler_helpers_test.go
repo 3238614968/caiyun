@@ -34,3 +34,31 @@ func TestMergeExchangeTasksDeduplicates(t *testing.T) {
 		}
 	}
 }
+
+func TestTaskMatchesExchangeSlotPrefersTaskScheduledTime(t *testing.T) {
+	task := &models.ExchangeTask{
+		ScheduledExchangeTime: "10:30:00",
+		ExchangeAccount: models.ExchangeAccount{
+			ExchangeTime1: "10:00:00",
+			ExchangeTime2: "16:00:00",
+		},
+	}
+	if !taskMatchesExchangeSlot(task, 10, 30, time.Date(2026, 6, 27, 10, 30, 0, 0, time.Local)) {
+		t.Fatal("task should match its task-level scheduled time")
+	}
+	if taskMatchesExchangeSlot(task, 10, 0, time.Date(2026, 6, 27, 10, 0, 0, 0, time.Local)) {
+		t.Fatal("task-level scheduled time should override account rule time")
+	}
+}
+
+func TestTaskMatchesExchangeSlotFallsBackToRuleTime(t *testing.T) {
+	task := &models.ExchangeTask{
+		ExchangeAccount: models.ExchangeAccount{
+			ExchangeTime1: "10:00:00",
+			ExchangeTime2: "16:00",
+		},
+	}
+	if !taskMatchesExchangeSlot(task, 16, 0, time.Date(2026, 6, 27, 16, 0, 0, 0, time.Local)) {
+		t.Fatal("task should match account rule time when no task-level time is set")
+	}
+}

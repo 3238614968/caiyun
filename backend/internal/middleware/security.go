@@ -26,8 +26,8 @@ func RecoveryWithLogger() gin.HandlerFunc {
 		defer func() {
 			if rec := recover(); rec != nil {
 				stack := debug.Stack()
-				log.Printf("[PANIC] %s %s panic: %v\n%s",
-					c.Request.Method, c.Request.URL.Path, rec, stack)
+				log.Printf("[PANIC] request_id=%s method=%s path=%s panic=%v\n%s",
+					GetRequestID(c), c.Request.Method, c.Request.URL.Path, rec, stack)
 				if !c.Writer.Written() {
 					c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{
 						"code":    http.StatusInternalServerError,

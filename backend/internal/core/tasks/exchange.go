@@ -1,4 +1,4 @@
-﻿package tasks
+package tasks
 
 import (
 	"encoding/json"
@@ -95,9 +95,9 @@ func (t *ExchangeMonthlyCardTask) getExchangeList() ([]ExchangeItem, error) {
 	}
 
 	var result struct {
-		Code    int                        `json:"code"`
-		Message string                     `json:"msg"`
-		Result  map[string][]ExchangeItem  `json:"result"`
+		Code    int                       `json:"code"`
+		Message string                    `json:"msg"`
+		Result  map[string][]ExchangeItem `json:"result"`
 	}
 	if err := json.Unmarshal([]byte(responseBody), &result); err != nil {
 		return nil, fmt.Errorf("解析响应失败: %w", err)

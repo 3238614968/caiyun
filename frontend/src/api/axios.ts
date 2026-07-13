@@ -6,6 +6,8 @@ interface AppAxiosRequestConfig extends AxiosRequestConfig {
    * 会话探测类请求使用：401 只代表未登录，不应弹出全局错误或触发二次跳转。
    */
   silentAuthError?: boolean
+  /** Internal guard preventing an infinite 401 -> refresh loop. */
+  _authRetry?: boolean
 }
 
 function appPath(path: string): string {
@@ -28,6 +30,7 @@ const service: AxiosInstance = axios.create({
 })
 
 let authExpiredHandled = false
+let refreshSessionPromise: Promise<void> | null = null
 
 export function resetAuthExpiredState(): void {
   authExpiredHandled = false
@@ -37,6 +40,30 @@ function isSilentAuthError(error: AxiosError<ErrorResponseBody>): boolean {
   const config = error.config as AppAxiosRequestConfig | undefined
   const url = String(config?.url || '')
   return !!config?.silentAuthError || url.includes('/api/auth/me')
+}
+
+function canAttemptSessionRefresh(config?: AppAxiosRequestConfig): config is AppAxiosRequestConfig {
+  if (!config || config._authRetry) return false
+  const url = String(config.url || '')
+  if (!url) return false
+  return ![
+    '/auth/login',
+    '/auth/register',
+    '/auth/refresh',
+    '/auth/password/reset'
+  ].some(path => url.includes(path))
+}
+
+async function refreshBrowserSession(): Promise<void> {
+  if (!refreshSessionPromise) {
+    refreshSessionPromise = service.post('/api/auth/refresh', undefined, {
+      silentAuthError: true,
+      _authRetry: true
+    } as AppAxiosRequestConfig).then(() => undefined).finally(() => {
+      refreshSessionPromise = null
+    })
+  }
+  return refreshSessionPromise
 }
 
 // 请求拦截器
@@ -106,8 +133,20 @@ service.interceptors.response.use(
     const { data } = response
     return data
   },
-  (error: AxiosError<ErrorResponseBody>) => {
+  async (error: AxiosError<ErrorResponseBody>) => {
     const { response } = error
+    const requestConfig = error.config as AppAxiosRequestConfig | undefined
+
+    if (response?.status === 401 && canAttemptSessionRefresh(requestConfig)) {
+      requestConfig._authRetry = true
+      try {
+        await refreshBrowserSession()
+        authExpiredHandled = false
+        return service.request(requestConfig)
+      } catch {
+        // Fall through to the existing, single-shot session-expired handling.
+      }
+    }
 
     if (response) {
       const { status, data } = response

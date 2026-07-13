@@ -5,6 +5,7 @@ import (
 	"context"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 type AccountRepository struct {
@@ -46,14 +47,14 @@ func (r *AccountRepository) GetByID(id uint) (*models.Account, error) {
 // GetAll 获取所有账号
 func (r *AccountRepository) GetAll() ([]*models.Account, error) {
 	var accounts []*models.Account
-	err := r.db.Find(&accounts).Error
+	err := r.db.Order("is_active DESC").Order("cloud_count DESC").Order("created_at DESC").Find(&accounts).Error
 	return accounts, err
 }
 
 // GetAllActive 获取所有活跃账号
 func (r *AccountRepository) GetAllActive() ([]*models.Account, error) {
 	var accounts []*models.Account
-	err := r.db.Where("is_active = ?", true).Find(&accounts).Error
+	err := r.db.Where("is_active = ?", true).Order("cloud_count DESC").Order("created_at DESC").Find(&accounts).Error
 	return accounts, err
 }
 
@@ -66,7 +67,7 @@ func (r *AccountRepository) SearchAll(keyword string, limit int) ([]*models.Acco
 		query = query.Where("phone LIKE ? OR remark LIKE ?", "%"+keyword+"%", "%"+keyword+"%")
 	}
 
-	err := query.Preload("User").Limit(limit).Find(&accounts).Error
+	err := query.Preload("User").Order("is_active DESC").Order("cloud_count DESC").Order("created_at DESC").Limit(limit).Find(&accounts).Error
 	return accounts, err
 }
 
@@ -105,7 +106,7 @@ func (r *AccountRepository) TopByCloudCount(limit int) ([]*models.Account, error
 // FindByUserID 根据用户ID查找所有账号
 func (r *AccountRepository) FindByUserID(userID uint) ([]*models.Account, error) {
 	var accounts []*models.Account
-	err := r.db.Where("user_id = ?", userID).Find(&accounts).Error
+	err := r.db.Where("user_id = ?", userID).Order("is_active DESC").Order("cloud_count DESC").Order("created_at DESC").Find(&accounts).Error
 	return accounts, err
 }
 
@@ -141,7 +142,7 @@ func (r *AccountRepository) List(offset, limit int) ([]*models.Account, int64, e
 		return nil, 0, err
 	}
 
-	err := query.Preload("User").Offset(offset).Limit(limit).Find(&accounts).Error
+	err := query.Preload("User").Order("is_active DESC").Order("cloud_count DESC").Order("created_at DESC").Offset(offset).Limit(limit).Find(&accounts).Error
 	return accounts, total, err
 }
 
@@ -161,14 +162,14 @@ func (r *AccountRepository) ListByUserID(userID uint, offset, limit int, phone s
 		return nil, 0, err
 	}
 
-	err := query.Offset(offset).Limit(limit).Find(&accounts).Error
+	err := query.Order("is_active DESC").Order("cloud_count DESC").Order("created_at DESC").Offset(offset).Limit(limit).Find(&accounts).Error
 	return accounts, total, err
 }
 
 // FindActiveAccounts 查找所有激活的账号
 func (r *AccountRepository) FindActiveAccounts() ([]*models.Account, error) {
 	var accounts []*models.Account
-	err := r.db.Where("is_active = ?", true).Find(&accounts).Error
+	err := r.db.Where("is_active = ?", true).Order("cloud_count DESC").Order("created_at DESC").Find(&accounts).Error
 	return accounts, err
 }
 
@@ -189,7 +190,7 @@ func (r *AccountRepository) FindActiveAccountsPaged(offset, limit int) ([]*model
 // FindActiveAccountsByUserID 查找指定用户的所有激活账号
 func (r *AccountRepository) FindActiveAccountsByUserID(userID uint) ([]*models.Account, error) {
 	var accounts []*models.Account
-	err := r.db.Where("user_id = ? AND is_active = ?", userID, true).Find(&accounts).Error
+	err := r.db.Where("user_id = ? AND is_active = ?", userID, true).Order("cloud_count DESC").Order("created_at DESC").Find(&accounts).Error
 	return accounts, err
 }
 
@@ -200,24 +201,44 @@ func (r *AccountRepository) UpdateCloudCount(id uint, cloudCount int) error {
 
 // UpdateToken 更新Token
 func (r *AccountRepository) UpdateToken(id uint, token string) error {
-	return r.db.Model(&models.Account{}).Where("id = ?", id).Update("token", token).Error
+	encryptedToken, err := encryptCredentialValue(token)
+	if err != nil {
+		return err
+	}
+	return r.db.Model(&models.Account{}).Where("id = ?", id).Update("token", encryptedToken).Error
 }
 
 // UpdateJWTToken 更新JWT Token
 func (r *AccountRepository) UpdateJWTToken(id uint, jwtToken string) error {
-	return r.db.Model(&models.Account{}).Where("id = ?", id).Update("jwt_token", jwtToken).Error
+	encryptedJWTToken, err := encryptCredentialValue(jwtToken)
+	if err != nil {
+		return err
+	}
+	return r.db.Model(&models.Account{}).Where("id = ?", id).Update("jwt_token", encryptedJWTToken).Error
 }
 
 // UpdateAuthorizationFields 仅更新 authorization 刷新产生的字段，避免 Save 全量覆盖账号其他并发变更。
 func (r *AccountRepository) UpdateAuthorizationFields(id uint, authValue, token, jwtToken, platform string, expireAt int64) error {
+	encryptedAuthValue, err := encryptCredentialValue(authValue)
+	if err != nil {
+		return err
+	}
+	encryptedToken, err := encryptCredentialValue(token)
+	if err != nil {
+		return err
+	}
 	updates := map[string]interface{}{
-		"auth":            authValue,
-		"token":           token,
+		"auth":            encryptedAuthValue,
+		"token":           encryptedToken,
 		"expire_at":       expireAt,
 		"jwt_error_count": 0,
 	}
 	if jwtToken != "" {
-		updates["jwt_token"] = jwtToken
+		encryptedJWTToken, err := encryptCredentialValue(jwtToken)
+		if err != nil {
+			return err
+		}
+		updates["jwt_token"] = encryptedJWTToken
 	}
 	if platform != "" {
 		updates["platform"] = platform
@@ -229,17 +250,80 @@ func (r *AccountRepository) UpdateAuthorizationFields(id uint, authValue, token,
 
 // IncrementJWTErrorCount 原子自增 JWT 错误计数，并返回更新后的值。
 func (r *AccountRepository) IncrementJWTErrorCount(id uint) (int, error) {
+	switch r.db.Dialector.Name() {
+	case "mysql":
+		return r.incrementJWTErrorCountMySQL(id)
+	case "sqlite", "postgres", "sqlserver":
+		return r.incrementJWTErrorCountReturning(id)
+	default:
+		return r.incrementJWTErrorCountFallback(id)
+	}
+}
+
+type jwtErrorCountRow struct {
+	JWTErrorCount int `gorm:"column:jwt_error_count"`
+}
+
+func (r *AccountRepository) incrementJWTErrorCountMySQL(id uint) (int, error) {
+	account := &models.Account{}
+	result := r.db.Model(account).
+		Clauses(clause.Returning{Columns: []clause.Column{{Name: "jwt_error_count"}}}).
+		Where("id = ?", id).
+		UpdateColumn("jwt_error_count", gorm.Expr("jwt_error_count + ?", 1))
+	if result.Error == nil && result.RowsAffected > 0 && account.JWTErrorCount > 0 {
+		return account.JWTErrorCount, nil
+	}
+	if result.Error == nil && result.RowsAffected == 0 {
+		return 0, gorm.ErrRecordNotFound
+	}
+
+	var row jwtErrorCountRow
+	err := r.db.Transaction(func(tx *gorm.DB) error {
+		legacy := tx.Exec("UPDATE accounts SET jwt_error_count = LAST_INSERT_ID(jwt_error_count + 1) WHERE id = ?", id)
+		if legacy.Error != nil {
+			return legacy.Error
+		}
+		if legacy.RowsAffected == 0 {
+			return gorm.ErrRecordNotFound
+		}
+		return tx.Raw("SELECT LAST_INSERT_ID() AS jwt_error_count").Scan(&row).Error
+	})
+	if err != nil {
+		return 0, err
+	}
+	return row.JWTErrorCount, nil
+}
+
+func (r *AccountRepository) incrementJWTErrorCountReturning(id uint) (int, error) {
+	account := &models.Account{}
+	result := r.db.Model(account).
+		Clauses(clause.Returning{Columns: []clause.Column{{Name: "jwt_error_count"}}}).
+		Where("id = ?", id).
+		UpdateColumn("jwt_error_count", gorm.Expr("jwt_error_count + ?", 1))
+	if result.Error != nil {
+		return 0, result.Error
+	}
+	if result.RowsAffected == 0 {
+		return 0, gorm.ErrRecordNotFound
+	}
+	return account.JWTErrorCount, nil
+}
+
+func (r *AccountRepository) incrementJWTErrorCountFallback(id uint) (int, error) {
 	result := r.db.Model(&models.Account{}).
 		Where("id = ?", id).
 		UpdateColumn("jwt_error_count", gorm.Expr("jwt_error_count + ?", 1))
 	if result.Error != nil {
 		return 0, result.Error
 	}
-	var account models.Account
-	if err := r.db.Select("jwt_error_count").First(&account, id).Error; err != nil {
+	if result.RowsAffected == 0 {
+		return 0, gorm.ErrRecordNotFound
+	}
+	var row jwtErrorCountRow
+	if err := r.db.Model(&models.Account{}).Select("jwt_error_count").Where("id = ?", id).Take(&row).Error; err != nil {
 		return 0, err
 	}
-	return account.JWTErrorCount, nil
+	return row.JWTErrorCount, nil
 }
 
 // ResetJWTErrorCount 原子重置 JWT 错误计数。

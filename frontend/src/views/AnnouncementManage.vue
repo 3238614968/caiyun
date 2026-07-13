@@ -2,10 +2,16 @@
   <div class="announcement-manage">
     <div class="page-header">
       <div class="header-title">
-        <el-icon :size="isMobile ? 20 : 24"><Bell /></el-icon>
+        <el-icon :size="isMobile ? 20 : 24">
+          <Bell />
+        </el-icon>
         <span>公告管理</span>
       </div>
-      <el-button type="primary" :size="isMobile ? 'small' : 'default'" @click="showAddDialog">
+      <el-button
+        type="primary"
+        :size="isMobile ? 'small' : 'default'"
+        @click="showAddDialog"
+      >
         <el-icon><Plus /></el-icon>
         {{ isMobile ? '发布' : '发布公告' }}
       </el-button>
@@ -13,56 +19,154 @@
 
     <el-card class="announcement-list">
       <!-- 桌面端表格 -->
-      <el-table v-if="!isMobile" :data="announcements" v-loading="loading" stripe>
-        <el-table-column type="index" width="50" />
-        <el-table-column prop="title" label="标题" min-width="200">
+      <el-table
+        v-if="!isMobile"
+        v-loading="loading"
+        :data="announcements"
+        stripe
+      >
+        <el-table-column
+          type="index"
+          width="50"
+        />
+        <el-table-column
+          prop="title"
+          label="标题"
+          min-width="200"
+        >
           <template #default="{ row }">
             <div class="title-cell">
-              <el-tag v-if="row.is_top" type="danger" size="small" effect="dark">置顶</el-tag>
-              <el-tag v-if="row.is_popup" type="warning" size="small" class="ml-2">弹窗</el-tag>
+              <el-tag
+                v-if="row.is_top"
+                type="danger"
+                size="small"
+                effect="dark"
+              >
+                置顶
+              </el-tag>
+              <el-tag
+                v-if="row.is_popup"
+                type="warning"
+                size="small"
+                class="ml-2"
+              >
+                弹窗
+              </el-tag>
               <span class="title-text">{{ row.title }}</span>
             </div>
           </template>
         </el-table-column>
-        <el-table-column prop="is_published" label="状态" width="100">
+        <el-table-column
+          prop="is_published"
+          label="状态"
+          width="100"
+        >
           <template #default="{ row }">
             <el-tag :type="row.is_published ? 'success' : 'info'">
               {{ row.is_published ? '已发布' : '已下架' }}
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column prop="created_at" label="创建时间" width="180">
+        <el-table-column
+          prop="created_at"
+          label="创建时间"
+          width="180"
+        >
           <template #default="{ row }">
             {{ formatDate(row.created_at) }}
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="200" fixed="right">
+        <el-table-column
+          label="操作"
+          width="200"
+          fixed="right"
+        >
           <template #default="{ row }">
-            <el-button size="small" @click="viewAnnouncement(row)">查看</el-button>
-            <el-button size="small" type="primary" @click="editAnnouncement(row)">编辑</el-button>
-            <el-button size="small" type="danger" @click="deleteAnnouncement(row)">删除</el-button>
+            <el-button
+              size="small"
+              @click="viewAnnouncement(row)"
+            >
+              查看
+            </el-button>
+            <el-button
+              size="small"
+              type="primary"
+              @click="editAnnouncement(row)"
+            >
+              编辑
+            </el-button>
+            <el-button
+              size="small"
+              type="danger"
+              @click="deleteAnnouncement(row)"
+            >
+              删除
+            </el-button>
           </template>
         </el-table-column>
       </el-table>
 
       <!-- 移动端卡片列表 -->
-      <div v-else class="mobile-card-list">
-        <el-card v-for="item in announcements" :key="item.id" class="mobile-announcement-card" shadow="hover">
+      <div
+        v-else
+        class="mobile-card-list"
+      >
+        <el-card
+          v-for="item in announcements"
+          :key="item.id"
+          class="mobile-announcement-card"
+          shadow="hover"
+        >
           <div class="mobile-announcement-header">
             <span class="mobile-announcement-title">{{ item.title }}</span>
             <div class="mobile-announcement-tags">
-              <el-tag v-if="item.is_top" type="danger" size="small" effect="dark">置顶</el-tag>
-              <el-tag v-if="item.is_popup" type="warning" size="small">弹窗</el-tag>
-              <el-tag :type="item.is_published ? 'success' : 'info'" size="small">
+              <el-tag
+                v-if="item.is_top"
+                type="danger"
+                size="small"
+                effect="dark"
+              >
+                置顶
+              </el-tag>
+              <el-tag
+                v-if="item.is_popup"
+                type="warning"
+                size="small"
+              >
+                弹窗
+              </el-tag>
+              <el-tag
+                :type="item.is_published ? 'success' : 'info'"
+                size="small"
+              >
                 {{ item.is_published ? '已发布' : '已下架' }}
               </el-tag>
             </div>
           </div>
-          <div class="mobile-announcement-time">{{ formatDate(item.created_at) }}</div>
+          <div class="mobile-announcement-time">
+            {{ formatDate(item.created_at) }}
+          </div>
           <div class="mobile-announcement-actions">
-            <el-button size="small" @click="viewAnnouncement(item)">查看</el-button>
-            <el-button size="small" type="primary" @click="editAnnouncement(item)">编辑</el-button>
-            <el-button size="small" type="danger" @click="deleteAnnouncement(item)">删除</el-button>
+            <el-button
+              size="small"
+              @click="viewAnnouncement(item)"
+            >
+              查看
+            </el-button>
+            <el-button
+              size="small"
+              type="primary"
+              @click="editAnnouncement(item)"
+            >
+              编辑
+            </el-button>
+            <el-button
+              size="small"
+              type="danger"
+              @click="deleteAnnouncement(item)"
+            >
+              删除
+            </el-button>
           </div>
         </el-card>
       </div>
@@ -75,11 +179,27 @@
       :width="isMobile ? '95%' : '700px'"
       class="announcement-dialog"
     >
-      <el-form :model="form" label-position="top" :rules="rules" ref="formRef">
-        <el-form-item label="公告标题" prop="title">
-          <el-input v-model="form.title" placeholder="请输入公告标题" maxlength="100" show-word-limit />
+      <el-form
+        ref="formRef"
+        :model="form"
+        label-position="top"
+        :rules="rules"
+      >
+        <el-form-item
+          label="公告标题"
+          prop="title"
+        >
+          <el-input
+            v-model="form.title"
+            placeholder="请输入公告标题"
+            maxlength="100"
+            show-word-limit
+          />
         </el-form-item>
-        <el-form-item label="公告内容" prop="content">
+        <el-form-item
+          label="公告内容"
+          prop="content"
+        >
           <el-input
             v-model="form.content"
             type="textarea"
@@ -91,12 +211,28 @@
         </el-form-item>
         <el-form-item>
           <div class="form-options">
-            <el-checkbox v-model="form.is_popup" label="弹窗显示" border />
-            <el-checkbox v-model="form.is_top" label="置顶" border />
-            <el-checkbox v-if="isEditing" v-model="form.is_published" label="发布状态" border />
+            <el-checkbox
+              v-model="form.is_popup"
+              label="弹窗显示"
+              border
+            />
+            <el-checkbox
+              v-model="form.is_top"
+              label="置顶"
+              border
+            />
+            <el-checkbox
+              v-if="isEditing"
+              v-model="form.is_published"
+              label="发布状态"
+              border
+            />
           </div>
         </el-form-item>
-        <el-form-item v-if="form.is_popup" class="tip-item">
+        <el-form-item
+          v-if="form.is_popup"
+          class="tip-item"
+        >
           <el-alert
             title="弹窗公告说明"
             type="info"
@@ -106,8 +242,16 @@
         </el-form-item>
       </el-form>
       <template #footer>
-        <el-button @click="dialogVisible = false">取消</el-button>
-        <el-button type="primary" @click="submitForm" :loading="submitting">确定</el-button>
+        <el-button @click="dialogVisible = false">
+          取消
+        </el-button>
+        <el-button
+          type="primary"
+          :loading="submitting"
+          @click="submitForm"
+        >
+          确定
+        </el-button>
       </template>
     </el-dialog>
 
@@ -119,13 +263,29 @@
       class="view-dialog"
     >
       <div class="view-content">
-        <h3 class="view-title">{{ currentAnnouncement?.title }}</h3>
+        <h3 class="view-title">
+          {{ currentAnnouncement?.title }}
+        </h3>
         <div class="view-meta">
-          <el-tag v-if="currentAnnouncement?.is_top" type="danger" size="small">置顶</el-tag>
-          <el-tag v-if="currentAnnouncement?.is_popup" type="warning" size="small">弹窗</el-tag>
+          <el-tag
+            v-if="currentAnnouncement?.is_top"
+            type="danger"
+            size="small"
+          >
+            置顶
+          </el-tag>
+          <el-tag
+            v-if="currentAnnouncement?.is_popup"
+            type="warning"
+            size="small"
+          >
+            弹窗
+          </el-tag>
           <span class="view-time">{{ formatDate(currentAnnouncement?.created_at) }}</span>
         </div>
-        <div class="view-body">{{ currentAnnouncement?.content }}</div>
+        <div class="view-body">
+          {{ currentAnnouncement?.content }}
+        </div>
       </div>
     </el-dialog>
   </div>

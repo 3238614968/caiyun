@@ -1,10 +1,11 @@
 package cache
 
 import (
+	"caiyun/internal/envutil"
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -38,6 +39,16 @@ type StreamMessage struct {
 	Values map[string]interface{}
 }
 
+// StreamEnqueueItem describes one Streams message and the Redis key used to
+// deduplicate its initial enqueue. The dedupe key is written only after XADD
+// succeeds, in the same Lua script, so a failed enqueue cannot leave a claim
+// that suppresses the task.
+type StreamEnqueueItem struct {
+	Values      map[string]interface{}
+	DedupeKey   string
+	DedupeValue interface{}
+}
+
 func NewRedisClient(addr, password string, db int) (*RedisCache, error) {
 	baseCtx, cancel := context.WithCancel(context.Background())
 	operationTimeout := redisDurationFromEnv("REDIS_OPERATION_TIMEOUT", 5*time.Second)
@@ -69,6 +80,34 @@ func NewRedisClient(addr, password string, db int) (*RedisCache, error) {
 	}, nil
 }
 
+// Ping checks Redis while respecting the caller deadline. Readiness probes use
+// this instead of an operation with an internal background context so their
+// HTTP timeout remains a hard upper bound.
+func (r *RedisCache) Ping(parent context.Context) error {
+	if r == nil || r.client == nil {
+		return fmt.Errorf("Redis client is nil")
+	}
+	if r.ctx != nil {
+		if err := r.ctx.Err(); err != nil {
+			return err
+		}
+	}
+	if parent == nil {
+		parent = context.Background()
+	}
+	ctx := parent
+	cancel := func() {}
+	if _, hasDeadline := parent.Deadline(); !hasDeadline {
+		timeout := r.operationTimeout
+		if timeout <= 0 {
+			timeout = 5 * time.Second
+		}
+		ctx, cancel = context.WithTimeout(parent, timeout)
+	}
+	defer cancel()
+	return r.client.Ping(ctx).Err()
+}
+
 func (r *RedisCache) operationContext(extra ...time.Duration) (context.Context, context.CancelFunc) {
 	timeout := r.operationTimeout
 	if timeout <= 0 {
@@ -87,30 +126,15 @@ func (r *RedisCache) operationContext(extra ...time.Duration) (context.Context, 
 }
 
 func redisIntFromEnv(key string, fallback int) int {
-	raw := strings.TrimSpace(os.Getenv(key))
-	if raw == "" {
-		return fallback
-	}
-	value, err := strconv.Atoi(raw)
-	if err != nil || value <= 0 {
+	value := envutil.Int(key, fallback)
+	if value <= 0 {
 		return fallback
 	}
 	return value
 }
 
 func redisDurationFromEnv(key string, fallback time.Duration) time.Duration {
-	raw := strings.TrimSpace(os.Getenv(key))
-	if raw == "" {
-		return fallback
-	}
-	if duration, err := time.ParseDuration(raw); err == nil && duration > 0 {
-		return duration
-	}
-	seconds, err := strconv.Atoi(raw)
-	if err != nil || seconds <= 0 {
-		return fallback
-	}
-	return time.Duration(seconds) * time.Second
+	return envutil.Duration(key, fallback)
 }
 
 func (r *RedisCache) Set(key string, value interface{}, expiration time.Duration) error {
@@ -297,6 +321,85 @@ func (r *RedisCache) LRem(key string, count int64, value interface{}) (int64, er
 	return r.client.LRem(ctx, key, count, value).Result()
 }
 
+// ReplaceListItem atomically replaces one list item while preserving reliable-queue invariants.
+func (r *RedisCache) ReplaceListItem(key, oldValue, newValue string) (bool, error) {
+	const script = `
+local removed = redis.call('LREM', KEYS[1], 1, ARGV[1])
+if removed == 0 then
+	return 0
+end
+redis.call('LPUSH', KEYS[1], ARGV[2])
+return 1
+`
+	ctx, cancel := r.operationContext()
+	defer cancel()
+	result, err := r.client.Eval(ctx, script, []string{key}, oldValue, newValue).Int()
+	if err != nil {
+		return false, err
+	}
+	return result == 1, nil
+}
+
+// MoveListItemToList atomically removes one item from a source list and pushes
+// a payload to the destination list. It is used by the reliable queue for ACK
+// failure paths without exposing a remove-then-push gap.
+func (r *RedisCache) MoveListItemToList(source, destination, oldValue, newValue string) (bool, error) {
+	const script = `
+local removed = redis.call('LREM', KEYS[1], 1, ARGV[1])
+if removed == 0 then
+	return 0
+end
+redis.call('LPUSH', KEYS[2], ARGV[2])
+return 1
+`
+	ctx, cancel := r.operationContext()
+	defer cancel()
+	result, err := r.client.Eval(ctx, script, []string{source, destination}, oldValue, newValue).Int()
+	if err != nil {
+		return false, err
+	}
+	return result == 1, nil
+}
+
+// MoveListItemToZSet atomically removes one item from a source list and writes
+// a payload to a sorted set with the supplied score.
+func (r *RedisCache) MoveListItemToZSet(source, destination, oldValue, newValue string, score float64) (bool, error) {
+	const script = `
+local removed = redis.call('LREM', KEYS[1], 1, ARGV[1])
+if removed == 0 then
+	return 0
+end
+redis.call('ZADD', KEYS[2], ARGV[3], ARGV[2])
+return 1
+`
+	ctx, cancel := r.operationContext()
+	defer cancel()
+	result, err := r.client.Eval(ctx, script, []string{source, destination}, oldValue, newValue, strconv.FormatFloat(score, 'f', -1, 64)).Int()
+	if err != nil {
+		return false, err
+	}
+	return result == 1, nil
+}
+
+// MoveZSetItemToList atomically promotes one sorted-set member into a list.
+func (r *RedisCache) MoveZSetItemToList(source, destination, member string) (bool, error) {
+	const script = `
+local removed = redis.call('ZREM', KEYS[1], ARGV[1])
+if removed == 0 then
+	return 0
+end
+redis.call('LPUSH', KEYS[2], ARGV[1])
+return 1
+`
+	ctx, cancel := r.operationContext()
+	defer cancel()
+	result, err := r.client.Eval(ctx, script, []string{source, destination}, member).Int()
+	if err != nil {
+		return false, err
+	}
+	return result == 1, nil
+}
+
 func (r *RedisCache) LLen(key string) int64 {
 	ctx, cancel := r.operationContext()
 	defer cancel()
@@ -360,6 +463,334 @@ func (r *RedisCache) XAdd(stream string, maxLenApprox int64, values map[string]i
 	return r.client.XAdd(ctx, args).Result()
 }
 
+func (r *RedisCache) XAddBatch(stream string, maxLenApprox int64, values []map[string]interface{}) ([]string, error) {
+	if len(values) == 0 {
+		return nil, nil
+	}
+
+	ctx, cancel := r.operationContext()
+	defer cancel()
+
+	pipe := r.client.TxPipeline()
+	commands := make([]*redis.StringCmd, 0, len(values))
+	for _, item := range values {
+		args := &redis.XAddArgs{
+			Stream: stream,
+			Values: item,
+		}
+		if maxLenApprox > 0 {
+			args.MaxLenApprox = maxLenApprox
+		}
+		commands = append(commands, pipe.XAdd(ctx, args))
+	}
+	if _, err := pipe.Exec(ctx); err != nil {
+		return nil, err
+	}
+
+	ids := make([]string, 0, len(commands))
+	for _, command := range commands {
+		id, err := command.Result()
+		if err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, nil
+}
+
+const xAddWithDedupeScript = `
+local ttl = tonumber(ARGV[1])
+local maxlen = tonumber(ARGV[2])
+local argpos = 3
+local results = {}
+
+local function add_to_stream(stream, fields)
+	if maxlen > 0 then
+		return redis.call('XADD', stream, 'MAXLEN', '~', maxlen, '*', unpack(fields))
+	end
+	return redis.call('XADD', stream, '*', unpack(fields))
+end
+
+for keypos = 2, #KEYS do
+	local dedupe_value = ARGV[argpos]
+	local field_count = tonumber(ARGV[argpos + 1])
+	argpos = argpos + 2
+	local fields = {}
+	for field_index = 1, field_count do
+		table.insert(fields, ARGV[argpos])
+		table.insert(fields, ARGV[argpos + 1])
+		argpos = argpos + 2
+	end
+
+	if redis.call('EXISTS', KEYS[keypos]) == 1 then
+		table.insert(results, '')
+	else
+		-- XADD intentionally happens before the claim. Redis scripts do not roll
+		-- back earlier writes after a later command error; PSETEX is deterministic
+		-- here, so this ordering cannot suppress a task that was never enqueued.
+		local id = add_to_stream(KEYS[1], fields)
+		redis.call('PSETEX', KEYS[keypos], ttl, dedupe_value)
+		table.insert(results, id)
+	end
+end
+return results
+`
+
+// XAddWithDedupe atomically checks a dedupe key, appends a Streams message and
+// records the claim. added=false means another enqueue already owns the claim.
+func (r *RedisCache) XAddWithDedupe(stream string, maxLenApprox int64, item StreamEnqueueItem, expiration time.Duration) (string, bool, error) {
+	ids, err := r.XAddBatchWithDedupe(stream, maxLenApprox, []StreamEnqueueItem{item}, expiration)
+	if err != nil {
+		return "", false, err
+	}
+	if len(ids) != 1 {
+		return "", false, fmt.Errorf("atomic Streams enqueue returned %d ids, want 1", len(ids))
+	}
+	return ids[0], ids[0] != "", nil
+}
+
+// XAddBatchWithDedupe performs the initial dedupe claim and XADD for every item
+// in one Lua execution. The returned slice aligns with items; an empty ID marks
+// an item skipped because its dedupe key already existed.
+func (r *RedisCache) XAddBatchWithDedupe(stream string, maxLenApprox int64, items []StreamEnqueueItem, expiration time.Duration) ([]string, error) {
+	if len(items) == 0 {
+		return nil, nil
+	}
+	if strings.TrimSpace(stream) == "" {
+		return nil, fmt.Errorf("Streams key is empty")
+	}
+	if expiration <= 0 {
+		return nil, fmt.Errorf("Streams dedupe expiration must be positive")
+	}
+	ttlMillis := expiration.Milliseconds()
+	if ttlMillis <= 0 {
+		return nil, fmt.Errorf("Streams dedupe expiration must be at least 1ms")
+	}
+
+	keys := make([]string, 1, len(items)+1)
+	keys[0] = stream
+	args := make([]interface{}, 0, 2+len(items)*5)
+	args = append(args, ttlMillis, maxLenApprox)
+	for index, item := range items {
+		if strings.TrimSpace(item.DedupeKey) == "" {
+			return nil, fmt.Errorf("Streams dedupe key at index %d is empty", index)
+		}
+		fieldArgs, err := orderedStreamValueArgs(item.Values)
+		if err != nil {
+			return nil, fmt.Errorf("Streams values at index %d: %w", index, err)
+		}
+		keys = append(keys, item.DedupeKey)
+		args = append(args, fmt.Sprint(item.DedupeValue), len(item.Values))
+		args = append(args, fieldArgs...)
+	}
+
+	ctx, cancel := r.operationContext()
+	defer cancel()
+	raw, err := r.client.Eval(ctx, xAddWithDedupeScript, keys, args...).Result()
+	if err != nil {
+		return nil, err
+	}
+	parts, ok := asInterfaceSlice(raw)
+	if !ok || len(parts) != len(items) {
+		return nil, fmt.Errorf("unexpected atomic Streams enqueue reply %T", raw)
+	}
+	ids := make([]string, len(parts))
+	for index, part := range parts {
+		ids[index] = valueToString(part)
+	}
+	return ids, nil
+}
+
+const xAckAndDeleteScript = `
+local total = 0
+for index = 2, #ARGV do
+	local acked = redis.call('XACK', KEYS[1], ARGV[1], ARGV[index])
+	if acked > 0 then
+		redis.call('XDEL', KEYS[1], ARGV[index])
+		total = total + acked
+	end
+end
+return total
+`
+
+// XAckAndDelete atomically acknowledges and removes pending Streams entries.
+func (r *RedisCache) XAckAndDelete(stream, group string, ids ...string) (int64, error) {
+	if len(ids) == 0 {
+		return 0, nil
+	}
+	args := make([]interface{}, 0, len(ids)+1)
+	args = append(args, group)
+	for _, id := range ids {
+		args = append(args, id)
+	}
+	ctx, cancel := r.operationContext()
+	defer cancel()
+	value, err := r.client.Eval(ctx, xAckAndDeleteScript, []string{stream}, args...).Int()
+	return int64(value), err
+}
+
+const xMoveToStreamScript = `
+local pending = redis.call('XPENDING', KEYS[1], ARGV[1], ARGV[2], ARGV[2], 1)
+if #pending == 0 then
+	return {0, ''}
+end
+
+local maxlen = tonumber(ARGV[3])
+local field_count = tonumber(ARGV[4])
+local fields = {}
+local argpos = 5
+for field_index = 1, field_count do
+	table.insert(fields, ARGV[argpos])
+	table.insert(fields, ARGV[argpos + 1])
+	argpos = argpos + 2
+end
+
+local new_id
+if maxlen > 0 then
+	new_id = redis.call('XADD', KEYS[2], 'MAXLEN', '~', maxlen, '*', unpack(fields))
+else
+	new_id = redis.call('XADD', KEYS[2], '*', unpack(fields))
+end
+redis.call('XACK', KEYS[1], ARGV[1], ARGV[2])
+redis.call('XDEL', KEYS[1], ARGV[2])
+return {1, new_id}
+`
+
+// XMoveToStream atomically writes a replacement/dead-letter Streams entry and
+// then acknowledges and deletes its source pending entry.
+func (r *RedisCache) XMoveToStream(source, group, id, destination string, maxLenApprox int64, values map[string]interface{}) (string, bool, error) {
+	fieldArgs, err := orderedStreamValueArgs(values)
+	if err != nil {
+		return "", false, err
+	}
+	args := make([]interface{}, 0, 4+len(fieldArgs))
+	args = append(args, group, id, maxLenApprox, len(values))
+	args = append(args, fieldArgs...)
+	ctx, cancel := r.operationContext()
+	defer cancel()
+	raw, err := r.client.Eval(ctx, xMoveToStreamScript, []string{source, destination}, args...).Result()
+	if err != nil {
+		return "", false, err
+	}
+	return parseAtomicStreamResult(raw)
+}
+
+const xMoveToZSetScript = `
+local pending = redis.call('XPENDING', KEYS[1], ARGV[1], ARGV[2], ARGV[2], 1)
+if #pending == 0 then
+	return 0
+end
+redis.call('ZADD', KEYS[2], ARGV[3], ARGV[4])
+redis.call('XACK', KEYS[1], ARGV[1], ARGV[2])
+redis.call('XDEL', KEYS[1], ARGV[2])
+return 1
+`
+
+// XMoveToZSet atomically schedules a pending Streams entry in a sorted set and
+// then acknowledges/deletes the source entry.
+func (r *RedisCache) XMoveToZSet(source, group, id, destination, member string, score float64) (bool, error) {
+	ctx, cancel := r.operationContext()
+	defer cancel()
+	result, err := r.client.Eval(
+		ctx,
+		xMoveToZSetScript,
+		[]string{source, destination},
+		group,
+		id,
+		strconv.FormatFloat(score, 'f', -1, 64),
+		member,
+	).Int()
+	if err != nil {
+		return false, err
+	}
+	return result == 1, nil
+}
+
+const xPromoteZSetToStreamScript = `
+local score = redis.call('ZSCORE', KEYS[1], ARGV[1])
+if not score or tonumber(score) > tonumber(ARGV[2]) then
+	return {0, ''}
+end
+
+local maxlen = tonumber(ARGV[3])
+local field_count = tonumber(ARGV[4])
+local fields = {}
+local argpos = 5
+for field_index = 1, field_count do
+	table.insert(fields, ARGV[argpos])
+	table.insert(fields, ARGV[argpos + 1])
+	argpos = argpos + 2
+end
+
+local new_id
+if maxlen > 0 then
+	new_id = redis.call('XADD', KEYS[2], 'MAXLEN', '~', maxlen, '*', unpack(fields))
+else
+	new_id = redis.call('XADD', KEYS[2], '*', unpack(fields))
+end
+redis.call('ZREM', KEYS[1], ARGV[1])
+return {1, new_id}
+`
+
+// XPromoteZSetToStream atomically promotes a due delayed member into a Stream.
+// The due score is checked again inside the script to avoid racing reschedules.
+func (r *RedisCache) XPromoteZSetToStream(source, destination, member string, maxScore float64, maxLenApprox int64, values map[string]interface{}) (string, bool, error) {
+	fieldArgs, err := orderedStreamValueArgs(values)
+	if err != nil {
+		return "", false, err
+	}
+	args := make([]interface{}, 0, 4+len(fieldArgs))
+	args = append(
+		args,
+		member,
+		strconv.FormatFloat(maxScore, 'f', -1, 64),
+		maxLenApprox,
+		len(values),
+	)
+	args = append(args, fieldArgs...)
+	ctx, cancel := r.operationContext()
+	defer cancel()
+	raw, err := r.client.Eval(ctx, xPromoteZSetToStreamScript, []string{source, destination}, args...).Result()
+	if err != nil {
+		return "", false, err
+	}
+	return parseAtomicStreamResult(raw)
+}
+
+func orderedStreamValueArgs(values map[string]interface{}) ([]interface{}, error) {
+	if len(values) == 0 {
+		return nil, fmt.Errorf("Streams values are empty")
+	}
+	fieldNames := make([]string, 0, len(values))
+	for field, value := range values {
+		if strings.TrimSpace(field) == "" {
+			return nil, fmt.Errorf("Streams field name is empty")
+		}
+		if value == nil {
+			return nil, fmt.Errorf("Streams field %q has nil value", field)
+		}
+		fieldNames = append(fieldNames, field)
+	}
+	sort.Strings(fieldNames)
+	args := make([]interface{}, 0, len(fieldNames)*2)
+	for _, field := range fieldNames {
+		args = append(args, field, values[field])
+	}
+	return args, nil
+}
+
+func parseAtomicStreamResult(raw interface{}) (string, bool, error) {
+	parts, ok := asInterfaceSlice(raw)
+	if !ok || len(parts) != 2 {
+		return "", false, fmt.Errorf("unexpected atomic Streams move reply %T", raw)
+	}
+	moved := valueToString(parts[0]) == "1"
+	id := valueToString(parts[1])
+	if moved && id == "" {
+		return "", false, fmt.Errorf("atomic Streams move returned no destination id")
+	}
+	return id, moved, nil
+}
 func (r *RedisCache) XReadGroup(group, consumer, stream, id string, count int64, block time.Duration) ([]StreamMessage, error) {
 	if id == "" {
 		id = ">"

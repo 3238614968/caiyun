@@ -155,7 +155,7 @@ func (r *ProductRepository) BatchUpdateByPrizeID(products []*models.Product) err
 		if err := r.db.WithContext(ctx).
 			Where("prize_id = ?", product.PrizeID).
 			Updates(map[string]interface{}{
-				"prize_name":            product.PrizedName,
+				"prize_name":            product.PrizeName,
 				"p_order":               product.POrder,
 				"category":              product.Category,
 				"daily_remainder_count": product.DailyRemainderCount,
@@ -232,7 +232,7 @@ func (r *ProductRepository) UpsertProducts(products []*models.Product) (updated,
 	if len(toUpdate) > 0 {
 		for _, product := range toUpdate {
 			if err := tx.Model(&models.Product{}).Where("prize_id = ?", product.PrizeID).Updates(map[string]interface{}{
-				"prize_name":            product.PrizedName,
+				"prize_name":            product.PrizeName,
 				"p_order":               product.POrder,
 				"category":              product.Category,
 				"daily_limit_count":     product.DailyLimitCount,
@@ -391,7 +391,7 @@ func syncExchangeTasksToLatestProducts(tx *gorm.DB, products []*models.Product, 
 				Updates(map[string]interface{}{
 					"product_id": product.ID,
 					"prize_id":   product.PrizeID,
-					"prize_name": product.PrizedName,
+					"prize_name": product.PrizeName,
 					"updated_at": now,
 				})
 			if result.Error != nil {
@@ -400,19 +400,19 @@ func syncExchangeTasksToLatestProducts(tx *gorm.DB, products []*models.Product, 
 			synced += int(result.RowsAffected)
 		}
 
-		if product.PrizedName == "" || seenName[product.PrizedName] {
+		if product.PrizeName == "" || seenName[product.PrizeName] {
 			continue
 		}
-		seenName[product.PrizedName] = true
+		seenName[product.PrizeName] = true
 
 		result := tx.Model(&models.ExchangeTask{}).
 			Where("deleted_at IS NULL").
 			Where("status IN ?", []string{string(models.ExchangeTaskPending), string(models.ExchangeTaskRunning)}).
-			Where("prize_name = ?", product.PrizedName).
+			Where("prize_name = ?", product.PrizeName).
 			Updates(map[string]interface{}{
 				"product_id": product.ID,
 				"prize_id":   product.PrizeID,
-				"prize_name": product.PrizedName,
+				"prize_name": product.PrizeName,
 				"updated_at": now,
 			})
 		if result.Error != nil {

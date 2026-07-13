@@ -10,6 +10,7 @@
 
 # Output of the go coverage tool
 *.out
+/backend/coverage
 
 # Go workspace file
 go.work
@@ -24,8 +25,12 @@ build/
 backend/bin/
 backend/api-linux
 backend/worker-linux
+backend/SHA256SUMS
 backend/caiyun-api
 backend/caiyun-worker
+backend/caiyun-linux
+backend/migrator-linux
+backend/reencrypt-linux
 
 # Environment files
 .env
@@ -69,5 +74,51 @@ frontend/test-results/
 frontend/playwright-report/
 
 # Package files
+release/
 *.tar.gz
 *.zip
+frontend/reports/
+
+# Local-only product/design/spec/audit documents (do not upload to GitHub)
+#
+# Scope is intentionally limited to repo root and docs directories so ordinary
+# operations docs such as OPERATIONS_CHECKLIST or REDIS_STREAMS_QUEUE_MIGRATION
+# are not ignored unless they are explicitly named as PRD/SDD/SPEC/audit docs.
+/[Pp][Rr][Dd]*.*
+/[Ss][Dd][Dd]*.*
+/[Ss][Pp][Ee][Cc]*.*
+/*[Aa][Uu][Dd][Ii][Tt]*.*
+/*审计*.*
+/docs/**/[Pp][Rr][Dd]*.*
+/docs/**/[Ss][Dd][Dd]*.*
+/docs/**/[Ss][Pp][Ee][Cc]*.*
+/docs/**/*[Aa][Uu][Dd][Ii][Tt]*.*
+/docs/**/*审计*.*
+/backend/docs/**/[Pp][Rr][Dd]*.*
+/backend/docs/**/[Ss][Dd][Dd]*.*
+/backend/docs/**/[Ss][Pp][Ee][Cc]*.*
+/backend/docs/**/*[Aa][Uu][Dd][Ii][Tt]*.*
+/backend/docs/**/*审计*.*
+/frontend/docs/**/[Pp][Rr][Dd]*.*
+/frontend/docs/**/[Ss][Dd][Dd]*.*
+/frontend/docs/**/[Ss][Pp][Ee][Cc]*.*
+/frontend/docs/**/*[Aa][Uu][Dd][Ii][Tt]*.*
+/frontend/docs/**/*审计*.*
+
+# Local generated API contracts and scratch files
+## `generate-openapi-local.py` only writes below this directory.
+/.local/
+**/.local/
+
+# Generated OpenAPI / Swagger contracts are local artifacts. Keep these patterns
+# repository-wide so that an explicit --out path cannot accidentally be staged.
+**/[Oo][Pp][Ee][Nn][Aa][Pp][Ii]*.json
+**/[Oo][Pp][Ee][Nn][Aa][Pp][Ii]*.yaml
+**/[Oo][Pp][Ee][Nn][Aa][Pp][Ii]*.yml
+**/[Ss][Ww][Aa][Gg][Gg][Ee][Rr]*.json
+**/[Ss][Ww][Aa][Gg][Gg][Ee][Rr]*.yaml
+**/[Ss][Ww][Aa][Gg][Gg][Ee][Rr]*.yml
+
+# Python local caches
+**/__pycache__/
+*.py[cod]

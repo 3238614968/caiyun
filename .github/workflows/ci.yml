@@ -3,6 +3,9 @@ name: CI
 on:
   push:
     branches: [main, master]
+    tags:
+      - 'v*'
+      - 'release-*'
   pull_request:
     branches: [main, master]
   workflow_dispatch:
@@ -25,6 +28,17 @@ jobs:
           --health-interval 5s
           --health-timeout 3s
           --health-retries 20
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: caiyun_root_test
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -pcaiyun_root_test --silent"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 30
 
     defaults:
       run:
@@ -34,10 +48,23 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Validate repository policy and deployment scripts
+        working-directory: .
+        run: |
+          bash -n scripts/deploy-linux.sh scripts/rollback-linux.sh scripts/health-check.sh scripts/deploy-smoke-test.sh scripts/package-release.sh scripts/migration-smoke-test.sh scripts/generate-sbom.sh scripts/sign-release.sh scripts/import-calendar.sh scripts/rotate-encryption.sh scripts/check-no-local-docs.sh scripts/deploy-k8s.sh
+          bash scripts/check-no-local-docs.sh
+          bash scripts/deploy-smoke-test.sh
+          bash scripts/migration-smoke-test.sh
+
+      - name: Validate local OpenAPI route inventory
+        run: |
+          python scripts/generate-openapi-local.py
+          python scripts/validate-openapi-local.py
+
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.25.11'
+          go-version: '1.25.12'
           cache-dependency-path: backend/go.sum
 
       - name: Unit tests
@@ -45,10 +72,52 @@ jobs:
           GOTOOLCHAIN: local
         run: go test ./...
 
+      - name: Race detector
+        env:
+          GOTOOLCHAIN: local
+          CGO_ENABLED: '1'
+        run: go test -race ./...
+
+      - name: Repository sqlite integration tests
+        env:
+          GOTOOLCHAIN: local
+          CGO_ENABLED: '1'
+        run: go test ./internal/repository -count=1
+
+      - name: MySQL migration integration tests
+        env:
+          GOTOOLCHAIN: local
+          CAIYUN_MYSQL_INTEGRATION: '1'
+          CAIYUN_TEST_MYSQL_ADDR: 127.0.0.1:3306
+          CAIYUN_TEST_MYSQL_USER: root
+          CAIYUN_TEST_MYSQL_PASSWORD: caiyun_root_test
+        run: go test ./internal/dbmigrate -run MySQLIntegration -count=1
+
       - name: Vet
         env:
           GOTOOLCHAIN: local
         run: go vet ./...
+
+      - name: Build unified Linux amd64 binary
+        env:
+          GOTOOLCHAIN: local
+        run: |
+          VERSION="${GITHUB_REF_NAME:-ci}"
+          COMMIT="${GITHUB_SHA}"
+          BUILD_TIME="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+          LDFLAGS="-s -w -X caiyun/internal/version.Version=${VERSION} -X caiyun/internal/version.Commit=${COMMIT} -X caiyun/internal/version.BuildTime=${BUILD_TIME}"
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="$LDFLAGS" -o caiyun-linux ./cmd/caiyun
+          sha256sum caiyun-linux > SHA256SUMS
+
+      - name: Upload unified Linux amd64 binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: caiyun-linux-amd64
+          path: |
+            backend/caiyun-linux
+            backend/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 14
 
       - name: Install govulncheck
         env:
@@ -67,6 +136,57 @@ jobs:
           CAIYUN_TEST_REDIS_ADDR: 127.0.0.1:6379
           CAIYUN_TEST_REDIS_DB: '15'
         run: go test ./internal/queue -run RedisIntegration -count=1
+
+  windows-release:
+    name: Windows package-release smoke test
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+
+      - name: Setup Go
+
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.12'
+          cache-dependency-path: backend/go.sum
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Build frontend
+        working-directory: frontend
+        run: npm run build
+
+      - name: Build Linux amd64 binaries
+        shell: pwsh
+        run: .\scripts\build-linux.ps1 -Version ci -Commit $env:GITHUB_SHA
+
+      - name: Package Windows release directory
+        shell: pwsh
+        run: .\scripts\package-release.ps1 -Version ci
+
+      - name: Validate Windows release directory
+        shell: pwsh
+        run: .\scripts\release-smoke-test.ps1 -Version ci
+
+      - name: Upload Windows-packaged release directory
+        uses: actions/upload-artifact@v4
+        with:
+          name: caiyun-release-windows-ci
+          path: release/ci-linux-amd64
+          if-no-files-found: error
+          retention-days: 14
 
   frontend:
     name: Frontend checks + E2E
@@ -97,10 +217,24 @@ jobs:
         run: npm run typecheck
 
       - name: Lint
-        run: npm run lint -- --quiet
+        run: npm run lint -- --max-warnings=0
+
+      - name: Unit tests
+        run: npm run test:unit
 
       - name: Build
         run: npm run build
+
+      - name: Bundle budget
+        run: npm run bundle:budget
+
+      - name: Upload bundle report
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-bundle-report
+          path: frontend/reports/bundle-report.json
+          if-no-files-found: error
+          retention-days: 14
 
       - name: E2E
         run: npm run e2e
@@ -114,36 +248,44 @@ jobs:
     needs: [backend, frontend]
     permissions:
       contents: read
+      packages: write
       security-events: write
+      id-token: write
+      attestations: write
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Build API image
-        run: docker build -f backend/Dockerfile.api --build-arg TARGETARCH=amd64 -t caiyun-api:ci backend
+      - name: Prepare image names
+        run: |
+          echo "IMAGE_PREFIX=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_ENV"
+          SAFE_TAG="$(printf '%s' "${GITHUB_REF_NAME:-ci}" | tr '[:upper:]' '[:lower:]' | sed -E 's#[^a-z0-9_.-]+#-#g; s#^[.-]+##; s#[.-]+$##' | cut -c1-120)"
+          test -n "$SAFE_TAG" || SAFE_TAG=ci
+          echo "IMAGE_TAG=$SAFE_TAG" >> "$GITHUB_ENV"
 
-      - name: Build Worker image
-        run: docker build -f backend/Dockerfile.worker --build-arg TARGETARCH=amd64 -t caiyun-worker:ci backend
+      - name: Build unified backend image
+        run: >-
+          docker build -f backend/Dockerfile
+          --build-arg TARGETARCH=amd64
+          --build-arg VERSION=${IMAGE_TAG}
+          --build-arg COMMIT=${{ github.sha }}
+          --build-arg BUILD_TIME=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
+          -t caiyun-backend:ci
+          -t "${IMAGE_PREFIX}/caiyun-backend:${IMAGE_TAG}" backend
 
       - name: Build Frontend image
-        run: docker build -f frontend/Dockerfile -t caiyun-frontend:ci frontend
+        run: >-
+          docker build -f frontend/Dockerfile
+          -t caiyun-frontend:ci
+          -t "${IMAGE_PREFIX}/caiyun-frontend:${IMAGE_TAG}" frontend
 
-      - name: Trivy API image
+      - name: Trivy backend image
         uses: aquasecurity/trivy-action@0.29.0
         with:
-          image-ref: caiyun-api:ci
+          image-ref: caiyun-backend:ci
           format: sarif
-          output: trivy-api.sarif
-          severity: HIGH,CRITICAL
-          ignore-unfixed: true
-
-      - name: Trivy Worker image
-        uses: aquasecurity/trivy-action@0.29.0
-        with:
-          image-ref: caiyun-worker:ci
-          format: sarif
-          output: trivy-worker.sarif
+          output: trivy-backend.sarif
           severity: HIGH,CRITICAL
           ignore-unfixed: true
 
@@ -155,3 +297,141 @@ jobs:
           output: trivy-frontend.sarif
           severity: HIGH,CRITICAL
           ignore-unfixed: true
+
+      - name: Upload Trivy backend SARIF
+        uses: github/codeql-action/upload-sarif@v3
+        if: always() && hashFiles('trivy-backend.sarif') != ''
+        with:
+          sarif_file: trivy-backend.sarif
+          category: trivy-backend
+
+      - name: Upload Trivy Frontend SARIF
+        uses: github/codeql-action/upload-sarif@v3
+        if: always() && hashFiles('trivy-frontend.sarif') != ''
+        with:
+          sarif_file: trivy-frontend.sarif
+          category: trivy-frontend
+
+      - name: Login to GHCR
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Push images to GHCR
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          docker push "${IMAGE_PREFIX}/caiyun-backend:${IMAGE_TAG}"
+          docker push "${IMAGE_PREFIX}/caiyun-frontend:${IMAGE_TAG}"
+
+      - name: Install cosign
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: sigstore/cosign-installer@v3
+
+      - name: Sign images with cosign keyless
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          COSIGN_YES: "true"
+        run: |
+          cosign sign "${IMAGE_PREFIX}/caiyun-backend:${IMAGE_TAG}"
+          cosign sign "${IMAGE_PREFIX}/caiyun-frontend:${IMAGE_TAG}"
+
+  compose-e2e:
+    name: Docker Compose real E2E
+    runs-on: ubuntu-latest
+    needs: [backend, frontend]
+    if: github.event_name != 'pull_request'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run real Docker Compose E2E
+        run: bash scripts/e2e-compose.sh
+
+  release:
+    name: GitHub Release artifacts
+    runs-on: ubuntu-latest
+    needs: [backend, frontend, images]
+    if: startsWith(github.ref, 'refs/tags/')
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+
+      - name: Setup Go
+
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.12'
+          cache-dependency-path: backend/go.sum
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Build frontend
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build
+
+      - name: Build unified Linux amd64 binary
+        working-directory: backend
+        env:
+          GOTOOLCHAIN: local
+        run: |
+          VERSION="${GITHUB_REF_NAME}"
+          COMMIT="${GITHUB_SHA}"
+          BUILD_TIME="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+          LDFLAGS="-s -w -X caiyun/internal/version.Version=${VERSION} -X caiyun/internal/version.Commit=${COMMIT} -X caiyun/internal/version.BuildTime=${BUILD_TIME}"
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="$LDFLAGS" -o caiyun-linux ./cmd/caiyun
+
+      - name: Require release signing key
+        env:
+          RELEASE_SIGN_KEY_B64: ${{ secrets.RELEASE_SIGN_KEY_B64 }}
+        run: test -n "$RELEASE_SIGN_KEY_B64"
+
+      - name: Package release artifacts
+        env:
+          VERSION: ${{ github.ref_name }}
+          RELEASE_SIGN_KEY_B64: ${{ secrets.RELEASE_SIGN_KEY_B64 }}
+        run: bash scripts/package-release.sh
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+
+      - name: Cosign sign SHA256SUMS
+        env:
+          COSIGN_YES: "true"
+        run: >-
+          cosign sign-blob --yes
+          --bundle "release/${{ github.ref_name }}-linux-amd64/SHA256SUMS.sigstore.json"
+          "release/${{ github.ref_name }}-linux-amd64/SHA256SUMS"
+
+      - name: Attest unified release binary
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: release/${{ github.ref_name }}-linux-amd64/caiyun-linux
+
+      - name: Attest release SBOM
+        uses: actions/attest-sbom@v2
+        with:
+          subject-path: release/${{ github.ref_name }}-linux-amd64/SHA256SUMS
+          sbom-path: release/${{ github.ref_name }}-linux-amd64/caiyun-sbom-${{ github.ref_name }}.json
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release/${{ github.ref_name }}-linux-amd64/*
+          generate_release_notes: true

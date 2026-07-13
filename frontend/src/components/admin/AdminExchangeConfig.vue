@@ -2,21 +2,36 @@
   <div class="admin-exchange-config">
     <el-row :gutter="20">
       <el-col :span="12">
-        <el-card shadow="hover" class="config-card">
+        <el-card
+          shadow="hover"
+          class="config-card"
+        >
           <template #header>
             <div class="config-header">
               <span>基础配置</span>
             </div>
           </template>
-          <el-form :model="config" label-width="150px">
+          <el-form
+            :model="config"
+            label-width="150px"
+          >
             <el-form-item label="抢兑功能开关">
-              <el-switch :model-value="config.enabled" @update:model-value="updateBool('enabled', $event)" />
+              <el-switch
+                :model-value="config.enabled"
+                @update:model-value="updateBool('enabled', $event)"
+              />
             </el-form-item>
             <el-form-item label="自动更新商品库">
-              <el-switch :model-value="config.auto_update_products" @update:model-value="updateBool('auto_update_products', $event)" />
+              <el-switch
+                :model-value="config.auto_update_products"
+                @update:model-value="updateBool('auto_update_products', $event)"
+              />
               <span class="form-hint">每天早上 8 点自动更新</span>
             </el-form-item>
-            <el-form-item label="抢兑并发数" required>
+            <el-form-item
+              label="抢兑并发数"
+              required
+            >
               <el-input-number
                 :model-value="config.concurrency"
                 :min="1"
@@ -33,22 +48,43 @@
               <span class="form-hint">启用后用户可直接兑换，无需创建任务</span>
             </el-form-item>
             <el-form-item>
-              <el-button type="primary" @click="$emit('save')">保存配置</el-button>
+              <el-button
+                type="primary"
+                @click="$emit('save')"
+              >
+                保存配置
+              </el-button>
             </el-form-item>
           </el-form>
         </el-card>
       </el-col>
 
       <el-col :span="12">
-        <el-card shadow="hover" class="config-card">
+        <el-card
+          shadow="hover"
+          class="config-card"
+        >
           <template #header>
             <div class="config-header">
               <span>兑换月卡配置</span>
-              <el-tag v-if="config.exchange_monthly_enabled" type="success">已启用</el-tag>
-              <el-tag v-else type="info">已禁用</el-tag>
+              <el-tag
+                v-if="config.exchange_monthly_enabled"
+                type="success"
+              >
+                已启用
+              </el-tag>
+              <el-tag
+                v-else
+                type="info"
+              >
+                已禁用
+              </el-tag>
             </div>
           </template>
-          <el-form :model="config" label-width="150px">
+          <el-form
+            :model="config"
+            label-width="150px"
+          >
             <el-form-item label="兑换月卡开关">
               <el-switch
                 :model-value="config.exchange_monthly_enabled"
@@ -76,8 +112,17 @@
               <span class="sub-hint">默认1001，可从商品中心查看</span>
             </el-form-item>
             <el-form-item>
-              <el-button type="primary" @click="$emit('save')">保存配置</el-button>
-              <el-button type="success" :loading="monthlyExchangeLoading" @click="$emit('executeMonthly')">
+              <el-button
+                type="primary"
+                @click="$emit('save')"
+              >
+                保存配置
+              </el-button>
+              <el-button
+                type="success"
+                :loading="monthlyExchangeLoading"
+                @click="$emit('executeMonthly')"
+              >
                 立即执行兑换
               </el-button>
             </el-form-item>
@@ -86,7 +131,10 @@
       </el-col>
     </el-row>
 
-    <el-card shadow="hover" class="config-card product-card">
+    <el-card
+      shadow="hover"
+      class="config-card product-card"
+    >
       <template #header>
         <div class="config-header">
           <span>商品中心管理</span>
@@ -114,7 +162,11 @@
             </el-select>
           </el-form-item>
           <el-form-item>
-            <el-button type="primary" :loading="updateProductsLoading" @click="$emit('updateProducts')">
+            <el-button
+              type="primary"
+              :loading="updateProductsLoading"
+              @click="$emit('updateProducts')"
+            >
               <el-icon><Refresh /></el-icon>
               更新商品数据
             </el-button>

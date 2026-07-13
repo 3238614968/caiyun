@@ -27,6 +27,7 @@ func decodeResponse(t *testing.T, recorder *httptest.ResponseRecorder) Response 
 
 func TestSuccessWrapsData(t *testing.T) {
 	recorder, ctx := newRecorderContext()
+	ctx.Writer.Header().Set("X-Trace-ID", "trace-success-001")
 
 	Success(ctx, gin.H{"value": 42})
 
@@ -37,6 +38,9 @@ func TestSuccessWrapsData(t *testing.T) {
 	if payload.Code != 0 || payload.Message != "success" {
 		t.Fatalf("payload code/message = %d/%q, want 0/success", payload.Code, payload.Message)
 	}
+	if payload.TraceID != "trace-success-001" {
+		t.Fatalf("payload trace_id = %q, want trace-success-001", payload.TraceID)
+	}
 	data, ok := payload.Data.(map[string]interface{})
 	if !ok || data["value"].(float64) != 42 {
 		t.Fatalf("payload data = %#v, want value=42", payload.Data)
@@ -45,6 +49,7 @@ func TestSuccessWrapsData(t *testing.T) {
 
 func TestMessageOmitsData(t *testing.T) {
 	recorder, ctx := newRecorderContext()
+	ctx.Writer.Header().Set("X-Trace-ID", "trace-message-001")
 
 	Message(ctx, "操作成功")
 
@@ -58,10 +63,14 @@ func TestMessageOmitsData(t *testing.T) {
 	if payload.Data != nil {
 		t.Fatalf("payload data = %#v, want nil", payload.Data)
 	}
+	if payload.TraceID != "trace-message-001" {
+		t.Fatalf("payload trace_id = %q, want trace-message-001", payload.TraceID)
+	}
 }
 
 func TestBadRequestUsesHttpStatusAsCode(t *testing.T) {
 	recorder, ctx := newRecorderContext()
+	ctx.Writer.Header().Set("X-Trace-ID", "trace-bad-request-001")
 
 	BadRequest(ctx, "参数错误")
 
@@ -71,5 +80,8 @@ func TestBadRequestUsesHttpStatusAsCode(t *testing.T) {
 	payload := decodeResponse(t, recorder)
 	if payload.Code != http.StatusBadRequest || payload.Message != "参数错误" {
 		t.Fatalf("payload code/message = %d/%q, want 400/参数错误", payload.Code, payload.Message)
+	}
+	if payload.TraceID != "trace-bad-request-001" {
+		t.Fatalf("payload trace_id = %q, want trace-bad-request-001", payload.TraceID)
 	}
 }

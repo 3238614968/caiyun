@@ -97,3 +97,47 @@ test('仪表盘展示队列后端、健康状态和关键队列指标', async ({
   await expect(page.getByText('队列长度')).toBeVisible()
   await expect(page.getByText('死信')).toBeVisible()
 })
+
+
+test('/logs 页面刷新后仍保持 SPA 路由并展示日志', async ({ page }) => {
+  await page.goto('/logs')
+
+  await expect(page.getByText('运行日志')).toBeVisible()
+  await expect(page.getByText('13900000001')).toBeVisible()
+  await expect(page.getByText('+5')).toBeVisible()
+
+  await page.reload()
+  await expect(page.getByText('运行日志')).toBeVisible()
+  await expect(page.getByText('13900000001')).toBeVisible()
+
+  await page.getByRole('row', { name: /13900000001/ }).getByRole('button', { name: '详情' }).click()
+  await expect(page.getByRole('dialog', { name: '日志详情' })).toBeVisible()
+})
+
+test('首页云朵趋势展示当前范围、最新值和切换天数', async ({ page }) => {
+  await page.goto('/dashboard')
+
+  await expect(page.getByText('云朵趋势')).toBeVisible()
+  const summary = page.getByTestId('cloud-trend-summary')
+  await expect(summary).toContainText('当前展示 7 天')
+  await expect(summary).toContainText('最新云朵 12,345')
+  await expect(summary).toContainText('较前日 +120')
+
+  await page.getByText('14天').click()
+  await expect(summary).toContainText('当前展示 14 天')
+  await expect(summary).toContainText('最新云朵 12,345')
+})
+
+test('手动执行账号任务返回 202 并显示可追踪的排队操作号', async ({ page }) => {
+  await page.goto('/accounts')
+
+  const responsePromise = page.waitForResponse(response =>
+    response.request().method() === 'POST' &&
+    /\/api\/accounts\/1\/trigger$/.test(new URL(response.url()).pathname)
+  )
+  await page.getByRole('row', { name: /13900000001/ }).getByRole('button', { name: '执行任务' }).click()
+
+  const response = await responsePromise
+  expect(response.status()).toBe(202)
+  await expect(page.getByText('任务已加入队列（操作号：op-e2e-0001）')).toBeVisible()
+})

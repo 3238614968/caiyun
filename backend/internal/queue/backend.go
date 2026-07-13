@@ -3,12 +3,11 @@ package queue
 import (
 	"errors"
 	"fmt"
-	"os"
-	"strconv"
 	"strings"
 	"time"
 
 	"caiyun/internal/cache"
+	"caiyun/internal/envutil"
 	"caiyun/internal/models"
 )
 
@@ -24,6 +23,7 @@ const (
 // 当前支持 Redis List + processing/delayed/dead 辅助结构，以及 Redis Streams + consumer group。
 type ReliableTaskQueue interface {
 	Enqueue(accountID, userID uint, taskType string) error
+	EnqueueMessage(message *TaskMessage) error
 	EnqueueBatch(accounts []*models.Account, taskType string) error
 	Dequeue(timeout time.Duration) (*TaskMessage, error)
 	Ack(message *TaskMessage) error
@@ -91,7 +91,7 @@ func NewTaskQueueBackend(redisCache *cache.RedisCache, backend string) (Reliable
 }
 
 func TaskQueueBackendFromEnv() string {
-	return normalizeTaskQueueBackend(os.Getenv("TASK_QUEUE_BACKEND"))
+	return normalizeTaskQueueBackend(envutil.String("TASK_QUEUE_BACKEND", TaskQueueBackendStreams))
 }
 
 func normalizeTaskQueueBackend(backend string) string {
@@ -103,23 +103,4 @@ func normalizeTaskQueueBackend(backend string) string {
 	default:
 		return strings.ToLower(strings.TrimSpace(backend))
 	}
-}
-
-func envString(key, fallback string) string {
-	if value := strings.TrimSpace(os.Getenv(key)); value != "" {
-		return value
-	}
-	return fallback
-}
-
-func envInt64(key string, fallback int64) int64 {
-	value := strings.TrimSpace(os.Getenv(key))
-	if value == "" {
-		return fallback
-	}
-	parsed, err := strconv.ParseInt(value, 10, 64)
-	if err != nil {
-		return fallback
-	}
-	return parsed
 }

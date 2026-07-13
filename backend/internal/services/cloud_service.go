@@ -3,7 +3,7 @@ package services
 import (
 	"caiyun/internal/models"
 	"caiyun/internal/repository"
-	"fmt"
+	"context"
 	"sort"
 	"time"
 )
@@ -42,6 +42,8 @@ type DashboardData struct {
 type TrendPoint struct {
 	Date       string `json:"date"`
 	CloudCount int    `json:"cloud_count"`
+	CloudDiff  int    `json:"cloud_diff"`
+	HasData    bool   `json:"has_data"`
 }
 
 // AccountRank 账号排名
@@ -136,7 +138,7 @@ func (s *CloudService) GetCloudStatsByAccount(userID, accountID uint, page, page
 		return nil, 0, err
 	}
 	if account.UserID != userID {
-		return nil, 0, fmt.Errorf("账号不存在")
+		return nil, 0, ErrAccountNotFound
 	}
 
 	offset := (page - 1) * pageSize
@@ -292,26 +294,40 @@ func completeTrendData(stats []*models.CloudStats, days int, currentTotal int) [
 	start := today.AddDate(0, 0, -days+1)
 	todayKey := today.Format("2006-01-02")
 
-	statMap := make(map[string]int, len(stats))
+	statMap := make(map[string]int, len(stats)+1)
+	hasDataMap := make(map[string]bool, len(stats)+1)
+	firstKnown := currentTotal
+	if len(stats) > 0 {
+		firstKnown = stats[0].CloudCount
+	}
 	for _, stat := range stats {
 		statMap[stat.Date] = stat.CloudCount
+		hasDataMap[stat.Date] = true
 	}
+	// 当天以账号表的实时总数为准，避免统计任务尚未落库导致趋势尾点滞后。
+	statMap[todayKey] = currentTotal
+	hasDataMap[todayKey] = true
 
 	result := make([]TrendPoint, 0, days)
-	lastKnown := 0
+	lastKnown := firstKnown
+	previous := firstKnown
 	for i := 0; i < days; i++ {
 		date := start.AddDate(0, 0, i).Format("2006-01-02")
 		if cloudCount, ok := statMap[date]; ok {
 			lastKnown = cloudCount
 		}
-		if date == todayKey {
-			lastKnown = currentTotal
-		}
 
+		diff := 0
+		if i > 0 {
+			diff = lastKnown - previous
+		}
 		result = append(result, TrendPoint{
 			Date:       date,
 			CloudCount: lastKnown,
+			CloudDiff:  diff,
+			HasData:    hasDataMap[date],
 		})
+		previous = lastKnown
 	}
 
 	return result
@@ -329,4 +345,53 @@ func (s *CloudService) GetAccountCloudCount(accountID uint) (int, error) {
 // UpdateAccountCloudCount 更新账号云朵数
 func (s *CloudService) UpdateAccountCloudCount(accountID uint, cloudCount int) error {
 	return s.accountRepo.UpdateCloudCount(accountID, cloudCount)
+}
+
+// withContext returns a short-lived service clone whose repositories are bound
+// to one request. It deliberately does not store request context globally.
+func (s *CloudService) withContext(ctx context.Context) *CloudService {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return &CloudService{
+		accountRepo:    s.accountRepo.WithContext(ctx),
+		cloudStatsRepo: s.cloudStatsRepo.WithContext(ctx),
+		taskLogRepo:    s.taskLogRepo.WithContext(ctx),
+	}
+}
+
+func (s *CloudService) GetDashboardContext(ctx context.Context, userID uint) (*DashboardData, error) {
+	return s.withContext(ctx).GetDashboard(userID)
+}
+
+func (s *CloudService) GetCloudStatsByAccountContext(ctx context.Context, userID, accountID uint, page, pageSize int) ([]*models.CloudStats, int64, error) {
+	return s.withContext(ctx).GetCloudStatsByAccount(userID, accountID, page, pageSize)
+}
+
+func (s *CloudService) GetCloudStatsByUserIDContext(ctx context.Context, userID uint, page, pageSize int) ([]*models.CloudStats, int64, error) {
+	return s.withContext(ctx).GetCloudStatsByUserID(userID, page, pageSize)
+}
+
+func (s *CloudService) CalculateDailyStatsContext(ctx context.Context) error {
+	return s.withContext(ctx).CalculateDailyStats()
+}
+
+func (s *CloudService) CalculateDailyStatsByUserIDContext(ctx context.Context, userID uint) error {
+	return s.withContext(ctx).CalculateDailyStatsByUserID(userID)
+}
+
+func (s *CloudService) UpdateCloudDiffsContext(ctx context.Context, userID uint) error {
+	return s.withContext(ctx).UpdateCloudDiffs(userID)
+}
+
+func (s *CloudService) GetTotalCloudCountContext(ctx context.Context, userID uint) (int, error) {
+	return s.withContext(ctx).GetTotalCloudCount(userID)
+}
+
+func (s *CloudService) GetTrendDataContext(ctx context.Context, userID uint, days int) ([]TrendPoint, error) {
+	return s.withContext(ctx).GetTrendData(userID, days)
+}
+
+func (s *CloudService) GetGlobalTrendDataContext(ctx context.Context, days int) ([]TrendPoint, error) {
+	return s.withContext(ctx).GetGlobalTrendData(days)
 }

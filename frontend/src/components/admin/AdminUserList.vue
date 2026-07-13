@@ -1,30 +1,83 @@
 <template>
   <div>
-    <div class="responsive-data-shell" v-loading="loading">
-      <el-table v-if="!isMobile" :data="users" stripe style="width: 100%">
-        <el-table-column prop="username" label="用户名" width="150" />
-        <el-table-column prop="email" label="邮箱" />
-        <el-table-column prop="role" label="角色" width="120">
+    <div
+      v-loading="loading"
+      class="responsive-data-shell"
+    >
+      <el-table
+        v-if="!isMobile"
+        :data="users"
+        stripe
+        style="width: 100%"
+      >
+        <el-table-column
+          prop="username"
+          label="用户名"
+          width="150"
+        />
+        <el-table-column
+          prop="email"
+          label="邮箱"
+        />
+        <el-table-column
+          prop="role"
+          label="角色"
+          width="120"
+        >
           <template #default="{ row }">
             <el-tag :type="row.role === 'admin' ? 'danger' : 'primary'">
               {{ row.role === 'admin' ? '管理员' : '普通用户' }}
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column prop="created_at" label="创建时间" width="180">
-          <template #default="{ row }">{{ formatDate(row.created_at) }}</template>
-        </el-table-column>
-        <el-table-column label="操作" width="220" fixed="right">
+        <el-table-column
+          prop="created_at"
+          label="创建时间"
+          width="180"
+        >
           <template #default="{ row }">
-            <el-button type="primary" link @click="$emit('editRole', row)">修改角色</el-button>
-            <el-button type="warning" link @click="$emit('resetPassword', row)">重置密码</el-button>
-            <el-button type="danger" link @click="$emit('deleteUser', row)">删除</el-button>
+            {{ formatDate(row.created_at) }}
+          </template>
+        </el-table-column>
+        <el-table-column
+          label="操作"
+          width="220"
+          fixed="right"
+        >
+          <template #default="{ row }">
+            <el-button
+              type="primary"
+              link
+              @click="$emit('editRole', row)"
+            >
+              修改角色
+            </el-button>
+            <el-button
+              type="warning"
+              link
+              @click="$emit('resetPassword', row)"
+            >
+              重置密码
+            </el-button>
+            <el-button
+              type="danger"
+              link
+              @click="$emit('deleteUser', row)"
+            >
+              删除
+            </el-button>
           </template>
         </el-table-column>
       </el-table>
 
-      <div v-else class="mobile-admin-list">
-        <el-empty v-if="users.length === 0" description="暂无用户数据" />
+      <div
+        v-else
+        class="mobile-admin-list"
+      >
+        <el-empty
+          v-if="users.length === 0"
+          description="暂无用户数据"
+        />
         <template v-else>
           <el-card
             v-for="row in users"
@@ -34,10 +87,16 @@
           >
             <div class="mobile-admin-card-head">
               <div>
-                <div class="mobile-admin-card-title">{{ row.username }}</div>
-                <div class="mobile-admin-card-meta">{{ row.email || '-' }}</div>
+                <div class="mobile-admin-card-title">
+                  {{ row.username }}
+                </div>
+                <div class="mobile-admin-card-meta">
+                  {{ row.email || '-' }}
+                </div>
               </div>
-              <el-tag :type="row.role === 'admin' ? 'danger' : 'primary'">{{ row.role === 'admin' ? '管理员' : '普通用户' }}</el-tag>
+              <el-tag :type="row.role === 'admin' ? 'danger' : 'primary'">
+                {{ row.role === 'admin' ? '管理员' : '普通用户' }}
+              </el-tag>
             </div>
             <div class="mobile-admin-card-grid">
               <div class="mobile-admin-card-row">
@@ -50,9 +109,27 @@
               </div>
             </div>
             <div class="mobile-admin-card-actions">
-              <el-button type="primary" plain @click="$emit('editRole', row)">修改角色</el-button>
-              <el-button type="warning" plain @click="$emit('resetPassword', row)">重置密码</el-button>
-              <el-button type="danger" plain @click="$emit('deleteUser', row)">删除</el-button>
+              <el-button
+                type="primary"
+                plain
+                @click="$emit('editRole', row)"
+              >
+                修改角色
+              </el-button>
+              <el-button
+                type="warning"
+                plain
+                @click="$emit('resetPassword', row)"
+              >
+                重置密码
+              </el-button>
+              <el-button
+                type="danger"
+                plain
+                @click="$emit('deleteUser', row)"
+              >
+                删除
+              </el-button>
             </div>
           </el-card>
         </template>

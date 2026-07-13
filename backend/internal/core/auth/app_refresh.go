@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"context"
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
@@ -52,6 +53,18 @@ type AuthorizationRefreshResult struct {
 // 只有 refreshToken 解密成功、拿到新 authToken 且 querySpecToken 验证通过时才返回结果；
 // 调用方应仅在本方法返回 nil error 后更新数据库。
 func (a *Auth) RefreshAuthorization(currentAuthorization, phone, userDomainID string) (*AuthorizationRefreshResult, error) {
+	return a.RefreshAuthorizationContext(context.Background(), currentAuthorization, phone, userDomainID)
+}
+
+// RefreshAuthorizationContext refreshes authorization with cancellation
+// propagated through validation retries and every upstream HTTP request.
+func (a *Auth) RefreshAuthorizationContext(ctx context.Context, currentAuthorization, phone, userDomainID string) (*AuthorizationRefreshResult, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	currentAuthorization = ensureBasicAuth(currentAuthorization)
 	if currentAuthorization == "" {
 		return nil, fmt.Errorf("authorization 为空")
@@ -78,7 +91,7 @@ func (a *Auth) RefreshAuthorization(currentAuthorization, phone, userDomainID st
 		"hcy-cool-flag":     "1",
 	}
 
-	resp, err := a.client.Post(appRefreshURL, headers, encBody)
+	resp, err := a.client.PostWithContext(ctx, appRefreshURL, headers, encBody)
 	if err != nil {
 		return nil, fmt.Errorf("刷新 authorization 请求失败: %w", err)
 	}
@@ -106,7 +119,7 @@ func (a *Auth) RefreshAuthorization(currentAuthorization, phone, userDomainID st
 	}
 
 	newAuth := GenerateAuth(authToken, phone, "mobile")
-	ssoToken, err := a.QuerySpecTokenWithAuthorization(newAuth, phone)
+	ssoToken, err := a.QuerySpecTokenWithAuthorizationContext(ctx, newAuth, phone)
 	if err != nil {
 		return nil, fmt.Errorf("刷新 authorization 验证失败: %w", err)
 	}
@@ -132,14 +145,25 @@ func (a *Auth) RefreshAuthorization(currentAuthorization, phone, userDomainID st
 
 // QuerySpecTokenWithAuthorization 使用指定 authorization 获取 SSO token。
 func (a *Auth) QuerySpecTokenWithAuthorization(authorization, phone string) (string, error) {
+	return a.QuerySpecTokenWithAuthorizationContext(context.Background(), authorization, phone)
+}
+
+func (a *Auth) QuerySpecTokenWithAuthorizationContext(ctx context.Context, authorization, phone string) (string, error) {
 	authorization = ensureBasicAuth(authorization)
 	if authorization == "" {
 		return "", fmt.Errorf("authorization 为空")
 	}
-	return a.querySpecTokenWithRetry(authorization, phone)
+	return a.querySpecTokenWithRetryContext(ctx, authorization, phone)
 }
 
 func (a *Auth) querySpecTokenWithRetry(authorization, phone string) (string, error) {
+	return a.querySpecTokenWithRetryContext(context.Background(), authorization, phone)
+}
+
+func (a *Auth) querySpecTokenWithRetryContext(ctx context.Context, authorization, phone string) (string, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	phone = strings.TrimSpace(phone)
 	if phone == "" {
 		return "", fmt.Errorf("手机号为空")
@@ -162,7 +186,10 @@ func (a *Auth) querySpecTokenWithRetry(authorization, phone string) (string, err
 
 	var lastErr error
 	for i := 1; i <= 3; i++ {
-		resp, err := a.client.Post(authQuerySpecTokenURL, headers, reqBody)
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
+		resp, err := a.client.PostWithContext(ctx, authQuerySpecTokenURL, headers, reqBody)
 		if err != nil {
 			lastErr = err
 		} else {
@@ -186,7 +213,9 @@ func (a *Auth) querySpecTokenWithRetry(authorization, phone string) (string, err
 				}
 			}
 		}
-		time.Sleep(time.Duration(500*i) * time.Millisecond)
+		if err := sleepAuthContext(ctx, time.Duration(500*i)*time.Millisecond); err != nil {
+			return "", err
+		}
 	}
 
 	if lastErr == nil {
@@ -196,6 +225,13 @@ func (a *Auth) querySpecTokenWithRetry(authorization, phone string) (string, err
 }
 
 func (a *Auth) tyrzLoginWithCandidates(ssoToken string) (string, error) {
+	return a.tyrzLoginWithCandidatesContext(context.Background(), ssoToken)
+}
+
+func (a *Auth) tyrzLoginWithCandidatesContext(ctx context.Context, ssoToken string) (string, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	ssoToken = strings.TrimSpace(ssoToken)
 	if ssoToken == "" {
 		return "", fmt.Errorf("ssoToken 为空")
@@ -209,6 +245,9 @@ func (a *Auth) tyrzLoginWithCandidates(ssoToken string) (string, error) {
 	var lastErr error
 	for round := 1; round <= 3; round++ {
 		for _, candidate := range candidates {
+			if err := ctx.Err(); err != nil {
+				return "", err
+			}
 			u, _ := url.Parse(candidate)
 			headers := map[string]string{
 				"User-Agent": authWebViewUA,
@@ -216,7 +255,7 @@ func (a *Auth) tyrzLoginWithCandidates(ssoToken string) (string, error) {
 				"Host":       u.Host,
 			}
 
-			resp, err := a.client.Post(candidate, headers, map[string]interface{}{})
+			resp, err := a.client.PostWithContext(ctx, candidate, headers, map[string]interface{}{})
 			if err != nil {
 				lastErr = err
 				continue
@@ -242,13 +281,32 @@ func (a *Auth) tyrzLoginWithCandidates(ssoToken string) (string, error) {
 			}
 			lastErr = fmt.Errorf("JWT token 为空")
 		}
-		time.Sleep(time.Duration(600*round) * time.Millisecond)
+		if err := sleepAuthContext(ctx, time.Duration(600*round)*time.Millisecond); err != nil {
+			return "", err
+		}
 	}
 
 	if lastErr == nil {
 		lastErr = fmt.Errorf("多候选重试后仍失败")
 	}
 	return "", lastErr
+}
+
+func sleepAuthContext(ctx context.Context, delay time.Duration) error {
+	if delay <= 0 {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 func ensureBasicAuth(authValue string) string {

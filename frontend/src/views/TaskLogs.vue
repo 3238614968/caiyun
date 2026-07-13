@@ -8,9 +8,17 @@
       </template>
 
       <!-- 筛选栏 -->
-      <el-form :inline="true" :model="searchForm" class="search-form">
+      <el-form
+        :inline="true"
+        :model="searchForm"
+        class="search-form"
+      >
         <el-form-item label="任务类型">
-          <el-select v-model="searchForm.taskType" placeholder="请选择" clearable>
+          <el-select
+            v-model="searchForm.taskType"
+            placeholder="请选择"
+            clearable
+          >
             <el-option
               v-for="option in taskTypeOptions"
               :key="option.value || 'all'"
@@ -20,62 +28,137 @@
           </el-select>
         </el-form-item>
         <el-form-item label="状态">
-          <el-select v-model="searchForm.status" placeholder="请选择" clearable>
-            <el-option label="全部" value="" />
-            <el-option label="成功" value="success" />
-            <el-option label="失败" value="failed" />
-            <el-option label="执行中" value="pending" />
+          <el-select
+            v-model="searchForm.status"
+            placeholder="请选择"
+            clearable
+          >
+            <el-option
+              label="全部"
+              value=""
+            />
+            <el-option
+              label="成功"
+              value="success"
+            />
+            <el-option
+              label="失败"
+              value="failed"
+            />
+            <el-option
+              label="执行中"
+              value="pending"
+            />
           </el-select>
         </el-form-item>
         <el-form-item>
-          <el-button type="primary" @click="handleSearch">搜索</el-button>
-          <el-button @click="handleReset">重置</el-button>
+          <el-button
+            type="primary"
+            @click="handleSearch"
+          >
+            搜索
+          </el-button>
+          <el-button @click="handleReset">
+            重置
+          </el-button>
         </el-form-item>
       </el-form>
 
       <!-- 日志列表 -->
-            <div class="logs-shell" v-loading="loading">
-<el-table v-if="!isMobile" :data="logList" stripe style="width: 100%">
-        <el-table-column prop="account.phone" label="手机号" width="150" />
-        <el-table-column prop="task_type" label="任务类型" width="120">
-          <template #default="{ row }">
-            <el-tag>{{ getTaskTypeName(row.task_type) }}</el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column prop="status" label="状态" width="100">
-          <template #default="{ row }">
-            <el-tag :type="getStatusType(row.status)">
-              {{ getStatusName(row.status) }}
-            </el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column prop="cloud_gained" label="获得云朵" width="100">
-          <template #default="{ row }">
-            <span v-if="row.cloud_gained > 0" style="color: #67c23a">+{{ row.cloud_gained }}</span>
-            <span v-else>-</span>
-          </template>
-        </el-table-column>
-        <el-table-column label="执行结果" min-width="340">
-          <template #default="{ row }">
-            <div class="log-message-preview">{{ formatLogMessageForPreview(row) }}</div>
-          </template>
-        </el-table-column>
-        <el-table-column prop="created_at" label="执行时间" width="180">
-          <template #default="{ row }">
-            {{ formatDate(row.created_at) }}
-          </template>
-        </el-table-column>
-        <el-table-column label="操作" width="100" fixed="right">
-          <template #default="{ row }">
-            <el-button type="primary" link @click="handleViewDetail(row)">详情</el-button>
-          </template>
-        </el-table-column>
-      </el-table>
+      <div
+        v-loading="loading"
+        class="logs-shell"
+      >
+        <el-table
+          v-if="!isMobile"
+          :data="logList"
+          stripe
+          style="width: 100%"
+        >
+          <el-table-column
+            prop="account.phone"
+            label="手机号"
+            width="150"
+          />
+          <el-table-column
+            prop="task_type"
+            label="任务类型"
+            width="120"
+          >
+            <template #default="{ row }">
+              <el-tag>{{ getTaskTypeName(row.task_type) }}</el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column
+            prop="status"
+            label="状态"
+            width="100"
+          >
+            <template #default="{ row }">
+              <el-tag :type="getStatusType(row.status)">
+                {{ getStatusName(row.status) }}
+              </el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column
+            prop="cloud_gained"
+            label="获得云朵"
+            width="100"
+          >
+            <template #default="{ row }">
+              <span
+                v-if="row.cloud_gained > 0"
+                style="color: #67c23a"
+              >+{{ row.cloud_gained }}</span>
+              <span v-else>-</span>
+            </template>
+          </el-table-column>
+          <el-table-column
+            label="执行结果"
+            min-width="340"
+          >
+            <template #default="{ row }">
+              <div class="log-message-preview">
+                {{ formatLogMessageForPreview(row) }}
+              </div>
+            </template>
+          </el-table-column>
+          <el-table-column
+            prop="created_at"
+            label="执行时间"
+            width="180"
+          >
+            <template #default="{ row }">
+              {{ formatDate(row.created_at) }}
+            </template>
+          </el-table-column>
+          <el-table-column
+            label="操作"
+            width="100"
+            fixed="right"
+          >
+            <template #default="{ row }">
+              <el-button
+                type="primary"
+                link
+                @click="handleViewDetail(row)"
+              >
+                详情
+              </el-button>
+            </template>
+          </el-table-column>
+        </el-table>
 
-      <!-- 分页 -->
+        <!-- 分页 -->
 
-        <div v-else class="mobile-log-list">
-          <el-empty v-if="logList.length === 0" description="暂无日志" />
+        <div
+          v-else
+          class="mobile-log-list"
+        >
+          <el-empty
+            v-if="logList.length === 0"
+            description="暂无日志"
+          />
           <template v-else>
             <el-card
               v-for="row in logList"
@@ -85,10 +168,16 @@
             >
               <div class="mobile-log-head">
                 <div>
-                  <div class="mobile-log-title">{{ row.account?.phone || '-' }}</div>
-                  <div class="mobile-log-meta">{{ getTaskTypeName(row.task_type) }}</div>
+                  <div class="mobile-log-title">
+                    {{ row.account?.phone || '-' }}
+                  </div>
+                  <div class="mobile-log-meta">
+                    {{ getTaskTypeName(row.task_type) }}
+                  </div>
                 </div>
-                <el-tag :type="getStatusType(row.status)">{{ getStatusName(row.status) }}</el-tag>
+                <el-tag :type="getStatusType(row.status)">
+                  {{ getStatusName(row.status) }}
+                </el-tag>
               </div>
               <div class="mobile-log-grid">
                 <div class="mobile-log-row">
@@ -97,7 +186,10 @@
                 </div>
                 <div class="mobile-log-row">
                   <span class="mobile-log-label">获得云朵</span>
-                  <span class="mobile-log-value" :class="{ 'positive': row.cloud_gained > 0 }">{{ row.cloud_gained > 0 ? `+${row.cloud_gained}` : '-' }}</span>
+                  <span
+                    class="mobile-log-value"
+                    :class="{ 'positive': row.cloud_gained > 0 }"
+                  >{{ row.cloud_gained > 0 ? `+${row.cloud_gained}` : '-' }}</span>
                 </div>
                 <div class="mobile-log-row">
                   <span class="mobile-log-label">执行时间</span>
@@ -109,28 +201,43 @@
                 </div>
               </div>
               <div class="mobile-log-actions">
-                <el-button type="primary" plain @click="handleViewDetail(row)">查看详情</el-button>
+                <el-button
+                  type="primary"
+                  plain
+                  @click="handleViewDetail(row)"
+                >
+                  查看详情
+                </el-button>
               </div>
             </el-card>
           </template>
         </div>
-            </div>
+      </div>
       <el-pagination
         v-model:current-page="pagination.page"
         v-model:page-size="pagination.pageSize"
         :page-sizes="[20, 50, 100]"
         :total="pagination.total"
         layout="total, sizes, prev, pager, next, jumper"
+        style="margin-top: 20px"
         @size-change="handleSizeChange"
         @current-change="handleCurrentChange"
-        style="margin-top: 20px"
       />
     </el-card>
 
     <!-- 详情对话框 -->
-    <el-dialog v-model="detailVisible" title="日志详情" width="600px">
-      <el-descriptions :column="1" border>
-        <el-descriptions-item label="手机号">{{ currentLog.account?.phone }}</el-descriptions-item>
+    <el-dialog
+      v-model="detailVisible"
+      title="日志详情"
+      width="600px"
+    >
+      <el-descriptions
+        :column="1"
+        border
+      >
+        <el-descriptions-item label="手机号">
+          {{ currentLog.account?.phone }}
+        </el-descriptions-item>
         <el-descriptions-item label="任务类型">
           {{ getTaskTypeName(currentLog.task_type) }}
         </el-descriptions-item>
@@ -146,7 +253,9 @@
           {{ formatDate(currentLog.created_at) }}
         </el-descriptions-item>
         <el-descriptions-item label="执行结果">
-          <div class="log-detail-message">{{ formatLogMessageForDetail(currentLog) }}</div>
+          <div class="log-detail-message">
+            {{ formatLogMessageForDetail(currentLog) }}
+          </div>
         </el-descriptions-item>
       </el-descriptions>
     </el-dialog>
@@ -154,7 +263,6 @@
 </template>
 
 <script setup lang="ts">
-import '@/styles/element/logs'
 import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { getTaskLogs, type TaskLog } from '../api/task'
@@ -216,7 +324,7 @@ const loadLogs = async () => {
     if (searchForm.taskType) params.task_type = searchForm.taskType
     if (searchForm.status) params.status = searchForm.status
 
-    const data = await getTaskLogs(undefined, pagination.page, pagination.pageSize)
+    const data = await getTaskLogs(params)
     logList.value = data.task_logs
     pagination.total = data.total
   } catch (error) {

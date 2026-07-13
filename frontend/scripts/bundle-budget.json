@@ -1,0 +1,27 @@
+{
+  "totals": {
+    "bytes": 2100000,
+    "gzipBytes": 1200000
+  },
+  "byType": {
+    "js": {
+      "bytes": 950000,
+      "gzipBytes": 330000
+    },
+    "css": {
+      "bytes": 360000,
+      "gzipBytes": 65000
+    },
+    "image": {
+      "bytes": 850000
+    }
+  },
+  "largest": {
+    "js": {
+      "bytes": 185000
+    },
+    "css": {
+      "bytes": 85000
+    }
+  }
+}

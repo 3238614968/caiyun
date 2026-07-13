@@ -1,14 +1,28 @@
 <template>
   <el-row :gutter="20">
-    <el-col :span="6" v-for="stat in stats" :key="stat.key">
-      <el-card shadow="hover" class="stat-card">
+    <el-col
+      v-for="stat in stats"
+      :key="stat.key"
+      :span="6"
+    >
+      <el-card
+        shadow="hover"
+        class="stat-card"
+      >
         <div class="stat-content">
-          <div class="stat-icon" :style="{ background: stat.color }">
+          <div
+            class="stat-icon"
+            :style="{ background: stat.color }"
+          >
             <el-icon><component :is="stat.icon" /></el-icon>
           </div>
           <div class="stat-info">
-            <div class="stat-value">{{ stat.value }}</div>
-            <div class="stat-label">{{ stat.label }}</div>
+            <div class="stat-value">
+              {{ stat.value }}
+            </div>
+            <div class="stat-label">
+              {{ stat.label }}
+            </div>
           </div>
         </div>
       </el-card>

@@ -1,17 +1,30 @@
 <template>
   <div class="account-section">
     <div class="section-header">
-      <el-button type="primary" :size="isMobile ? 'small' : 'default'" icon="Plus" @click="$emit('add')">
-        添加兑换账号
+      <el-button
+        type="primary"
+        :size="isMobile ? 'small' : 'default'"
+        icon="Plus"
+        @click="$emit('add')"
+      >
+        添加抢兑规则
       </el-button>
     </div>
 
     <template v-if="isMobile">
       <div class="mobile-card-list">
-        <el-card v-for="acc in accounts" :key="acc.id" class="mobile-account-card" shadow="hover">
+        <el-card
+          v-for="acc in accounts"
+          :key="acc.id"
+          class="mobile-account-card"
+          shadow="hover"
+        >
           <div class="mobile-account-header">
-            <span class="mobile-account-title">{{ acc.remark || '未命名账号' }}</span>
-            <el-tag :type="acc.is_active ? 'success' : 'danger'" size="small">
+            <span class="mobile-account-title">{{ acc.remark || '未命名规则' }}</span>
+            <el-tag
+              :type="acc.is_active ? 'success' : 'danger'"
+              size="small"
+            >
               {{ acc.is_active ? '启用' : '禁用' }}
             </el-tag>
           </div>
@@ -26,29 +39,82 @@
             </div>
           </div>
           <div class="mobile-account-actions">
-            <el-button size="small" @click="$emit('edit', acc)">编辑</el-button>
-            <el-button size="small" type="danger" @click="$emit('delete', acc.id)">删除</el-button>
+            <el-button
+              size="small"
+              @click="$emit('edit', acc)"
+            >
+              编辑
+            </el-button>
+            <el-button
+              size="small"
+              type="danger"
+              @click="$emit('delete', acc.id)"
+            >
+              删除
+            </el-button>
           </div>
         </el-card>
       </div>
     </template>
 
-    <el-table v-else :data="accounts" border stripe>
-      <el-table-column prop="remark" label="备注" min-width="100" />
-      <el-table-column prop="phone" label="手机号" min-width="110" />
-      <el-table-column prop="exchange_time_1" label="第一次抢兑" width="100" />
-      <el-table-column prop="exchange_time_2" label="第二次抢兑" width="100" />
-      <el-table-column label="状态" width="70">
+    <el-table
+      v-else
+      :data="accounts"
+      border
+      stripe
+    >
+      <el-table-column
+        prop="remark"
+        label="备注"
+        min-width="100"
+      />
+      <el-table-column
+        prop="phone"
+        label="手机号"
+        min-width="110"
+      />
+      <el-table-column
+        prop="exchange_time_1"
+        label="第一次抢兑"
+        width="100"
+      />
+      <el-table-column
+        prop="exchange_time_2"
+        label="第二次抢兑"
+        width="100"
+      />
+      <el-table-column
+        label="状态"
+        width="70"
+      >
         <template #default="{ row }">
-          <el-tag :type="row.is_active ? 'success' : 'danger'" size="small">
+          <el-tag
+            :type="row.is_active ? 'success' : 'danger'"
+            size="small"
+          >
             {{ row.is_active ? '启用' : '禁用' }}
           </el-tag>
         </template>
       </el-table-column>
-      <el-table-column label="操作" width="150" fixed="right">
+      <el-table-column
+        label="操作"
+        width="150"
+        fixed="right"
+      >
         <template #default="{ row }">
-          <el-button size="small" @click="$emit('edit', row)">编辑</el-button>
-          <el-button size="small" type="danger" @click="$emit('delete', row.id)">删除</el-button>
+          <el-button
+            size="small"
+            @click="$emit('edit', row)"
+          >
+            编辑
+          </el-button>
+          <el-button
+            size="small"
+            type="danger"
+            @click="$emit('delete', row.id)"
+          >
+            删除
+          </el-button>
         </template>
       </el-table-column>
     </el-table>

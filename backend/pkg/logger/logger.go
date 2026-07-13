@@ -1,8 +1,10 @@
 package logger
 
 import (
+	"compress/gzip"
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -97,67 +99,124 @@ func (hook *rotateHook) rotate() error {
 		return err
 	}
 
-	// 生成新文件名（带时间戳）
-	timestamp := time.Now().Format("2006-01-02-15-04-05")
+	// 纳秒时间戳避免同一秒内多次轮转发生文件名碰撞。
+	timestamp := time.Now().UTC().Format("20060102T150405.000000000Z")
 	backupFile := fmt.Sprintf("%s.%s.log", strings.TrimSuffix(hook.filename, ".log"), timestamp)
 	if err := os.Rename(hook.filename, backupFile); err != nil {
 		return err
 	}
 
-	// 创建新文件
 	newFile, err := os.OpenFile(hook.filename, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		// 尽力恢复原文件，避免日志目标永久消失。
+		_ = os.Rename(backupFile, hook.filename)
+		return err
+	}
+	hook.file = newFile
+	hook.size = 0
+
+	if hook.compress {
+		if err := compressLogFile(backupFile); err != nil {
+			return fmt.Errorf("压缩轮转日志失败: %w", err)
+		}
+	}
+	return hook.cleanOldBackups()
+}
+
+func compressLogFile(path string) (returnErr error) {
+	source, err := os.Open(path)
 	if err != nil {
 		return err
 	}
 
-	hook.file = newFile
-	hook.size = 0
+	temporary := path + ".gz.tmp"
+	target, err := os.OpenFile(temporary, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0644)
+	if err != nil {
+		_ = source.Close()
+		return err
+	}
+	defer func() {
+		_ = source.Close()
+		_ = target.Close()
+		if returnErr != nil {
+			_ = os.Remove(temporary)
+		}
+	}()
 
-	// 清理旧备份
-	go hook.cleanOldBackups()
-
-	return nil
+	writer := gzip.NewWriter(target)
+	if _, err := io.Copy(writer, source); err != nil {
+		_ = writer.Close()
+		return err
+	}
+	if err := writer.Close(); err != nil {
+		return err
+	}
+	// Close both handles before renaming/removing files. This is required on
+	// Windows and also makes the rotation sequence deterministic on all OSes.
+	if err := source.Close(); err != nil {
+		return err
+	}
+	if err := target.Close(); err != nil {
+		return err
+	}
+	compressed := path + ".gz"
+	if err := os.Rename(temporary, compressed); err != nil {
+		return err
+	}
+	return os.Remove(path)
 }
 
-// cleanOldBackups 清理旧的备份文件
-func (hook *rotateHook) cleanOldBackups() {
+// cleanOldBackups applies both retention dimensions. The active log file is
+// explicitly excluded; backups may be either plain .log or compressed .log.gz.
+func (hook *rotateHook) cleanOldBackups() error {
 	dir := filepath.Dir(hook.filename)
-	prefix := filepath.Base(strings.TrimSuffix(hook.filename, ".log"))
-
+	prefix := filepath.Base(strings.TrimSuffix(hook.filename, ".log")) + "."
+	activePath := filepath.Clean(hook.filename)
 	files, err := os.ReadDir(dir)
 	if err != nil {
-		return
+		return err
 	}
 
 	type backupFile struct {
 		path    string
 		modTime time.Time
 	}
-	var backups []backupFile
+	backups := make([]backupFile, 0)
+	cutoff := time.Time{}
+	if hook.maxAge > 0 {
+		cutoff = time.Now().Add(-time.Duration(hook.maxAge) * 24 * time.Hour)
+	}
 	for _, file := range files {
-		if file.IsDir() {
+		if file.IsDir() || !strings.HasPrefix(file.Name(), prefix) ||
+			(!strings.HasSuffix(file.Name(), ".log") && !strings.HasSuffix(file.Name(), ".log.gz")) {
 			continue
 		}
-		name := file.Name()
-		if strings.HasPrefix(name, prefix) && strings.HasSuffix(name, ".log") {
-			info, err := file.Info()
-			if err != nil {
-				continue
+		path := filepath.Join(dir, file.Name())
+		if filepath.Clean(path) == activePath {
+			continue
+		}
+		info, infoErr := file.Info()
+		if infoErr != nil {
+			continue
+		}
+		if !cutoff.IsZero() && info.ModTime().Before(cutoff) {
+			if removeErr := os.Remove(path); removeErr != nil && !os.IsNotExist(removeErr) {
+				return removeErr
 			}
-			backups = append(backups, backupFile{path: filepath.Join(dir, name), modTime: info.ModTime()})
+			continue
 		}
+		backups = append(backups, backupFile{path: path, modTime: info.ModTime()})
 	}
 
-	sort.Slice(backups, func(i, j int) bool {
-		return backups[i].modTime.Before(backups[j].modTime)
-	})
-
-	// 按修改时间排序，删除最旧的
-	if len(backups) > hook.maxBackups {
-		for i := 0; i < len(backups)-hook.maxBackups; i++ {
-			os.Remove(backups[i].path)
+	sort.Slice(backups, func(i, j int) bool { return backups[i].modTime.Before(backups[j].modTime) })
+	if hook.maxBackups > 0 && len(backups) > hook.maxBackups {
+		for _, backup := range backups[:len(backups)-hook.maxBackups] {
+			if err := os.Remove(backup.path); err != nil && !os.IsNotExist(err) {
+				return err
+			}
 		}
 	}
+	return nil
 }
 
 // Fields 日志字段
@@ -165,6 +224,20 @@ type Fields map[string]interface{}
 
 // New 创建新的日志实例
 func New(config *Config) (*Logger, error) {
+	if config == nil {
+		return nil, fmt.Errorf("日志配置不能为空")
+	}
+	if config.OutputPath != "" {
+		if config.MaxSize <= 0 {
+			return nil, fmt.Errorf("LOG_MAX_SIZE 必须大于 0")
+		}
+		if config.MaxBackups < 0 {
+			return nil, fmt.Errorf("LOG_MAX_BACKUPS 不能小于 0")
+		}
+		if config.MaxAge < 0 {
+			return nil, fmt.Errorf("LOG_MAX_AGE 不能小于 0")
+		}
+	}
 	logger := &Logger{
 		Logger: logrus.New(),
 		config: config,
@@ -207,6 +280,13 @@ func New(config *Config) (*Logger, error) {
 			filename:   config.OutputPath,
 			file:       file,
 			size:       info.Size(),
+		}
+		// Apply retention on startup as well as after rotation. Otherwise an
+		// idle service may keep expired backups indefinitely. The active file is
+		// excluded by cleanOldBackups and must never be removed here.
+		if err := hook.cleanOldBackups(); err != nil {
+			_ = file.Close()
+			return nil, fmt.Errorf("清理历史日志失败：%w", err)
 		}
 
 		logger.AddHook(hook)

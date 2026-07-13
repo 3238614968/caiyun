@@ -18,11 +18,11 @@ const dashboardData = {
   success_rate: 98.5,
   trend_data: [
     { date: '2026-06-01', cloud_count: 11000 },
-    { date: '2026-06-02', cloud_count: 11200 },
-    { date: '2026-06-03', cloud_count: 11500 },
-    { date: '2026-06-04', cloud_count: 11880 },
-    { date: '2026-06-05', cloud_count: 12225 },
-    { date: '2026-06-06', cloud_count: 12345 }
+    { date: '2026-06-02', cloud_count: 11200, cloud_diff: 200 },
+    { date: '2026-06-03', cloud_count: 11500, cloud_diff: 300 },
+    { date: '2026-06-04', cloud_count: 11880, cloud_diff: 380 },
+    { date: '2026-06-05', cloud_count: 12225, cloud_diff: 345 },
+    { date: '2026-06-06', cloud_count: 12345, cloud_diff: 120 }
   ],
   account_ranking: [
     { account_id: 1, phone: '13900000001', remark: '主账号', cloud_count: 6800 },
@@ -86,6 +86,14 @@ const baseAccount = {
   user: { username: adminUser.username }
 }
 
+const secondaryAccount = {
+  ...baseAccount,
+  id: 2,
+  phone: '13900000002',
+  cloud_count: 5545,
+  remark: '备用账号'
+}
+
 const baseProduct = {
   id: 101,
   prize_id: '1001',
@@ -102,6 +110,18 @@ const baseProduct = {
   updated_at: now
 }
 
+const soldOutProduct = {
+  ...baseProduct,
+  id: 102,
+  prize_id: '1002',
+  prize_name: 'E2E售罄券',
+  p_order: 200,
+  category: '奶茶饮品权益',
+  daily_remainder_count: 0,
+  daily_limit_count: 10,
+  stock_status: 'sold_out'
+}
+
 const baseExchangeAccount = {
   id: 11,
   user_id: adminUser.id,
@@ -115,6 +135,14 @@ const baseExchangeAccount = {
   product: baseProduct,
   created_at: now,
   updated_at: now
+}
+
+const secondaryExchangeAccount = {
+  ...baseExchangeAccount,
+  id: 12,
+  account_id: secondaryAccount.id,
+  phone: secondaryAccount.phone,
+  remark: '抢兑备用账号'
 }
 
 const baseExchangeRecord = {
@@ -222,8 +250,28 @@ export async function mockBackend(page: Page) {
   let announcementSeq = 10
   let exchangeAccountSeq = 20
   let exchangeTaskSeq = 30
-  const accounts = [{ ...baseAccount }]
-  const exchangeAccounts = [{ ...baseExchangeAccount }]
+  let operationSeq = 0
+  const operations = new Map<string, Record<string, unknown>>()
+  const queueOperation = (
+    type: string,
+    references: { account_id?: number; resource_id?: number } = {}
+  ) => {
+    operationSeq += 1
+    const operation = {
+      operation_id: `op-e2e-${String(operationSeq).padStart(4, '0')}`,
+      type,
+      status: 'queued',
+      attempt_count: 0,
+      queued_at: now,
+      created_at: now,
+      updated_at: now,
+      ...references
+    }
+    operations.set(String(operation.operation_id), operation)
+    return operation
+  }
+  const accounts = [{ ...baseAccount }, { ...secondaryAccount }]
+  const exchangeAccounts = [{ ...baseExchangeAccount }, { ...secondaryExchangeAccount }]
   const exchangeTasks: any[] = []
   const exchangeRecords = [
     { ...baseExchangeRecord },
@@ -235,7 +283,7 @@ export async function mockBackend(page: Page) {
       execution_time_ms: 2450
     }
   ]
-  const products = [{ ...baseProduct }]
+  const products = [{ ...baseProduct }, { ...soldOutProduct }]
   const taskConfigs = [{ ...baseTaskConfig }]
   const exchangeConfig = { ...baseExchangeConfig }
   const announcements = [{ ...announcement }]
@@ -269,6 +317,22 @@ export async function mockBackend(page: Page) {
       return fulfill(route, ok(adminUser))
     }
 
+    const operationCancelMatch = path.match(/^\/api\/operations\/([^/]+)\/cancel$/)
+    if (operationCancelMatch && method === 'POST') {
+      const operation = operations.get(operationCancelMatch[1]) || {}
+      const canceled = { ...operation, status: 'canceled', completed_at: now, updated_at: now }
+      operations.set(operationCancelMatch[1], canceled)
+      return fulfill(route, ok(canceled))
+    }
+
+    const operationMatch = path.match(/^\/api\/operations\/([^/]+)$/)
+    if (operationMatch && method === 'GET') {
+      const operation = operations.get(operationMatch[1])
+      return operation
+        ? fulfill(route, ok(operation))
+        : fulfill(route, { code: 404, message: '操作不存在' }, 404)
+    }
+
     if (method === 'GET' && path === '/api/stats/dashboard') {
       return fulfill(route, ok(dashboardData))
     }
@@ -278,7 +342,19 @@ export async function mockBackend(page: Page) {
     }
 
     if (method === 'GET' && path === '/api/stats/trend') {
-      return fulfill(route, ok({ trend_data: dashboardData.trend_data }))
+      const days = Number(url.searchParams.get('days') || 7)
+      const base = dashboardData.trend_data
+      const trend = Array.from({ length: days }, (_, index) => {
+        const source = base[Math.max(0, base.length - days + index)] || base[base.length - 1]
+        return {
+          ...source,
+          date: `2026-06-${String(Math.max(1, 7 - days + index)).padStart(2, '0')}`,
+          cloud_count: 12000 + index * 15,
+          cloud_diff: index === 0 ? 0 : 15
+        }
+      })
+      trend[trend.length - 1] = { ...trend[trend.length - 1], date: '2026-06-06', cloud_count: 12345, cloud_diff: 120 }
+      return fulfill(route, ok({ trend_data: trend }))
     }
 
     if (method === 'GET' && path === '/api/announcements') {
@@ -350,12 +426,49 @@ export async function mockBackend(page: Page) {
       return fulfill(route, ok({ message: 'ok' }))
     }
 
-    if (path.match(/^\/api\/accounts\/(\d+)\/trigger$/) && method === 'POST') {
-      return fulfill(route, ok({ message: 'submitted' }))
+    const accountTriggerMatch = path.match(/^\/api\/accounts\/(\d+)\/trigger$/)
+    if (accountTriggerMatch && method === 'POST') {
+      return fulfill(
+        route,
+        ok(queueOperation('account_tasks', { account_id: Number(accountTriggerMatch[1]) })),
+        202
+      )
+    }
+
+    if (method === 'POST' && path === '/api/tasks/trigger-all') {
+      return fulfill(route, ok(queueOperation('all_account_tasks')), 202)
     }
 
     if (method === 'GET' && path === '/api/tasks/logs') {
-      return fulfill(route, ok({ task_logs: [], total: 0, page: 1, page_size: 20 }))
+      const taskType = url.searchParams.get('task_type') || ''
+      const status = url.searchParams.get('status') || ''
+      const logs = [
+        {
+          id: 501,
+          user_id: adminUser.id,
+          account_id: baseAccount.id,
+          account: baseAccount,
+          task_type: 'signin',
+          status: 'success',
+          message: '每日签到完成 | 结果: 已完成',
+          cloud_gained: 5,
+          execution_time: 320,
+          created_at: now
+        },
+        {
+          id: 502,
+          user_id: adminUser.id,
+          account_id: secondaryAccount.id,
+          account: secondaryAccount,
+          task_type: 'exchange',
+          status: 'failed',
+          message: '结果: 库存不足 | trace_id=e2e',
+          cloud_gained: 0,
+          execution_time: 856,
+          created_at: now
+        }
+      ].filter(log => (!taskType || log.task_type === taskType) && (!status || log.status === status))
+      return fulfill(route, ok({ task_logs: logs, total: logs.length, page: 1, page_size: 20 }))
     }
 
     if (method === 'GET' && path === '/api/tasks/status') {
@@ -408,11 +521,11 @@ export async function mockBackend(page: Page) {
       }))
     }
 
-    if (method === 'GET' && path === '/api/exchange/accounts') {
+    if (method === 'GET' && (path === '/api/exchange/accounts' || path === '/api/exchange/rules')) {
       return fulfill(route, ok({ accounts: exchangeAccounts, total: exchangeAccounts.length }))
     }
 
-    if (method === 'POST' && path === '/api/exchange/accounts') {
+    if (method === 'POST' && (path === '/api/exchange/accounts' || path === '/api/exchange/rules')) {
       const body = request.postDataJSON()
       const cloudAccount = accounts.find(item => item.id === Number(body.account_id)) || accounts[0]
       const created = {
@@ -431,7 +544,7 @@ export async function mockBackend(page: Page) {
       return fulfill(route, ok({ account: created }))
     }
 
-    const exchangeAccountMatch = path.match(/^\/api\/exchange\/accounts\/(\d+)$/)
+    const exchangeAccountMatch = path.match(/^\/api\/exchange\/(?:accounts|rules)\/(\d+)$/)
     if (exchangeAccountMatch && method === 'PUT') {
       const account = exchangeAccounts.find(item => item.id === Number(exchangeAccountMatch[1]))
       if (account) {
@@ -446,6 +559,18 @@ export async function mockBackend(page: Page) {
         exchangeAccounts.splice(index, 1)
       }
       return fulfill(route, ok({ message: 'deleted' }))
+    }
+
+    if (method === 'POST' && path === '/api/exchange/immediate') {
+      const body = request.postDataJSON()
+      return fulfill(route, ok(queueOperation('immediate_exchange', {
+        account_id: Number(body.account_id || 0),
+        resource_id: Number(body.product_id || 0)
+      })), 202)
+    }
+
+    if (method === 'POST' && path === '/api/exchange/tasks/batch-execute') {
+      return fulfill(route, ok(queueOperation('batch_exchange_tasks')), 202)
     }
 
     if (method === 'GET' && path === '/api/exchange/tasks') {
@@ -483,36 +608,66 @@ export async function mockBackend(page: Page) {
     if (method === 'POST' && path === '/api/exchange/tasks') {
       const body = request.postDataJSON()
       const product = products.find(item => item.id === Number(body.product_id)) || baseProduct
-      const exchangeAccount = exchangeAccounts.find(item => item.id === Number(body.exchange_account_id)) || baseExchangeAccount
-      const created = {
-        id: ++exchangeTaskSeq,
-        user_id: adminUser.id,
-        exchange_account_id: exchangeAccount.id,
-        product_id: product.id,
-        prize_id: product.prize_id,
-        prize_name: product.prize_name,
-        task_type: body.task_type || 'fixed',
-        max_attempts: body.max_attempts || 1,
-        attempted_count: 0,
-        status: 'pending',
-        success_count: 0,
-        fail_count: 0,
-        last_result: '',
-        created_at: now,
-        updated_at: now,
-        exchange_account: exchangeAccount,
-        product
-      }
-      exchangeTasks.push(created)
-      return fulfill(route, ok({ task: created }))
+      const explicitRuleIDs = Array.isArray(body.exchange_account_ids) ? body.exchange_account_ids.map(Number) : []
+      if (body.exchange_account_id) explicitRuleIDs.push(Number(body.exchange_account_id))
+      const cloudAccountIDs = Array.isArray(body.account_ids) ? body.account_ids.map(Number) : []
+      if (body.account_id) cloudAccountIDs.push(Number(body.account_id))
+
+      const selectedRules = explicitRuleIDs.length > 0
+        ? explicitRuleIDs.map(id => exchangeAccounts.find(item => item.id === id)).filter(Boolean)
+        : cloudAccountIDs.map(id => {
+            const cloudAccount = accounts.find(item => item.id === id) || baseAccount
+            return exchangeAccounts.find(item => item.account_id === cloudAccount.id) || {
+              ...baseExchangeAccount,
+              id: ++exchangeAccountSeq,
+              account_id: cloudAccount.id,
+              phone: cloudAccount.phone,
+              remark: `抢兑${cloudAccount.remark}`,
+              created_at: now,
+              updated_at: now
+            }
+          })
+
+      const rules = selectedRules.length > 0 ? selectedRules : [baseExchangeAccount]
+      const createdTasks = rules.map((exchangeAccount: any) => {
+        const created = {
+          id: ++exchangeTaskSeq,
+          user_id: adminUser.id,
+          exchange_account_id: exchangeAccount.id,
+          product_id: product.id,
+          prize_id: product.prize_id,
+          prize_name: product.prize_name,
+          task_type: body.task_type || 'fixed',
+          max_attempts: body.max_attempts || 1,
+          scheduled_exchange_time: body.scheduled_exchange_time || '',
+          restock_cycle: body.restock_cycle || 'daily',
+          restock_weekday: body.restock_weekday ?? null,
+          restock_day_of_month: body.restock_day_of_month ?? null,
+          attempted_count: 0,
+          status: 'pending',
+          success_count: 0,
+          fail_count: 0,
+          last_result: '',
+          created_at: now,
+          updated_at: now,
+          exchange_account: exchangeAccount,
+          product
+        }
+        exchangeTasks.push(created)
+        return created
+      })
+      return fulfill(route, ok({ task: createdTasks[0], tasks: createdTasks, created: createdTasks.length, errors: [] }))
     }
 
     if (path.match(/^\/api\/exchange\/tasks\/(\d+)$/) && method === 'DELETE') {
       return fulfill(route, ok({ message: 'deleted' }))
     }
 
-    if (path.match(/^\/api\/exchange\/tasks\/(\d+)\/execute$/) && method === 'POST') {
-      return fulfill(route, ok({ message: 'executed' }))
+    const exchangeTaskExecuteMatch = path.match(/^\/api\/exchange\/tasks\/(\d+)\/execute$/)
+    if (exchangeTaskExecuteMatch && method === 'POST') {
+      return fulfill(route, ok(queueOperation('exchange_task', {
+        resource_id: Number(exchangeTaskExecuteMatch[1])
+      })), 202)
     }
 
     if (method === 'GET' && path === '/api/admin/accounts/summaries') {
@@ -574,7 +729,7 @@ export async function mockBackend(page: Page) {
     }
 
     if (method === 'POST' && path === '/api/admin/exchange/execute-monthly') {
-      return fulfill(route, ok({ message: 'executed' }))
+      return fulfill(route, ok(queueOperation('monthly_exchange')), 202)
     }
 
     if (method === 'GET' && path === '/api/admin/users') {

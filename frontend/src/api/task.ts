@@ -1,5 +1,6 @@
 import request from './axios'
-import { unwrapApiData, type ApiResponse } from './response'
+import { unwrapApiData, unwrapOperationResponse, type ApiResponse, type OperationResponse } from './response'
+import { operationHeaders } from './operation'
 
 // 任务日志接口
 export interface TaskLog {
@@ -48,6 +49,8 @@ export interface DashboardData {
 export interface TrendPoint {
   date: string
   cloud_count: number
+  cloud_diff?: number
+  has_data?: boolean
 }
 
 // 账号排名接口
@@ -74,13 +77,33 @@ export interface CloudStatsResponse {
   page_size: number
 }
 
+export interface TaskLogQuery {
+  account_id?: number
+  task_type?: string
+  status?: string
+  page?: number
+  page_size?: number
+}
+
 // 获取任务日志
-export function getTaskLogs(accountId?: number, page: number = 1, pageSize: number = 20): Promise<TaskLogsResponse> {
-  const fallback: TaskLogsResponse = { task_logs: [], total: 0, page, page_size: pageSize }
+export function getTaskLogs(accountIdOrQuery?: number | TaskLogQuery, page: number = 1, pageSize: number = 20): Promise<TaskLogsResponse> {
+  const query: TaskLogQuery = typeof accountIdOrQuery === 'object' && accountIdOrQuery !== null
+    ? { ...accountIdOrQuery }
+    : { account_id: accountIdOrQuery, page, page_size: pageSize }
+  const normalizedPage = query.page ?? page
+  const normalizedPageSize = query.page_size ?? pageSize
+  const fallback: TaskLogsResponse = { task_logs: [], total: 0, page: normalizedPage, page_size: normalizedPageSize }
+
   return request<TaskLogsResponse | ApiResponse<TaskLogsResponse>>({
     url: '/api/tasks/logs',
     method: 'get',
-    params: { account_id: accountId, page, page_size: pageSize }
+    params: {
+      account_id: query.account_id,
+      task_type: query.task_type,
+      status: query.status,
+      page: normalizedPage,
+      page_size: normalizedPageSize
+    }
   }).then((res) => unwrapApiData(res, fallback))
 }
 
@@ -130,11 +153,8 @@ export function getTrendData(days: number = 7): Promise<{ trend_data: TrendPoint
 }
 
 // 触发所有账号的任务
-export function triggerAllTasks(): Promise<{ message: string }> {
-  return request({
-    url: '/api/tasks/trigger-all',
-    method: 'post'
-  })
+export function triggerAllTasks(): Promise<OperationResponse> {
+  return request<OperationResponse | ApiResponse<OperationResponse>>({ url: '/api/tasks/trigger-all', method: 'post', headers: operationHeaders() }).then(unwrapOperationResponse)
 }
 
 // 计算统计数据

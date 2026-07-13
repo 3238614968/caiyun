@@ -1,9 +1,10 @@
 package services
 
 import (
-	"caiyun/internal/middleware"
 	"caiyun/internal/models"
 	"caiyun/internal/repository"
+	"caiyun/internal/security/authcache"
+	"context"
 	"errors"
 	"time"
 
@@ -20,8 +21,10 @@ func todayStartCST() time.Time {
 }
 
 var (
-	ErrUserNotFound     = errors.New("用户不存在")
-	ErrCannotDeleteSelf = errors.New("不能删除自己")
+	ErrUserNotFound          = errors.New("用户不存在")
+	ErrCannotDeleteSelf      = errors.New("不能删除自己")
+	ErrCannotDemoteSelf      = errors.New("不能将自己的管理员角色降级")
+	ErrCannotRemoveLastAdmin = errors.New("不能移除最后一个管理员")
 )
 
 // AdminService 管理员服务
@@ -30,6 +33,7 @@ type AdminService struct {
 	accountRepo    *repository.AccountRepository
 	taskLogRepo    *repository.TaskLogRepository
 	taskConfigRepo *repository.TaskConfigRepository
+	unitOfWork     repository.UnitOfWork
 }
 
 // NewAdminService 创建管理员服务
@@ -38,12 +42,18 @@ func NewAdminService(
 	accountRepo *repository.AccountRepository,
 	taskLogRepo *repository.TaskLogRepository,
 	taskConfigRepo *repository.TaskConfigRepository,
+	unitOfWorks ...repository.UnitOfWork,
 ) *AdminService {
+	unitOfWork := repository.NewUnitOfWorkFromUserRepository(userRepo)
+	if len(unitOfWorks) > 0 && unitOfWorks[0] != nil {
+		unitOfWork = unitOfWorks[0]
+	}
 	return &AdminService{
 		userRepo:       userRepo,
 		accountRepo:    accountRepo,
 		taskLogRepo:    taskLogRepo,
 		taskConfigRepo: taskConfigRepo,
+		unitOfWork:     unitOfWork,
 	}
 }
 
@@ -149,18 +159,32 @@ type ResetUserPasswordRequest struct {
 	Password string `json:"password" binding:"required,min=12"`
 }
 
-// UpdateUserRole 更新用户角色
-func (s *AdminService) UpdateUserRole(userID uint, req *UpdateUserRoleRequest) error {
+// UpdateUserRole 更新用户角色，并吊销目标用户既有会话。
+func (s *AdminService) UpdateUserRole(userID, currentUserID uint, req *UpdateUserRoleRequest) error {
 	user, err := s.userRepo.FindByID(userID)
 	if err != nil {
 		return ErrUserNotFound
 	}
-	user.Role = req.Role
-	if err := s.userRepo.Update(user); err != nil {
+	if user.Role == req.Role {
+		return nil
+	}
+	if userID == currentUserID && user.Role == "admin" && req.Role != "admin" {
+		return ErrCannotDemoteSelf
+	}
+	if user.Role == "admin" && req.Role != "admin" {
+		adminCount, err := s.userRepo.CountByRole("admin")
+		if err != nil {
+			return err
+		}
+		if adminCount <= 1 {
+			return ErrCannotRemoveLastAdmin
+		}
+	}
+	if err := s.userRepo.UpdateRoleAndRevokeSessions(user.ID, req.Role); err != nil {
 		return err
 	}
-	// 角色变更后失效认证缓存，使下一次请求读到新角色。
-	middleware.InvalidateAuthUserCache(user.ID)
+	// 角色变更后失效认证缓存，并通过 token_version 使旧 JWT 立即失效。
+	authcache.Delete(user.ID)
 	return nil
 }
 
@@ -181,7 +205,7 @@ func (s *AdminService) ResetUserPassword(userID uint, req *ResetUserPasswordRequ
 		return err
 	}
 	// 管理员重置密码后立即失效该用户的认证缓存。
-	middleware.InvalidateAuthUserCache(user.ID)
+	authcache.Delete(user.ID)
 	return nil
 }
 
@@ -195,22 +219,97 @@ func (s *AdminService) UpdateAccountStatus(accountID uint, req *UpdateAccountSta
 	return s.accountRepo.SetActiveStatus(accountID, req.IsActive)
 }
 
-// DeleteUser 删除用户
+// DeleteUser 删除用户。禁止删除自己和最后一个管理员，避免管理面锁死。
 func (s *AdminService) DeleteUser(userID, currentUserID uint) error {
+	return s.DeleteUserContext(context.Background(), userID, currentUserID)
+}
+
+// DeleteUserContext atomically erases dependent business data, anonymizes audit
+// evidence and soft-deletes the anonymized user identity.
+func (s *AdminService) DeleteUserContext(ctx context.Context, userID, currentUserID uint) error {
 	if userID == currentUserID {
 		return ErrCannotDeleteSelf
 	}
-	if err := s.userRepo.Delete(userID); err != nil {
+	if s.unitOfWork == nil {
+		return errors.New("unit of work is not configured")
+	}
+	err := s.unitOfWork.WithinTransaction(ctx, func(repos repository.TransactionRepositories) error {
+		user, err := repos.User.FindByID(userID)
+		if err != nil {
+			return ErrUserNotFound
+		}
+		if user.Role == "admin" {
+			adminCount, err := repos.User.CountByRole("admin")
+			if err != nil {
+				return err
+			}
+			if adminCount <= 1 {
+				return ErrCannotRemoveLastAdmin
+			}
+		}
+
+		cleanup := []func(uint) error{
+			repos.Operation.DeleteByUserID,
+			repos.RefreshSession.DeleteByUserID,
+			repos.ExchangeRecord.DeleteByUserID,
+			repos.ExchangeTask.DeleteByUserID,
+			repos.ExchangeAccount.DeleteByUserID,
+			repos.TaskLog.DeleteByUserID,
+			repos.CloudStats.DeleteByUserID,
+			repos.Account.DeleteByUserID,
+			repos.WSMessage.DeleteByUserID,
+		}
+		for _, erase := range cleanup {
+			if err := erase(userID); err != nil {
+				return err
+			}
+		}
+		if err := repos.AuditLog.AnonymizeByUserID(userID); err != nil {
+			return err
+		}
+		return repos.User.AnonymizeAndDelete(userID)
+	})
+	if err != nil {
 		return err
 	}
-	// 删除用户后失效该用户的认证缓存。
-	middleware.InvalidateAuthUserCache(userID)
+	// Cache invalidation is deliberately after commit; a rolled-back deletion
+	// must not evict a still-valid user snapshot.
+	authcache.Delete(userID)
 	return nil
 }
 
-// DeleteAccount 删除账号
+// DeleteAccount 删除账号。
 func (s *AdminService) DeleteAccount(accountID uint) error {
-	return s.accountRepo.Delete(accountID)
+	return s.DeleteAccountContext(context.Background(), accountID)
+}
+
+// DeleteAccountContext atomically removes all data derived from a cloud
+// account and overwrites credentials before physically deleting the account.
+func (s *AdminService) DeleteAccountContext(ctx context.Context, accountID uint) error {
+	if s.unitOfWork == nil {
+		return errors.New("unit of work is not configured")
+	}
+	return s.unitOfWork.WithinTransaction(ctx, func(repos repository.TransactionRepositories) error {
+		if _, err := repos.Account.FindByID(accountID); err != nil {
+			return ErrAccountNotFound
+		}
+
+		cleanup := []func(uint) error{
+			repos.Operation.DeleteByAccountID,
+			repos.ExchangeRecord.DeleteByAccountID,
+			repos.ExchangeTask.DeleteByAccountID,
+			repos.ExchangeAccount.DeleteByAccountID,
+			repos.TaskLog.DeleteByAccountID,
+			repos.CloudStats.DeleteByAccountID,
+			repos.Account.AnonymizeAndDeleteByID,
+		}
+		for _, erase := range cleanup {
+			if err := erase(accountID); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }
 
 // StatsOverview 统计概览

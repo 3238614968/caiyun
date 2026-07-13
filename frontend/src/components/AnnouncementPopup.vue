@@ -10,18 +10,35 @@
   >
     <div class="popup-content">
       <div class="popup-icon">
-        <el-icon :size="48" color="#409EFF"><Bell /></el-icon>
+        <el-icon
+          :size="48"
+          color="#409EFF"
+        >
+          <Bell />
+        </el-icon>
       </div>
-      <h3 class="popup-title">{{ announcement?.title }}</h3>
-      <div class="popup-body">{{ announcement?.content }}</div>
-      <div class="popup-time" v-if="announcement?.created_at">
+      <h3 class="popup-title">
+        {{ announcement?.title }}
+      </h3>
+      <div class="popup-body">
+        {{ announcement?.content }}
+      </div>
+      <div
+        v-if="announcement?.created_at"
+        class="popup-time"
+      >
         发布时间：{{ formatDate(announcement.created_at) }}
       </div>
     </div>
     <template #footer>
       <div class="popup-footer">
         <span class="popup-hint">确认后本公告不会再次自动弹出</span>
-        <el-button type="primary" @click="closePopup">我知道了</el-button>
+        <el-button
+          type="primary"
+          @click="closePopup"
+        >
+          我知道了
+        </el-button>
       </div>
     </template>
   </el-dialog>

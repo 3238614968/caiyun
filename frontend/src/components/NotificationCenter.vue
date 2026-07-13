@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <el-popover
     placement="bottom-end"
     :width="400"
@@ -6,9 +6,18 @@
     popper-class="notification-popover"
   >
     <template #reference>
-      <el-badge :value="unreadCount" :hidden="unreadCount === 0" class="notification-badge">
-        <el-button type="text" class="header-btn">
-          <el-icon :size="20"><Bell /></el-icon>
+      <el-badge
+        :value="unreadCount"
+        :hidden="unreadCount === 0"
+        class="notification-badge"
+      >
+        <el-button
+          type="text"
+          class="header-btn"
+        >
+          <el-icon :size="20">
+            <Bell />
+          </el-icon>
         </el-button>
       </el-badge>
     </template>
@@ -17,10 +26,19 @@
       <div class="notification-header">
         <span class="header-title">通知中心</span>
         <div class="header-actions">
-          <el-button type="text" size="small" @click="markAllRead" v-if="unreadCount > 0">
+          <el-button
+            v-if="unreadCount > 0"
+            type="text"
+            size="small"
+            @click="markAllRead"
+          >
             全部已读
           </el-button>
-          <el-button type="text" size="small" @click="clearAll">
+          <el-button
+            type="text"
+            size="small"
+            @click="clearAll"
+          >
             清空
           </el-button>
         </div>
@@ -34,53 +52,111 @@
           :class="{ unread: !notification.read }"
           @click="handleNotificationClick(notification)"
         >
-          <div class="notification-icon" :class="notification.level">
+          <div
+            class="notification-icon"
+            :class="notification.level"
+          >
             <el-icon>
               <component :is="getNotificationIcon(notification.level)" />
             </el-icon>
           </div>
           <div class="notification-content">
-            <div class="notification-title">{{ notification.title }}</div>
-            <div class="notification-message">{{ notification.message }}</div>
-            <div class="notification-time">{{ formatTime(notification.timestamp) }}</div>
+            <div class="notification-title">
+              {{ notification.title }}
+            </div>
+            <div class="notification-message">
+              {{ notification.message }}
+            </div>
+            <div class="notification-time">
+              {{ formatTime(notification.timestamp) }}
+            </div>
           </div>
-          <div v-if="!notification.read" class="notification-dot"></div>
+          <div
+            v-if="!notification.read"
+            class="notification-dot"
+          />
         </div>
 
-        <el-empty v-if="notifications.length === 0" description="暂无通知" :image-size="80" />
+        <el-empty
+          v-if="notifications.length === 0"
+          description="暂无通知"
+          :image-size="80"
+        />
       </div>
 
       <div class="notification-footer">
-        <el-button type="text" @click="viewAllNotifications">查看全部</el-button>
+        <el-button
+          type="text"
+          @click="viewAllNotifications"
+        >
+          查看全部
+        </el-button>
       </div>
     </div>
   </el-popover>
 
-  <el-dialog v-model="historyVisible" title="通知历史" width="720px">
-    <el-table :data="notifications" border stripe max-height="500">
-      <el-table-column label="时间" width="170">
+  <el-dialog
+    v-model="historyVisible"
+    title="通知历史"
+    width="720px"
+  >
+    <el-table
+      :data="notifications"
+      border
+      stripe
+      max-height="500"
+    >
+      <el-table-column
+        label="时间"
+        width="170"
+      >
         <template #default="{ row }">
           {{ new Date(row.timestamp).toLocaleString('zh-CN') }}
         </template>
       </el-table-column>
-      <el-table-column prop="title" label="标题" min-width="160" />
-      <el-table-column prop="message" label="内容" min-width="260" show-overflow-tooltip />
-      <el-table-column label="级别" width="100">
+      <el-table-column
+        prop="title"
+        label="标题"
+        min-width="160"
+      />
+      <el-table-column
+        prop="message"
+        label="内容"
+        min-width="260"
+        show-overflow-tooltip
+      />
+      <el-table-column
+        label="级别"
+        width="100"
+      >
         <template #default="{ row }">
           <el-tag :type="row.level === 'error' ? 'danger' : row.level">
             {{ row.level }}
           </el-tag>
         </template>
       </el-table-column>
-      <el-table-column label="状态" width="90">
+      <el-table-column
+        label="状态"
+        width="90"
+      >
         <template #default="{ row }">
-          <el-tag :type="row.read ? 'info' : 'primary'">{{ row.read ? '已读' : '未读' }}</el-tag>
+          <el-tag :type="row.read ? 'info' : 'primary'">
+            {{ row.read ? '已读' : '未读' }}
+          </el-tag>
         </template>
       </el-table-column>
     </el-table>
     <template #footer>
-      <el-button @click="historyVisible = false">关闭</el-button>
-      <el-button type="primary" @click="markAllRead" :disabled="unreadCount === 0">全部标记已读</el-button>
+      <el-button @click="historyVisible = false">
+        关闭
+      </el-button>
+      <el-button
+        type="primary"
+        :disabled="unreadCount === 0"
+        @click="markAllRead"
+      >
+        全部标记已读
+      </el-button>
     </template>
   </el-dialog>
 </template>

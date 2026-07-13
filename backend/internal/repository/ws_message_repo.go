@@ -1,116 +1,103 @@
 package repository
 
 import (
-	"caiyun/internal/models"
 	"context"
 	"encoding/json"
 	"time"
 
+	"caiyun/internal/models"
+
+	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
 
-// WSMessageRepository WebSocket消息仓库
+// WSMessageRepository persists WebSocket messages until the browser explicitly
+// acknowledges them. Queuing a frame is not treated as delivery.
 type WSMessageRepository struct {
 	db *gorm.DB
 }
 
-// NewWSMessageRepository 创建WebSocket消息仓库
-func NewWSMessageRepository(db *gorm.DB) *WSMessageRepository {
-	return &WSMessageRepository{db: db}
-}
+func NewWSMessageRepository(db *gorm.DB) *WSMessageRepository { return &WSMessageRepository{db: db} }
 
-// WithContext 返回绑定到指定 context 的仓库副本，便于数据库操作响应请求取消和超时。
 func (r *WSMessageRepository) WithContext(ctx context.Context) *WSMessageRepository {
-	if ctx == nil {
+	if r == nil || ctx == nil {
 		return r
 	}
 	return &WSMessageRepository{db: r.db.WithContext(ctx)}
 }
 
-// Create 创建消息
 func (r *WSMessageRepository) Create(message *models.WebSocketMessage) error {
 	return r.db.Create(message).Error
 }
 
-// GetUnreadMessages 获取用户的未读消息
 func (r *WSMessageRepository) GetUnreadMessages(userID uint, limit int) ([]*models.WebSocketMessage, error) {
 	var messages []*models.WebSocketMessage
 	err := r.db.Where("user_id = ? AND is_read = ?", userID, false).
-		Order("created_at DESC").
-		Limit(limit).
-		Find(&messages).Error
+		Where("expires_at IS NULL OR expires_at > ?", time.Now()).
+		Order("sequence ASC, created_at ASC").Limit(limit).Find(&messages).Error
 	return messages, err
 }
 
-// GetUndeliveredMessages 获取用户的未送达消息
 func (r *WSMessageRepository) GetUndeliveredMessages(userID uint, limit int) ([]*models.WebSocketMessage, error) {
 	var messages []*models.WebSocketMessage
 	err := r.db.Where("user_id = ? AND is_delivered = ?", userID, false).
-		Order("created_at DESC").
-		Limit(limit).
-		Find(&messages).Error
+		Where("expires_at IS NULL OR expires_at > ?", time.Now()).
+		Order("sequence ASC, created_at ASC").Limit(limit).Find(&messages).Error
 	return messages, err
 }
 
-// MarkAsRead 标记指定用户自己的消息为已读，避免仅凭 messageID 越权修改其他用户消息。
 func (r *WSMessageRepository) MarkAsRead(userID, messageID uint) error {
 	now := time.Now()
-	query := r.db.Model(&models.WebSocketMessage{}).
-		Where("id = ? AND user_id = ?", messageID, userID)
-	return query.Updates(map[string]interface{}{
-		"is_read": true,
-		"read_at": now,
-	}).Error
+	return r.db.Model(&models.WebSocketMessage{}).Where("id = ? AND user_id = ?", messageID, userID).
+		Updates(map[string]interface{}{"is_read": true, "read_at": now}).Error
 }
 
-// MarkAsDelivered 标记消息为已送达
 func (r *WSMessageRepository) MarkAsDelivered(messageID uint) error {
 	now := time.Now()
-	return r.db.Model(&models.WebSocketMessage{}).
-		Where("id = ?", messageID).
-		Updates(map[string]interface{}{
-			"is_delivered": true,
-			"delivered_at": now,
-		}).Error
+	return r.db.Model(&models.WebSocketMessage{}).Where("id = ?", messageID).
+		Updates(map[string]interface{}{"is_delivered": true, "delivered_at": now, "acked_at": now}).Error
 }
 
-// MarkAllAsReadByUser 标记用户的所有消息为已读
+// MarkAsDeliveredByMessageID scopes ACK by authenticated user and opaque ID.
+func (r *WSMessageRepository) MarkAsDeliveredByMessageID(userID uint, messageID string) (bool, error) {
+	if messageID == "" {
+		return false, nil
+	}
+	now := time.Now()
+	result := r.db.Model(&models.WebSocketMessage{}).
+		Where("user_id = ? AND message_id = ? AND is_delivered = ?", userID, messageID, false).
+		Updates(map[string]interface{}{"is_delivered": true, "delivered_at": now, "acked_at": now})
+	return result.RowsAffected == 1, result.Error
+}
+
 func (r *WSMessageRepository) MarkAllAsReadByUser(userID uint) error {
 	now := time.Now()
-	return r.db.Model(&models.WebSocketMessage{}).
-		Where("user_id = ? AND is_read = ?", userID, false).
-		Updates(map[string]interface{}{
-			"is_read": true,
-			"read_at": now,
-		}).Error
+	return r.db.Model(&models.WebSocketMessage{}).Where("user_id = ? AND is_read = ?", userID, false).
+		Updates(map[string]interface{}{"is_read": true, "read_at": now}).Error
 }
 
-// DeleteOldMessages 删除旧消息（清理策略）
 func (r *WSMessageRepository) DeleteOldMessages(before time.Time) error {
-	return r.db.Where("created_at < ?", before).Delete(&models.WebSocketMessage{}).Error
+	return r.db.Where("created_at < ? OR (expires_at IS NOT NULL AND expires_at < ?)", before, time.Now()).Delete(&models.WebSocketMessage{}).Error
 }
 
-// GetMessageCount 获取用户的消息数量
 func (r *WSMessageRepository) GetMessageCount(userID uint, isRead bool) (int64, error) {
 	var count int64
-	err := r.db.Model(&models.WebSocketMessage{}).
-		Where("user_id = ? AND is_read = ?", userID, isRead).
-		Count(&count).Error
+	err := r.db.Model(&models.WebSocketMessage{}).Where("user_id = ? AND is_read = ?", userID, isRead).
+		Where("expires_at IS NULL OR expires_at > ?", time.Now()).Count(&count).Error
 	return count, err
 }
 
-// SaveMessage 保存WebSocket消息（便捷方法）
 func (r *WSMessageRepository) SaveMessage(userID uint, msgType string, data interface{}) error {
+	return r.SaveMessageEnvelope(userID, msgType, data, uuid.NewString(), 0, time.Now().Add(24*time.Hour))
+}
+
+func (r *WSMessageRepository) SaveMessageEnvelope(userID uint, msgType string, data interface{}, messageID string, sequence uint64, expiresAt time.Time) error {
 	dataJSON, err := json.Marshal(data)
 	if err != nil {
 		return err
 	}
-
-	message := &models.WebSocketMessage{
-		UserID: userID,
-		Type:   msgType,
-		Data:   string(dataJSON),
+	if messageID == "" {
+		messageID = uuid.NewString()
 	}
-
-	return r.Create(message)
+	return r.Create(&models.WebSocketMessage{UserID: userID, Type: msgType, Data: string(dataJSON), MessageID: messageID, Sequence: sequence, ExpiresAt: &expiresAt})
 }

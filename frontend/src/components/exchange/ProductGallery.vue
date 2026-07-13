@@ -6,7 +6,13 @@
           <span class="filter-title">商品筛选</span>
           <span class="filter-hint">当前展示 {{ products.length }} 个商品</span>
         </div>
-        <el-tag size="small" effect="plain" type="primary">{{ category || '全部分类' }}</el-tag>
+        <el-tag
+          size="small"
+          effect="plain"
+          type="primary"
+        >
+          {{ category || '全部分类' }}
+        </el-tag>
       </div>
 
       <div class="filter-controls">
@@ -14,14 +20,22 @@
           v-model="keyword"
           placeholder="搜索商品名称..."
           clearable
-          prefix-icon="Search"
+          :prefix-icon="Search"
           class="search-input"
           @change="$emit('search')"
         />
 
-        <div class="category-list" :class="{ 'mobile-scroll': isMobile }">
-          <el-radio-group v-model="category" size="small">
-            <el-radio-button label="">全部</el-radio-button>
+        <div
+          class="category-list"
+          :class="{ 'mobile-scroll': isMobile }"
+        >
+          <el-radio-group
+            v-model="category"
+            size="small"
+          >
+            <el-radio-button label="">
+              全部
+            </el-radio-button>
             <el-radio-button
               v-for="cat in categories"
               :key="cat"
@@ -34,13 +48,19 @@
       </div>
     </div>
 
-    <div class="product-grid" :class="{ 'mobile-grid': isMobile }">
-      <el-empty v-if="products.length === 0" description="暂无商品" />
+    <div
+      class="product-grid"
+      :class="{ 'mobile-grid': isMobile }"
+    >
+      <el-empty
+        v-if="products.length === 0"
+        description="暂无商品"
+      />
       <ProductCard
         v-for="product in products"
         :key="product.id"
         :product="product"
-        :image-url="getProductImageUrl(product)"
+        :image-source="getProductImageSource(product)"
         :is-mobile="isMobile"
         :immediate-enabled="!!exchangeConfig?.immediate_exchange_enabled"
         @reserve="$emit('reserve', product)"
@@ -52,7 +72,9 @@
 </template>
 
 <script setup lang="ts">
+import { Search } from '@element-plus/icons-vue'
 import type { ExchangeConfig } from '@/api/exchange'
+import type { ProductImageSource } from '@/utils/product-image'
 import ProductCard from '@/components/exchange/ProductCard.vue'
 
 const keyword = defineModel<string>('keyword', { required: true })
@@ -63,7 +85,7 @@ defineProps<{
   products: any[]
   categories: string[]
   exchangeConfig: ExchangeConfig | null
-  getProductImageUrl: (product: any) => string
+  getProductImageSource: (product: any) => ProductImageSource
 }>()
 
 defineEmits<{

@@ -9,8 +9,8 @@ import (
 
 func TestExchangeMonthlySeriesUsesProductCategory(t *testing.T) {
 	series := exchangeMonthlySeriesForProduct(&models.Product{
-		Category:   "音乐类会员",
-		PrizedName: "QQ音乐绿钻会员月卡",
+		Category:  "音乐类会员",
+		PrizeName: "QQ音乐绿钻会员月卡",
 	}, "QQ音乐绿钻会员月卡")
 
 	if series.Key != "category:音乐类会员" {
@@ -66,5 +66,14 @@ func TestExchangeMonthlyWindowStartsAtMonthBoundary(t *testing.T) {
 	}
 	if end.Format("2006-01-02") != "2026-07-01" {
 		t.Fatalf("unexpected next month start: %s", end)
+	}
+}
+
+func TestExchangeMonthlySeriesLockTTLAlignsToMonthEnd(t *testing.T) {
+	now := time.Date(2026, 1, 31, 23, 30, 0, 0, time.Local)
+	ttl := exchangeMonthlySeriesLockTTL(now)
+	want := 90 * time.Minute
+	if ttl != want {
+		t.Fatalf("exchangeMonthlySeriesLockTTL() = %s, want %s", ttl, want)
 	}
 }

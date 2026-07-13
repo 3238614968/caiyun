@@ -1,6 +1,6 @@
 # 移动云盘自动任务与兑换管理系统
 
-![Go](https://img.shields.io/badge/Go-1.21+-00ADD8?logo=go&logoColor=white)
+![Go](https://img.shields.io/badge/Go-1.25.11-00ADD8?logo=go&logoColor=white)
 ![Vue](https://img.shields.io/badge/Vue-3-42b883?logo=vue.js&logoColor=white)
 ![TypeScript](https://img.shields.io/badge/TypeScript-5.x-3178C6?logo=typescript&logoColor=white)
 ![MySQL](https://img.shields.io/badge/MySQL-8.0+-4479A1?logo=mysql&logoColor=white)
@@ -194,16 +194,14 @@
 │                      Nginx / Reverse Proxy                 │
 └─────────────────────────────────────────────────────────────┘
                               │
-              ┌───────────────┴───────────────┐
-              ▼                               ▼
-┌─────────────────────────┐      ┌─────────────────────────┐
-│       Go API 服务       │      │      Go Worker 服务     │
-│  - 用户认证 / 接口层    │      │  - 定时任务 / 调度执行  │
-│  - 账号 / 任务 / 商品   │      │  - 自动任务 / 抢兑执行  │
-│  - 日志 / 管理后台接口  │      │  - 日志记录 / 状态同步  │
-└─────────────────────────┘      └─────────────────────────┘
-              │                               │
-              └───────────────┬───────────────┘
+                              ▼
+┌─────────────────────────────────────────────────────────────┐
+│             统一后端制品 backend/caiyun-linux             │
+│  api：用户认证 / REST / WebSocket / 管理接口               │
+│  worker：定时任务 / 队列消费 / 自动任务 / 抢兑执行          │
+│  migrate / reencrypt：发布迁移与字段密钥轮换                │
+└─────────────────────────────────────────────────────────────┘
+                              │
                               ▼
 ┌─────────────────────────────────────────────────────────────┐
 │                        MySQL / Redis                       │
@@ -219,8 +217,7 @@
 |------|------|------|
 | 前端 | Vue 3 + TypeScript + Element Plus | 管理后台与业务界面 |
 | 图表 | ECharts | 首页趋势图与统计展示 |
-| 后端 API | Go + Gin | RESTful API |
-| 后端 Worker | Go | 任务调度、自动执行、抢兑执行 |
+| 后端统一制品 | Go + Gin | 同一二进制按 `api` / `worker` 等子命令运行 |
 | 数据库 | MySQL 8.0+ | 持久化存储 |
 | 缓存 | Redis | 队列、缓存、状态管理 |
 
@@ -232,11 +229,11 @@
 .
 ├── backend/                       # Go 后端
 │   ├── cmd/
-│   │   ├── api/                   # API 服务入口
-│   │   └── worker/                # Worker 服务入口
+│   │   └── caiyun/                # 统一后端入口与子命令分发
 │   ├── configs/                   # 配置模板
 │   ├── docs/                      # 项目文档
 │   ├── internal/
+│   │   ├── app/                   # api/worker/migrator/reencrypt 运行模块
 │   │   ├── core/                  # HTTP / Auth / API / Task 核心能力
 │   │   ├── handlers/              # HTTP 处理器
 │   │   ├── middleware/            # 中间件
@@ -248,13 +245,15 @@
 ├── frontend/                      # Vue 前端
 │   ├── src/
 │   └── dist/                      # 前端生产构建产物
+├── deploy/                        # systemd / logrotate / 部署说明模板
+├── scripts/                       # 本地 CI、部署、回滚、健康检查脚本
 ├── Makefile                       # 本地构建/测试/审计等价脚本
 ├── nginx-server.conf              # Nginx 配置示例
 ├── docker-compose.yml             # Docker Compose 示例
 └── README.md
 ```
 
-> 二进制构建产物（`api-linux` / `worker-linux`）已不在仓库内维护，请通过 `make backend-build` 本地生成。
+> 后端只发布一个构建产物 `backend/caiyun-linux`。API、Worker、迁移器和重加密工具是该二进制的不同子命令，不再分别维护多个后端制品。
 
 ---
 
@@ -262,7 +261,7 @@
 
 ### 环境要求
 
-- Go 1.21+
+- Go 1.25.11（以 `backend/go.mod` 为准；本地开发建议启用 `GOTOOLCHAIN=auto`）
 - Node.js 18+
 - MySQL 8.0+
 - Redis 6.0+
@@ -308,14 +307,14 @@ SMTP_USE_TLS=false
 
 ```bash
 cd backend
-go run cmd/api/main.go
+go run ./cmd/caiyun api
 ```
 
 ### 4. 启动 Worker
 
 ```bash
 cd backend
-go run cmd/worker/main.go
+go run ./cmd/caiyun worker
 ```
 
 ### 5. 启动前端
@@ -328,7 +327,7 @@ npm run dev
 
 ## 构建与部署
 
-### 本地前端构建
+### 前端构建
 
 ```bash
 cd frontend
@@ -336,134 +335,125 @@ npm install
 npm run build
 ```
 
-前端构建输出目录：
+输出目录为 `frontend/dist/`。
 
-```text
-frontend/dist
-```
-
-### 后端 Linux amd64 编译
-
-> 当前项目默认以后端 **Linux / amd64** 为目标构建平台。
+### 唯一后端制品
 
 ```bash
+make backend-build
+# 等价命令：
 cd backend
-GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o api-linux ./cmd/api
-GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o worker-linux ./cmd/worker
+GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o caiyun-linux ./cmd/caiyun
 ```
 
-构建输出文件：
+唯一后端构建输出为 `backend/caiyun-linux`，通过子命令按需运行：
 
 ```text
-backend/api-linux
-backend/worker-linux
+caiyun-linux api
+caiyun-linux worker
+caiyun-linux migrate [--validate-only]
+caiyun-linux reencrypt [--apply]
+caiyun-linux all
+caiyun-linux version
 ```
 
-### Docker 部署
+生产环境建议使用同一个制品分别运行 API 和 Worker；`all` 是单机便捷监督模式，不替代容器或 systemd 的进程隔离。
 
-首次启动前建议在项目根目录创建 `.env`，至少填写以下变量：
+### Docker Compose
 
-```bash
-MYSQL_ROOT_PASSWORD=replace_with_strong_root_password
+根目录 `.env` 至少配置：
+
+```env
+APP_ENV=production
+MYSQL_ROOT_PASSWORD=<强随机 root 密码>
 MYSQL_USER=caiyun_app
-MYSQL_PASSWORD=replace_with_strong_app_password
-REDIS_PASSWORD=replace_with_strong_redis_password
-JWT_SECRET=replace_with_32_chars_random_secret
-WORKER_MONITOR_TOKEN=replace_with_random_monitor_token
-WORKER_MONITOR_HOST=0.0.0.0
-WORKER_MONITOR_PORT=8081
-WORKER_MONITOR_ALLOW_PLAINTEXT=true
-GRAFANA_ADMIN_PASSWORD=replace_with_strong_grafana_password
-# 逗号分隔。必须包含浏览器实际访问前端的 Origin，例如域名、局域网 IP 或非 80 端口。
-ALLOWED_ORIGINS=http://localhost,http://127.0.0.1,http://your-domain.com
-
-# 可选：启用密码找回邮件
-SMTP_HOST=smtp.example.com
-SMTP_PORT=587
-SMTP_USERNAME=your_smtp_username
-SMTP_PASSWORD=your_smtp_password_or_app_password
-SMTP_FROM=no-reply@example.com
-SMTP_FROM_NAME=移动云盘
-SMTP_USE_TLS=false
+MYSQL_PASSWORD=<强随机应用数据库密码>
+REDIS_PASSWORD=<强随机 Redis 密码>
+JWT_SECRET=<至少 32 字符随机 JWT 密钥>
+DATA_ENCRYPTION_KEYS=v1=<32 字节随机数据密钥>
+DATA_ENCRYPTION_CURRENT_VERSION=v1
+DB_AUTO_MIGRATE=false
+WORKER_MONITOR_TOKEN=<强随机监控 Token>
+GRAFANA_ADMIN_PASSWORD=<强随机 Grafana 密码>
+ALLOWED_ORIGINS=https://your-domain.example
+# 直连为 none；反代时仅填写实际 Nginx/Ingress IP 或 CIDR。
+TRUSTED_PROXIES=none
 ```
-
-Compose 模式下前端 Nginx 会统一代理 `/api` 与 `/ws` 到 `backend-api:8080`，后端端口仅绑定到宿主机 `127.0.0.1`。如果通过 `http://192.168.x.x`、`https://example.com` 或 `http://localhost:8088` 访问前端，请同步把这些完整 Origin 加入 `ALLOWED_ORIGINS`，否则跨域 API 或 WebSocket Origin 校验会拒绝连接。
 
 ```bash
-docker-compose build
-docker-compose up -d
+docker compose build
+docker compose up -d
 ```
 
-Compose 会启动以下核心服务：
+`backend-migrate`、`backend-api`、`backend-worker` 使用同一个镜像，分别执行 `migrate`、`api`、`worker`；迁移成功后业务进程才启动。后端端口默认只绑定宿主机回环地址。
 
-- `mysql`：初始化并持久化业务数据库
-- `redis`：启用 `requirepass`，用于队列、缓存和密码找回验证码
-- `backend-api`：仅绑定到宿主机 `127.0.0.1:8080`
-- `backend-worker`：Compose 中仅发布到宿主机 `127.0.0.1:8081`；应用默认只监听本机，Compose/K8s 显式设置 `WORKER_MONITOR_HOST=0.0.0.0` 和 `WORKER_MONITOR_ALLOW_PLAINTEXT=true` 供本地端口映射/探针访问，监控接口需要 `WORKER_MONITOR_TOKEN`
-- `frontend`：对外暴露 Web 页面，并代理 `/api`、`/ws`
-- `grafana`：示例监控面板，仅绑定到宿主机 `127.0.0.1:3000`
+### Kubernetes
 
-### Kubernetes 部署示例
-
-项目提供单文件示例清单：
-
-```text
-k8s/caiyun.yaml
-```
-
-部署前必须先创建业务 Secret，不要使用弱口令：
+部署前创建 Secret：
 
 ```bash
-kubectl apply -f k8s/caiyun.yaml --dry-run=client
-
 kubectl create namespace caiyun
 kubectl -n caiyun create secret generic caiyun-secrets \
   --from-literal=mysql-root-password='<强随机 root 密码>' \
   --from-literal=mysql-password='<强随机应用数据库密码>' \
   --from-literal=redis-password='<强随机 Redis 密码>' \
   --from-literal=jwt-secret='<至少 32 字符随机 JWT 密钥>' \
+  --from-literal=data-encryption-keys='v1=<32 字节随机数据密钥>' \
   --from-literal=worker-monitor-token='<强随机 Worker 监控 Token>' \
   --from-literal=smtp-password='<SMTP 密码，可为空>'
-
-kubectl apply -f k8s/caiyun.yaml
 ```
 
-说明：
-
-- `k8s/caiyun.yaml` 已内置 `caiyun-mysql-init-sql` ConfigMap，首次启动 MySQL 空 PVC 时会自动执行初始化 SQL。
-- MySQL 使用 `mysql-data` PVC，请根据集群 StorageClass 调整容量、回收策略和备份方案。
-- 示例镜像名固定为 `caiyun-api:2.1.0`、`caiyun-worker:2.1.0`、`caiyun-frontend:2.1.0`，实际部署前请替换为你的镜像仓库地址、不可变版本号或镜像 digest。
-- `ALLOWED_ORIGINS` 默认是占位域名，请改为浏览器实际访问前端的完整 Origin。
-- API、Worker、Frontend 示例已配置非 root、只读根文件系统、能力收敛、资源 requests/limits 和健康探针；如镜像运行用户变化，请同步调整 `securityContext`。
-- 如果使用外部 MySQL，可移除清单中的 MySQL Deployment/PVC/Service，并确保外部库已执行初始化 SQL。
-
-### 手动部署示例
+每次发布必须重建固定名称迁移 Job；已完成的 Job 不会因 `kubectl apply` 自动重跑，PodTemplate 变化还会触发 immutable 校验。使用：
 
 ```bash
-# 1) 编译后端
-cd backend
-GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o api-linux ./cmd/api
-GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o worker-linux ./cmd/worker
-
-# 2) 编译前端
-cd ../frontend
-npm install
-npm run build
-
-# 3) 上传构建产物
-scp -r ../backend/api-linux ../backend/worker-linux root@server:/www/wwwroot/caiyun/
-scp -r dist root@server:/www/wwwroot/caiyun/frontend/
+bash scripts/deploy-k8s.sh
 ```
 
-生产环境手动替换时通常只需要发布以下内容：
+脚本会删除旧 `caiyun-migrate`、应用 `k8s/caiyun.yaml`、等待迁移完成，再等待 API、Worker、Frontend rollout。示例后端镜像统一为 `caiyun-backend:2.1.0`，生产请替换为不可变 tag 或 digest，并把 `TRUSTED_PROXIES` 改为真实 Ingress 网段。
 
-- `backend/api-linux`：API 服务二进制
-- `backend/worker-linux`：Worker 服务二进制
-- `frontend/dist/`：前端静态资源目录
-- `backend/configs/.env.example`：仅作为配置模板参考；生产 `.env` 请按实际环境维护，不要直接覆盖
+### 裸机 / 宝塔发布
+
+生产发布顺序：
+
+1. 备份数据库和当前发布目录。
+2. 使用新制品执行 `caiyun-linux migrate`。
+3. 执行 `caiyun-linux migrate --validate-only`。
+4. 灰度 API。
+5. 发布 Worker。
+6. 检查 `/startupz`、`/readyz`、`/livez`。
+
+构建与打包：
+
+```powershell
+.\scripts\build-linux.ps1 -Version local-unified
+cd frontend
+npm install
+npm run build
+cd ..
+.\scripts\package-release.ps1 -Version local-unified
+.\scripts\release-smoke-test.ps1 -Version local-unified
+```
+
+服务器部署和回滚：
+
+```bash
+bash scripts/deploy-linux.sh --target /www/wwwroot/caiyun --health-check
+bash scripts/rollback-linux.sh --target /www/wwwroot/caiyun
+```
+
+部署脚本默认运行同版本 `migrate`；只有外部流水线已经完成迁移时才使用 `--skip-migrations`。迁移失败时不会替换文件，并会尝试恢复原 API/Worker。生产 `.env` 由服务器独立维护，不要用示例文件覆盖。
+
+发布目录包含：
+
+- `caiyun-linux`
+- `caiyun-frontend-<version>.tar.gz`
+- `caiyun-migrations-<version>.tar.gz`
+- 监控、日历、SBOM 和 `SHA256SUMS`
+- 部署、回滚、健康检查、归档与密钥轮换脚本
+
+探针语义：`/livez` 只表示进程存活；`/readyz` 校验 MySQL、Redis 和队列；`/startupz` 表示配置、依赖及初始化已完成。
 
 ---
-
 ## 安全与质量检查
 
 提交或部署前建议执行以下本地检查：
@@ -480,18 +470,29 @@ npm run typecheck
 npm run lint -- --quiet
 npm run build
 npm run e2e
+# 可选：生成 dist/bundle-report.json，分析前端资源体积
+npm run analyze
 ```
 
-Windows/PowerShell 环境可直接使用本地 CI 等价脚本：
+Windows/PowerShell 环境可直接使用本地 CI 等价脚本。脚本会执行后端测试、覆盖率编译、`go vet`、前端 typecheck/lint/unit/build/E2E；`npm audit` 需要向 npm registry 发送依赖信息，默认不执行，可通过 `-WithAudit` 显式开启：
 
 ```powershell
 .\scripts\ci-local.ps1 -SkipInstall
+# 如需同时执行 npm audit：
+.\scripts\ci-local.ps1 -SkipInstall -WithAudit
 ```
 
 如需同时验证真实 Redis 队列集成测试：
 
 ```powershell
 .\scripts\ci-local.ps1 -SkipInstall -WithRedisIntegration -RedisAddr 127.0.0.1:6379 -RedisDB 15
+```
+
+如需验证真实 MySQL 的版本化迁移与 Schema 校验集成测试，可在具备 MySQL 8 的环境执行：
+
+```bash
+cd backend
+CAIYUN_MYSQL_INTEGRATION=1 CAIYUN_TEST_MYSQL_ADDR=127.0.0.1:3306 CAIYUN_TEST_MYSQL_USER=root CAIYUN_TEST_MYSQL_PASSWORD=your_root_password go test ./internal/dbmigrate -run MySQLIntegration -count=1
 ```
 
 可选真实 Redis 队列集成测试默认跳过，如需验证生产 Redis 行为：
@@ -509,6 +510,8 @@ go test ./internal/queue -run RedisIntegration -count=1
 - 前端 E2E：[`frontend/docs/E2E_TESTING.md`](frontend/docs/E2E_TESTING.md)
 - Redis 队列集成测试：[`backend/docs/REDIS_QUEUE_INTEGRATION_TESTS.md`](backend/docs/REDIS_QUEUE_INTEGRATION_TESTS.md)
 - Redis Streams 迁移评估：[`backend/docs/REDIS_STREAMS_QUEUE_MIGRATION.md`](backend/docs/REDIS_STREAMS_QUEUE_MIGRATION.md)
+- 生产运行与观测清单：[`backend/docs/OPERATIONS_CHECKLIST.md`](backend/docs/OPERATIONS_CHECKLIST.md)
+- 部署模板说明：[`deploy/README.md`](deploy/README.md)
 
 当前安全基线包括：
 
@@ -600,11 +603,11 @@ go test ./internal/queue -run RedisIntegration -count=1
 - 根目录调试脚本 / 实验脚本
 - 兑换相关独立样例或抓图脚本
 
-生产部署建议只发布：
+生产部署建议优先发布版本化产物：
 
-- `backend/cmd/api`
-- `backend/cmd/worker`
-- `frontend`
+- `release/<version>-linux-amd64/caiyun-linux`
+- `release/<version>-linux-amd64/caiyun-frontend-<version>.tar.gz`
+- `release/<version>-linux-amd64/SHA256SUMS`
 
 ---
 

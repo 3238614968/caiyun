@@ -79,7 +79,17 @@ func isUsableExchangePrizeID(prizeID string) bool {
 
 // performExchange wraps the exchange HTTP request for both manual and scheduled flows.
 func performExchange(account *models.ExchangeAccount, prizeID string, tokenMgr *TokenManager) (bool, string, int) {
+	return performExchangeContext(context.Background(), account, prizeID, tokenMgr)
+}
+
+func performExchangeContext(ctx context.Context, account *models.ExchangeAccount, prizeID string, tokenMgr *TokenManager) (bool, string, int) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	startTime := time.Now()
+	if err := ctx.Err(); err != nil {
+		return false, err.Error(), int(time.Since(startTime).Milliseconds())
+	}
 
 	authCtx, err := prepareExchangeAuth(account, tokenMgr)
 	if err != nil {
@@ -89,8 +99,8 @@ func performExchange(account *models.ExchangeAccount, prizeID string, tokenMgr *
 		return false, "JWT token 为空", int(time.Since(startTime).Milliseconds())
 	}
 
-	session := newExchangeHTTPSession(account, authCtx)
-	result := executeExchangeOnce(prizeID, authCtx, session)
+	session := newExchangeHTTPSessionContext(ctx, account, authCtx)
+	result := executeExchangeOnceContext(ctx, prizeID, authCtx, session)
 	return result.success, result.message, result.execTime
 }
 
@@ -127,12 +137,19 @@ func prepareExchangeAuth(account *models.ExchangeAccount, tokenMgr *TokenManager
 }
 
 func executeExchangeOnce(prizeID string, authCtx *exchangeAuthContext, session *exchangeHTTPSession) exchangeAttemptResult {
+	return executeExchangeOnceContext(context.Background(), prizeID, authCtx, session)
+}
+
+func executeExchangeOnceContext(ctx context.Context, prizeID string, authCtx *exchangeAuthContext, session *exchangeHTTPSession) exchangeAttemptResult {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	startTime := time.Now()
 	if session == nil {
-		session = newExchangeHTTPSession(nil, authCtx)
+		session = newExchangeHTTPSessionContext(ctx, nil, authCtx)
 	}
 
-	offset, solveInfo, err := obtainExchangeSlideOffset(session, authCtx)
+	offset, solveInfo, err := obtainExchangeSlideOffsetContext(ctx, session, authCtx)
 	if err != nil {
 		return exchangeAttemptResult{
 			success:  false,
@@ -147,7 +164,7 @@ func executeExchangeOnce(prizeID string, authCtx *exchangeAuthContext, session *
 
 	exchangeURL := buildExchangeURLWithPuzzle(prizeID, finalOffset)
 
-	req, err := http.NewRequest(http.MethodGet, exchangeURL, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, exchangeURL, nil)
 	if err != nil {
 		return exchangeAttemptResult{success: false, message: fmt.Sprintf("创建请求失败：%v", err), execTime: int(time.Since(startTime).Milliseconds()), stop: true}
 	}
@@ -203,6 +220,13 @@ func executeExchangeOnce(prizeID string, authCtx *exchangeAuthContext, session *
 }
 
 func newExchangeHTTPSession(account *models.ExchangeAccount, authCtx *exchangeAuthContext) *exchangeHTTPSession {
+	return newExchangeHTTPSessionContext(context.Background(), account, authCtx)
+}
+
+func newExchangeHTTPSessionContext(ctx context.Context, account *models.ExchangeAccount, authCtx *exchangeAuthContext) *exchangeHTTPSession {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	jar, _ := cookiejar.New(nil)
 	client := &http.Client{
 		Timeout: exchangeRequestTimeout,
@@ -211,8 +235,8 @@ func newExchangeHTTPSession(account *models.ExchangeAccount, authCtx *exchangeAu
 
 	userAgent := shumei.RandomMarketUserAgent()
 	deviceID := exchangeFallbackDeviceID
-	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
-	if fetchedDeviceID, err := shumei.FetchDeviceID(ctx, client, ""); err == nil && strings.TrimSpace(fetchedDeviceID) != "" {
+	deviceCtx, cancel := context.WithTimeout(ctx, 12*time.Second)
+	if fetchedDeviceID, err := shumei.FetchDeviceID(deviceCtx, client, ""); err == nil && strings.TrimSpace(fetchedDeviceID) != "" {
 		deviceID = fetchedDeviceID
 	}
 	cancel()
@@ -335,19 +359,30 @@ func buildExchangeHeaders(authCtx *exchangeAuthContext, session *exchangeHTTPSes
 }
 
 func obtainExchangeSlideOffset(session *exchangeHTTPSession, authCtx *exchangeAuthContext) (int, string, error) {
+	return obtainExchangeSlideOffsetContext(context.Background(), session, authCtx)
+}
+
+func obtainExchangeSlideOffsetContext(ctx context.Context, session *exchangeHTTPSession, authCtx *exchangeAuthContext) (int, string, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	var lastErr error
 	for attempt := 1; attempt <= exchangeSlideMaxAttempt; attempt++ {
-		payload, err := fetchExchangeSlide(session, authCtx)
+		payload, err := fetchExchangeSlideContext(ctx, session, authCtx)
 		if err != nil {
 			lastErr = err
-			time.Sleep(time.Duration(attempt) * 200 * time.Millisecond)
+			if err := sleepExchangeContext(ctx, time.Duration(attempt)*200*time.Millisecond); err != nil {
+				return 0, "", err
+			}
 			continue
 		}
 
-		result, err := sms.SolveSlide(payload.puzzle, payload.picture)
+		result, err := sms.SolveSlideContext(ctx, payload.puzzle, payload.picture)
 		if err != nil {
 			lastErr = err
-			time.Sleep(time.Duration(attempt) * 200 * time.Millisecond)
+			if err := sleepExchangeContext(ctx, time.Duration(attempt)*200*time.Millisecond); err != nil {
+				return 0, "", err
+			}
 			continue
 		}
 		if result == nil {
@@ -370,11 +405,18 @@ func obtainExchangeSlideOffset(session *exchangeHTTPSession, authCtx *exchangeAu
 }
 
 func fetchExchangeSlide(session *exchangeHTTPSession, authCtx *exchangeAuthContext) (*exchangeSlidePayload, error) {
+	return fetchExchangeSlideContext(context.Background(), session, authCtx)
+}
+
+func fetchExchangeSlideContext(ctx context.Context, session *exchangeHTTPSession, authCtx *exchangeAuthContext) (*exchangeSlidePayload, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	if session == nil || session.client == nil {
 		return nil, fmt.Errorf("HTTP 会话为空")
 	}
 
-	req, err := http.NewRequest(http.MethodPost, "https://m.mcloud.139.com/ycloud/auth-service/slide/getSlide", strings.NewReader(""))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://m.mcloud.139.com/ycloud/auth-service/slide/getSlide", strings.NewReader(""))
 	if err != nil {
 		return nil, err
 	}
@@ -405,6 +447,23 @@ func fetchExchangeSlide(session *exchangeHTTPSession, authCtx *exchangeAuthConte
 		return nil, fmt.Errorf("解析滑块验证码响应失败: %w | body=%s", err, summarizeExchangeBody(body))
 	}
 	return payload, nil
+}
+
+func sleepExchangeContext(ctx context.Context, delay time.Duration) error {
+	if delay <= 0 {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 func decodeExchangeSlideResponse(bodyBytes []byte) (*exchangeSlidePayload, error) {

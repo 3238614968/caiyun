@@ -4,7 +4,10 @@
       <template #header>
         <div class="card-header">
           <span>账号管理</span>
-          <el-button type="primary" @click="showAddDialog">
+          <el-button
+            type="primary"
+            @click="showAddDialog"
+          >
             <el-icon><Plus /></el-icon>
             添加账号
           </el-button>
@@ -12,22 +15,56 @@
       </template>
 
       <!-- 搜索栏 -->
-      <el-form :inline="true" :model="searchForm" class="search-form">
+      <el-form
+        :inline="true"
+        :model="searchForm"
+        class="search-form"
+      >
         <el-form-item label="手机号">
-          <el-input v-model="searchForm.phone" placeholder="请输入手机号" clearable />
+          <el-input
+            v-model="searchForm.phone"
+            placeholder="请输入手机号"
+            clearable
+          />
         </el-form-item>
         <el-form-item>
-          <el-button type="primary" @click="handleSearch">搜索</el-button>
-          <el-button @click="handleReset">重置</el-button>
+          <el-button
+            type="primary"
+            @click="handleSearch"
+          >
+            搜索
+          </el-button>
+          <el-button @click="handleReset">
+            重置
+          </el-button>
         </el-form-item>
       </el-form>
 
       <!-- 账号列表 -->
-      <el-table :data="accountList" stripe v-loading="loading" style="width: 100%">
-        <el-table-column prop="phone" label="手机号" width="150" />
-        <el-table-column prop="cloud_count" label="云朵数" width="100" />
-        <el-table-column prop="remark" label="备注" />
-        <el-table-column label="状态" width="100">
+      <el-table
+        v-loading="loading"
+        :data="accountList"
+        stripe
+        style="width: 100%"
+      >
+        <el-table-column
+          prop="phone"
+          label="手机号"
+          width="150"
+        />
+        <el-table-column
+          prop="cloud_count"
+          label="云朵数"
+          width="100"
+        />
+        <el-table-column
+          prop="remark"
+          label="备注"
+        />
+        <el-table-column
+          label="状态"
+          width="100"
+        >
           <template #default="{ row }">
             <el-switch
               v-model="row.is_active"
@@ -35,20 +72,50 @@
             />
           </template>
         </el-table-column>
-        <el-table-column label="创建时间" width="180">
+        <el-table-column
+          label="创建时间"
+          width="180"
+        >
           <template #default="{ row }">
             {{ formatDate(row.created_at) }}
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="280" fixed="right">
+        <el-table-column
+          label="操作"
+          width="280"
+          fixed="right"
+        >
           <template #default="{ row }">
             <div class="action-buttons">
-              <el-button type="primary" link @click="handleView(row)">查看</el-button>
-              <el-button type="primary" link @click="handleEdit(row)">编辑</el-button>
-              <el-button type="warning" link @click="handleTriggerTask(row)" :loading="row.executing">
+              <el-button
+                type="primary"
+                link
+                @click="handleView(row)"
+              >
+                查看
+              </el-button>
+              <el-button
+                type="primary"
+                link
+                @click="handleEdit(row)"
+              >
+                编辑
+              </el-button>
+              <el-button
+                type="warning"
+                link
+                :loading="row.executing"
+                @click="handleTriggerTask(row)"
+              >
                 执行任务
               </el-button>
-              <el-button type="danger" link @click="handleDelete(row)">删除</el-button>
+              <el-button
+                type="danger"
+                link
+                @click="handleDelete(row)"
+              >
+                删除
+              </el-button>
             </div>
           </template>
         </el-table-column>
@@ -61,9 +128,9 @@
         :page-sizes="[10, 20, 50, 100]"
         :total="pagination.total"
         layout="total, sizes, prev, pager, next, jumper"
+        style="margin-top: 20px"
         @size-change="handleSizeChange"
         @current-change="handleCurrentChange"
-        style="margin-top: 20px"
       />
     </el-card>
 
@@ -75,13 +142,35 @@
       @close="handleDialogClose"
     >
       <!-- 添加模式：显示登录方式选择 -->
-      <el-tabs v-if="!isEditMode" v-model="loginMode" class="login-tabs">
-        <el-tab-pane label="CK登录" name="ck">
-          <el-form ref="formRef" :model="form" :rules="rules" label-width="80px">
-            <el-form-item label="手机号" prop="phone">
-              <el-input v-model="form.phone" placeholder="请输入手机号" clearable />
+      <el-tabs
+        v-if="!isEditMode"
+        v-model="loginMode"
+        class="login-tabs"
+      >
+        <el-tab-pane
+          label="CK登录"
+          name="ck"
+        >
+          <el-form
+            ref="formRef"
+            :model="form"
+            :rules="rules"
+            label-width="80px"
+          >
+            <el-form-item
+              label="手机号"
+              prop="phone"
+            >
+              <el-input
+                v-model="form.phone"
+                placeholder="请输入手机号"
+                clearable
+              />
             </el-form-item>
-            <el-form-item label="Auth" prop="auth">
+            <el-form-item
+              label="Auth"
+              prop="auth"
+            >
               <el-input
                 v-model="form.auth"
                 type="textarea"
@@ -89,43 +178,95 @@
                 placeholder="请输入Auth"
               />
             </el-form-item>
-            <el-form-item label="备注" prop="remark">
-              <el-input v-model="form.remark" placeholder="请输入备注" clearable />
+            <el-form-item
+              label="备注"
+              prop="remark"
+            >
+              <el-input
+                v-model="form.remark"
+                placeholder="请输入备注"
+                clearable
+              />
             </el-form-item>
           </el-form>
         </el-tab-pane>
-        <el-tab-pane label="短信登录" name="sms">
-          <el-form ref="smsFormRef" :model="smsForm" :rules="smsRules" label-width="80px">
-            <el-form-item label="手机号" prop="phone">
-              <el-input v-model="smsForm.phone" placeholder="请输入11位手机号" clearable />
+        <el-tab-pane
+          label="短信登录"
+          name="sms"
+        >
+          <el-form
+            ref="smsFormRef"
+            :model="smsForm"
+            :rules="smsRules"
+            label-width="80px"
+          >
+            <el-form-item
+              label="手机号"
+              prop="phone"
+            >
+              <el-input
+                v-model="smsForm.phone"
+                placeholder="请输入11位手机号"
+                clearable
+              />
             </el-form-item>
-            <el-form-item label="验证码" prop="smsCode">
+            <el-form-item
+              label="验证码"
+              prop="smsCode"
+            >
               <div style="display: flex; gap: 8px;">
-                <el-input v-model="smsForm.smsCode" placeholder="请输入验证码" clearable />
+                <el-input
+                  v-model="smsForm.smsCode"
+                  placeholder="请输入验证码"
+                  clearable
+                />
                 <el-button
                   type="primary"
-                  @click="handleSendSms"
                   :loading="smsSending"
                   :disabled="smsCountdown > 0"
                   style="min-width: 110px;"
+                  @click="handleSendSms"
                 >
                   {{ smsCountdown > 0 ? `${smsCountdown}s后重发` : '发送验证码' }}
                 </el-button>
               </div>
             </el-form-item>
-            <el-form-item label="备注" prop="remark">
-              <el-input v-model="smsForm.remark" placeholder="请输入备注" clearable />
+            <el-form-item
+              label="备注"
+              prop="remark"
+            >
+              <el-input
+                v-model="smsForm.remark"
+                placeholder="请输入备注"
+                clearable
+              />
             </el-form-item>
           </el-form>
         </el-tab-pane>
       </el-tabs>
 
       <!-- 编辑模式：直接显示表单 -->
-      <el-form v-else ref="formRef" :model="form" :rules="rules" label-width="80px">
-        <el-form-item label="手机号" prop="phone">
-          <el-input v-model="form.phone" placeholder="请输入手机号" clearable />
+      <el-form
+        v-else
+        ref="formRef"
+        :model="form"
+        :rules="rules"
+        label-width="80px"
+      >
+        <el-form-item
+          label="手机号"
+          prop="phone"
+        >
+          <el-input
+            v-model="form.phone"
+            placeholder="请输入手机号"
+            clearable
+          />
         </el-form-item>
-        <el-form-item label="Auth" prop="auth">
+        <el-form-item
+          label="Auth"
+          prop="auth"
+        >
           <el-input
             v-model="form.auth"
             type="textarea"
@@ -133,47 +274,47 @@
             placeholder="留空表示不修改Auth"
           />
         </el-form-item>
-        <el-form-item label="备注" prop="remark">
-          <el-input v-model="form.remark" placeholder="请输入备注" clearable />
+        <el-form-item
+          label="备注"
+          prop="remark"
+        >
+          <el-input
+            v-model="form.remark"
+            placeholder="请输入备注"
+            clearable
+          />
         </el-form-item>
       </el-form>
 
       <template #footer>
-        <el-button @click="dialogVisible = false">取消</el-button>
-        <el-button type="primary" @click="handleSubmit" :loading="submitting">
+        <el-button @click="dialogVisible = false">
+          取消
+        </el-button>
+        <el-button
+          type="primary"
+          :loading="submitting"
+          @click="handleSubmit"
+        >
           确定
         </el-button>
       </template>
     </el-dialog>
 
-    <!-- 查看详情对话框 -->
-    <el-dialog v-model="detailVisible" title="账号详情" width="600px">
-      <el-descriptions :column="2" border>
-        <el-descriptions-item label="手机号">{{ currentAccount.phone }}</el-descriptions-item>
-        <el-descriptions-item label="云朵数">{{ currentAccount.cloud_count }}</el-descriptions-item>
-        <el-descriptions-item label="平台">{{ currentAccount.platform }}</el-descriptions-item>
-        <el-descriptions-item label="状态">
-          <el-tag :type="currentAccount.is_active ? 'success' : 'danger'">
-            {{ currentAccount.is_active ? '激活' : '停用' }}
-          </el-tag>
-        </el-descriptions-item>
-        <el-descriptions-item label="过期时间">
-          {{ formatExpireTime(currentAccount.expire_at) }}
-        </el-descriptions-item>
-        <el-descriptions-item label="备注">{{ currentAccount.remark || '-' }}</el-descriptions-item>
-        <el-descriptions-item label="创建时间" :span="2">
-          {{ formatDate(currentAccount.created_at) }}
-        </el-descriptions-item>
-      </el-descriptions>
-    </el-dialog>
+    <AccountDetailDialog
+      v-model="detailVisible"
+      :account="currentAccount"
+      :format-date="formatDate"
+      :format-expire-time="formatExpireTime"
+    />
   </div>
 </template>
 
 <script setup lang="ts">
-import '@/styles/element/account'
 import { ref, reactive, onMounted, onUnmounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import type { FormInstance, FormRules } from 'element-plus'
+import AccountDetailDialog from '@/components/account/AccountDetailDialog.vue'
+import { operationQueuedMessage } from '@/api/operation'
 import {
   getAccounts,
   createAccount,
@@ -285,15 +426,32 @@ const rules = reactive<FormRules>({
   ]
 })
 
+const sortAccountsByAvailability = (list: Account[]) => {
+  const getTime = (value?: string) => {
+    const time = value ? new Date(value).getTime() : 0
+    return Number.isNaN(time) ? 0 : time
+  }
+
+  return [...list].sort((a, b) => {
+    const activeDiff = Number(Boolean(b.is_active)) - Number(Boolean(a.is_active))
+    if (activeDiff !== 0) return activeDiff
+
+    const cloudDiff = Number(b.cloud_count || 0) - Number(a.cloud_count || 0)
+    if (cloudDiff !== 0) return cloudDiff
+
+    return getTime(b.created_at) - getTime(a.created_at)
+  })
+}
+
 // 加载账号列表
 const loadAccounts = async () => {
   loading.value = true
   try {
     const data = await getAccounts(pagination.page, pagination.pageSize, searchForm.phone)
-    accountList.value = data.accounts.map(acc => ({
+    accountList.value = sortAccountsByAvailability(data.accounts.map(acc => ({
       ...acc,
       user: { username: acc.user?.username || '' }
-    }))
+    })))
     pagination.total = data.total
   } catch (error) {
     ElMessage.error('加载账号列表失败')
@@ -365,6 +523,7 @@ const handleEdit = (row: Account) => {
 const handleStatusChange = async (row: Account) => {
   try {
     await setAccountStatus(row.id, row.is_active)
+    accountList.value = sortAccountsByAvailability(accountList.value)
     ElMessage.success('状态更新成功')
   } catch (error) {
     ElMessage.error('状态更新失败')
@@ -376,8 +535,8 @@ const handleStatusChange = async (row: Account) => {
 const handleTriggerTask = async (row: Account & { executing?: boolean }) => {
   row.executing = true
   try {
-    await triggerAccountTask(row.id)
-    ElMessage.success('任务已提交执行')
+    const operation = await triggerAccountTask(row.id)
+    ElMessage.success(operationQueuedMessage(operation))
     // 3秒后刷新账号列表以获取最新状态
     setTimeout(() => {
       loadAccounts()

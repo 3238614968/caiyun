@@ -1,4 +1,4 @@
-﻿package scheduler
+package scheduler
 
 import (
 	"context"
@@ -32,15 +32,18 @@ type JobResult struct {
 
 // Scheduler 定时任务调度器
 type Scheduler struct {
-	cron          *cron.Cron
-	jobs          map[string]Job
-	jobResults    map[string][]*JobResult
-	maxResults    int
-	mu            sync.RWMutex
-	ctx           context.Context
-	cancel        context.CancelFunc
-	logger        *log.Logger
-	notifications chan *JobResult
+	cron           *cron.Cron
+	jobs           map[string]Job
+	jobResults     map[string][]*JobResult
+	maxResults     int
+	mu             sync.RWMutex
+	ctx            context.Context
+	cancel         context.CancelFunc
+	logger         *log.Logger
+	notifications  chan *JobResult
+	notificationWG sync.WaitGroup
+	startOnce      sync.Once
+	stopOnce       sync.Once
 }
 
 // Config 调度器配置
@@ -157,19 +160,32 @@ func (s *Scheduler) ExecuteJob(jobName string) (*JobResult, error) {
 
 // Start 启动调度器
 func (s *Scheduler) Start() {
-	s.cron.Start()
-	s.logger.Println("定时任务调度器已启动")
+	s.startOnce.Do(func() {
+		// 先启动通知消费者，再允许 cron 触发任务，确保快速完成的任务
+		// 也有对应的消费者，并让 Stop 能等待该 goroutine 退出。
+		s.notificationWG.Add(1)
+		go func() {
+			defer s.notificationWG.Done()
+			s.notificationHandler()
+		}()
 
-	// 启动通知处理器
-	go s.notificationHandler()
+		s.cron.Start()
+		s.logger.Println("定时任务调度器已启动")
+	})
 }
 
-// Stop 停止调度器
+// Stop 停止调度器，并等待已经开始的 cron job 完成。
 func (s *Scheduler) Stop() {
-	s.logger.Println("正在停止定时任务调度器...")
-	s.cancel()
-	s.cron.Stop()
-	s.logger.Println("定时任务调度器已停止")
+	s.stopOnce.Do(func() {
+		s.logger.Println("正在停止定时任务调度器...")
+		// cron.Stop 返回的 context 只会在所有正在执行的 cron job
+		// 完成后关闭。必须等待它，之后才能关闭 job 依赖的 TaskManager。
+		cronStopped := s.cron.Stop()
+		<-cronStopped.Done()
+		s.cancel()
+		s.notificationWG.Wait()
+		s.logger.Println("定时任务调度器已停止")
+	})
 }
 
 // GetJobStatus 获取任务状态

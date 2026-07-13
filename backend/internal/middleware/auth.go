@@ -2,7 +2,11 @@ package middleware
 
 import (
 	"caiyun/internal/constants"
+	"caiyun/internal/envutil"
+	"caiyun/internal/monitor"
 	"caiyun/internal/repository"
+	"caiyun/internal/security/authcache"
+	appErrors "caiyun/pkg/errors"
 	"caiyun/pkg/jwt"
 	apiresponse "caiyun/pkg/response"
 	"context"
@@ -10,7 +14,6 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"os"
 	"strings"
 	"sync"
 	"time"
@@ -19,8 +22,27 @@ import (
 )
 
 func abortWithError(c *gin.Context, statusCode int, message string) {
-	apiresponse.ErrorWithCode(c, statusCode, message)
+	abortWithBusinessError(c, statusCode, businessCodeForHTTPStatus(statusCode), message)
+}
+
+func abortWithBusinessError(c *gin.Context, statusCode int, businessCode appErrors.BusinessCode, message string) {
+	if businessCode != "" {
+		apiresponse.ErrorWithBusinessCode(c, statusCode, string(businessCode), message)
+	} else {
+		apiresponse.ErrorWithCode(c, statusCode, message)
+	}
 	c.Abort()
+}
+
+func businessCodeForHTTPStatus(statusCode int) appErrors.BusinessCode {
+	switch statusCode {
+	case http.StatusUnauthorized:
+		return appErrors.BusinessCodeAuthSessionExpired
+	case http.StatusForbidden:
+		return appErrors.BusinessCodeAuthPermissionDenied
+	default:
+		return ""
+	}
 }
 
 func abortWithErrorData(c *gin.Context, statusCode int, message string, data interface{}) {
@@ -51,20 +73,11 @@ type visitor struct {
 	rate      float64
 }
 
-type authUserCacheEntry struct {
-	username     string
-	role         string
-	tokenVersion int
-	expiresAt    time.Time
-}
+type authUserSnapshot = authcache.Snapshot
 
-type authUserSnapshot struct {
-	username     string
-	role         string
-	tokenVersion int
+type accessSessionStore interface {
+	IsActive(ctx context.Context, sessionID string, userID uint, now time.Time) (bool, error)
 }
-
-var authUserCache sync.Map // map[uint]authUserCacheEntry
 
 type rateLimitStore interface {
 	RateLimitCheck(key string, limit int, window time.Duration) (bool, int64, time.Duration, error)
@@ -190,6 +203,10 @@ type RateLimitConfig struct {
 	// Backend 支持 memory / redis；redis 用固定窗口计数，适合多副本部署。
 	Backend     string
 	RedisWindow time.Duration
+	// FailClosed rejects requests when the shared limiter is unavailable. It
+	// is mandatory in production so replicas never silently diverge to local
+	// memory buckets during a Redis outage.
+	FailClosed bool
 }
 
 // APIRateLimit 特定API的限流配置
@@ -208,10 +225,13 @@ func DefaultRateLimitConfig() *RateLimitConfig {
 		UserBurst:   constants.DefaultUserBurst,   // 突发50请求
 		Backend:     rateLimitBackendFromEnv(),
 		RedisWindow: rateLimitRedisWindowFromEnv(),
+		FailClosed:  isProductionEnvironment(),
 		APIRates: map[string]APIRateLimit{
 			// 兑换API：更严格的限流
 			"/api/exchange/tasks":               {Rate: constants.ExchangeTaskRate, Burst: constants.ExchangeTaskBurst, ByUser: true},
+			"/api/exchange/tasks/:id/execute":   {Rate: constants.ExchangeTaskRate, Burst: constants.ExchangeTaskBurst, ByUser: true},
 			"/api/exchange/tasks/batch-execute": {Rate: constants.BatchExecuteRate, Burst: constants.BatchExecuteBurst, ByUser: true},
+			"/api/exchange/immediate":           {Rate: constants.ExchangeTaskRate, Burst: constants.ExchangeTaskBurst, ByUser: true},
 			"/api/exchange/records/export":      {Rate: constants.ExportRate, Burst: constants.ExportBurst, ByUser: true},
 			// 登录API：防止暴力破解
 			"/api/auth/login":                    {Rate: 5, Burst: 10, ByUser: false},
@@ -225,22 +245,41 @@ func DefaultRateLimitConfig() *RateLimitConfig {
 }
 
 func rateLimitBackendFromEnv() string {
-	backend := strings.ToLower(strings.TrimSpace(os.Getenv("RATE_LIMIT_BACKEND")))
-	if backend == "redis" {
-		return "redis"
+	defaultBackend := "memory"
+	if isProductionEnvironment() {
+		defaultBackend = "redis"
 	}
-	return "memory"
+	return strings.ToLower(strings.TrimSpace(envutil.String("RATE_LIMIT_BACKEND", defaultBackend)))
+}
+
+func isProductionEnvironment() bool {
+	return strings.EqualFold(strings.TrimSpace(envutil.String("APP_ENV", "development")), "production")
+}
+
+// ValidateRateLimitConfig rejects ambiguous or unsafe backends at startup.
+// Production always requires the shared Redis limiter; memory remains an
+// explicit local-development option only.
+func ValidateRateLimitConfig(config *RateLimitConfig) error {
+	if config == nil {
+		return fmt.Errorf("限流配置不能为空")
+	}
+	switch config.Backend {
+	case "memory":
+		if isProductionEnvironment() {
+			return fmt.Errorf("生产环境 RATE_LIMIT_BACKEND 必须为 redis")
+		}
+	case "redis":
+	default:
+		return fmt.Errorf("不支持的 RATE_LIMIT_BACKEND=%q（仅支持 memory/redis）", config.Backend)
+	}
+	if config.RedisWindow <= 0 {
+		return fmt.Errorf("RATE_LIMIT_REDIS_WINDOW 必须大于 0")
+	}
+	return nil
 }
 
 func rateLimitRedisWindowFromEnv() time.Duration {
-	raw := strings.TrimSpace(os.Getenv("RATE_LIMIT_REDIS_WINDOW"))
-	if raw == "" {
-		return time.Second
-	}
-	if duration, err := time.ParseDuration(raw); err == nil && duration > 0 {
-		return duration
-	}
-	return time.Second
+	return envutil.Duration("RATE_LIMIT_REDIS_WINDOW", time.Second)
 }
 
 // AdvancedRateLimitMiddleware 高级限流中间件（认证前使用）。
@@ -260,6 +299,7 @@ type RateLimitMiddlewareInstance struct {
 	store         rateLimitStore
 	backend       string
 	redisWindow   time.Duration
+	metrics       *monitor.Metrics
 }
 
 // NewAdvancedRateLimitMiddleware 创建认证前的全局限流中间件实例。
@@ -298,7 +338,8 @@ func NewAuthenticatedRateLimitMiddleware(config *RateLimitConfig) *RateLimitMidd
 	return mw
 }
 
-// SetRedisStore 启用 Redis 限流后端。若 Redis 调用失败，会自动降级到内存限流。
+// SetRedisStore 启用 Redis 限流后端。生产配置下 Redis 缺失或调用
+// 失败会拒绝请求，不允许静默降级为进程内限流。
 func (m *RateLimitMiddlewareInstance) SetRedisStore(store rateLimitStore) {
 	if m == nil {
 		return
@@ -306,33 +347,98 @@ func (m *RateLimitMiddlewareInstance) SetRedisStore(store rateLimitStore) {
 	m.store = store
 }
 
-func (m *RateLimitMiddlewareInstance) allow(key string, limit int, fallback *RateLimiter) bool {
-	if limit <= 0 {
-		limit = 1
+// SetMetrics 绑定 Prometheus 指标收集器，用于记录限流拒绝事件。
+func (m *RateLimitMiddlewareInstance) SetMetrics(metrics *monitor.Metrics) {
+	if m == nil {
+		return
 	}
-	if m != nil && m.backend == "redis" && m.store != nil {
-		window := m.redisWindow
-		if window <= 0 {
-			window = time.Second
+	m.metrics = metrics
+}
+
+func (m *RateLimitMiddlewareInstance) allow(key string, rate int, fallback *RateLimiter) bool {
+	if rate <= 0 {
+		rate = 1
+	}
+	if m != nil && m.backend == "redis" {
+		if m.store == nil {
+			log.Printf("[RateLimit] Redis 限流存储未配置 key=%s fail_closed=%t", key, m.config.FailClosed)
+			if m.config.FailClosed {
+				return false
+			}
+		} else {
+			window := m.redisWindow
+			if window <= 0 {
+				window = time.Second
+			}
+			limit := redisFixedWindowLimit(rate, window)
+			allowed, _, _, err := m.store.RateLimitCheck("rate_limit:"+key, limit, window)
+			if err == nil {
+				return allowed
+			}
+			log.Printf("[RateLimit] Redis 限流失败 key=%s fail_closed=%t err=%v", key, m.config.FailClosed, err)
+			if m.config.FailClosed {
+				return false
+			}
 		}
-		allowed, _, _, err := m.store.RateLimitCheck("rate_limit:"+key, limit, window)
-		if err == nil {
-			return allowed
-		}
-		log.Printf("[RateLimit] Redis 限流失败，降级到内存限流 key=%s err=%v", key, err)
 	}
 	return fallback.Allow(key)
+}
+
+func redisFixedWindowLimit(rate int, window time.Duration) int {
+	if rate <= 0 {
+		rate = 1
+	}
+	if window <= 0 {
+		return rate
+	}
+	seconds := int(window / time.Second)
+	if window%time.Second != 0 {
+		seconds++
+	}
+	if seconds < 1 {
+		seconds = 1
+	}
+	return rate * seconds
+}
+
+func rateLimitRoutePath(c *gin.Context) string {
+	if c == nil || c.Request == nil {
+		return ""
+	}
+	path := c.Request.URL.Path
+	if fullPath := c.FullPath(); fullPath != "" {
+		path = fullPath
+	}
+	return normalizeRateLimitRoutePath(path)
+}
+
+func normalizeRateLimitRoutePath(path string) string {
+	if strings.HasPrefix(path, "/api/v1/") {
+		return "/api/" + strings.TrimPrefix(path, "/api/v1/")
+	}
+	if path == "/api/v1" {
+		return "/api"
+	}
+	return path
+}
+
+func (m *RateLimitMiddlewareInstance) recordRejection(route, reason, dimension string) {
+	if m == nil || m.metrics == nil {
+		return
+	}
+	m.metrics.RecordRateLimitRejection(route, reason, dimension)
 }
 
 // HandlerFunc 返回 gin 中间件函数。
 func (m *RateLimitMiddlewareInstance) HandlerFunc() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		path := c.Request.URL.Path
+		path := rateLimitRoutePath(c)
 
 		if !m.byUser {
 			// 认证前：全局 IP 限流
 			clientIP := c.ClientIP()
-			if !m.allow("global:ip:"+clientIP, m.config.GlobalBurst, m.globalLimiter) {
+			if !m.allow("global:ip:"+clientIP, m.config.GlobalRate, m.globalLimiter) {
+				m.recordRejection(path, "GLOBAL_RATE_LIMIT", "ip")
 				abortWithErrorData(c, http.StatusTooManyRequests, "服务器繁忙，请稍后再试", gin.H{
 					"reason": "GLOBAL_RATE_LIMIT",
 				})
@@ -341,7 +447,8 @@ func (m *RateLimitMiddlewareInstance) HandlerFunc() gin.HandlerFunc {
 			if apiLimit, exists := m.config.APIRates[path]; exists && !apiLimit.ByUser {
 				limiter := m.apiLimiters[path]
 				key := fmt.Sprintf("ip_%s_%s", clientIP, path)
-				if !m.allow("api:"+key, apiLimit.Burst, limiter) {
+				if !m.allow("api:"+key, apiLimit.Rate, limiter) {
+					m.recordRejection(path, "API_RATE_LIMIT", "ip")
 					abortWithErrorData(c, http.StatusTooManyRequests, "该接口请求过于频繁，请稍后再试", gin.H{
 						"reason": "API_RATE_LIMIT",
 						"path":   path,
@@ -362,7 +469,8 @@ func (m *RateLimitMiddlewareInstance) HandlerFunc() gin.HandlerFunc {
 		if apiLimit, exists := m.config.APIRates[path]; exists && apiLimit.ByUser {
 			limiter := m.apiLimiters[path]
 			key := fmt.Sprintf("user_%d_%s", userID.(uint), path)
-			if !m.allow("api:"+key, apiLimit.Burst, limiter) {
+			if !m.allow("api:"+key, apiLimit.Rate, limiter) {
+				m.recordRejection(path, "API_RATE_LIMIT", "user")
 				abortWithErrorData(c, http.StatusTooManyRequests, "该接口请求过于频繁，请稍后再试", gin.H{
 					"reason": "API_RATE_LIMIT",
 					"path":   path,
@@ -373,7 +481,8 @@ func (m *RateLimitMiddlewareInstance) HandlerFunc() gin.HandlerFunc {
 			return
 		}
 		key := fmt.Sprintf("user_default_%d", userID.(uint))
-		if !m.allow(key, m.config.UserBurst, m.globalLimiter) {
+		if !m.allow(key, m.config.UserRate, m.globalLimiter) {
+			m.recordRejection(path, "USER_RATE_LIMIT", "user")
 			abortWithErrorData(c, http.StatusTooManyRequests, "您的请求过于频繁，请稍后再试", gin.H{
 				"reason": "USER_RATE_LIMIT",
 			})
@@ -418,6 +527,10 @@ func AuthMiddleware(jwtManager *jwt.Manager) gin.HandlerFunc {
 }
 
 func AuthMiddlewareWithUser(jwtManager *jwt.Manager, userRepo *repository.UserRepository) gin.HandlerFunc {
+	return AuthMiddlewareWithUserAndSession(jwtManager, userRepo, nil)
+}
+
+func AuthMiddlewareWithUserAndSession(jwtManager *jwt.Manager, userRepo *repository.UserRepository, sessionStore accessSessionStore) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		authHeader := c.GetHeader("Authorization")
 		token := ""
@@ -455,72 +568,137 @@ func AuthMiddlewareWithUser(jwtManager *jwt.Manager, userRepo *repository.UserRe
 				abortWithError(c, http.StatusUnauthorized, "用户不存在或已失效")
 				return
 			}
-			if claims.TokenVersion != user.tokenVersion {
-				abortWithError(c, http.StatusUnauthorized, "会话已失效，请重新登录")
+			if claims.TokenVersion != user.TokenVersion {
+				abortWithBusinessError(c, http.StatusUnauthorized, appErrors.BusinessCodeAuthSessionExpired, "会话已失效，请重新登录")
 				return
 			}
-			username = user.username
-			role = user.role
+			username = user.Username
+			role = user.Role
+		}
+
+		if sessionStore != nil {
+			if claims.SessionID == "" {
+				abortWithBusinessError(c, http.StatusUnauthorized, appErrors.BusinessCodeAuthSessionExpired, "会话已失效，请重新登录")
+				return
+			}
+			active, err := sessionStore.IsActive(c.Request.Context(), claims.SessionID, claims.UserID, time.Now())
+			if err != nil || !active {
+				abortWithBusinessError(c, http.StatusUnauthorized, appErrors.BusinessCodeAuthSessionExpired, "会话已失效，请重新登录")
+				return
+			}
 		}
 
 		// 将当前数据库中的用户信息存入上下文，避免角色变更或删号后旧 JWT 继续保留旧权限。
 		c.Set("user_id", userID)
 		c.Set("username", username)
 		c.Set("role", role)
+		c.Set("session_id", claims.SessionID)
+		c.Set("jwt_id", claims.ID)
 		c.Set(string(authFromCookieKey), authFromCookie)
 
 		c.Next()
 	}
 }
 
+// OptionalAuthMiddlewareWithUser attempts to authenticate a request but never aborts.
+// It is intended for endpoints that support either business JWT auth or an alternate
+// authentication mechanism, such as API monitor token scraping.
+func OptionalAuthMiddlewareWithUser(jwtManager *jwt.Manager, userRepo *repository.UserRepository) gin.HandlerFunc {
+	return OptionalAuthMiddlewareWithUserAndSession(jwtManager, userRepo, nil)
+}
+
+func OptionalAuthMiddlewareWithUserAndSession(jwtManager *jwt.Manager, userRepo *repository.UserRepository, sessionStore accessSessionStore) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		authHeader := c.GetHeader("Authorization")
+		token := ""
+		authFromCookie := false
+		cookieToken, cookieErr := c.Cookie("auth_token")
+		hasAuthCookie := cookieErr == nil && cookieToken != ""
+		if authHeader != "" {
+			parts := strings.SplitN(authHeader, " ", 2)
+			if len(parts) != 2 || parts[0] != "Bearer" {
+				c.Next()
+				return
+			}
+			token = parts[1]
+			authFromCookie = hasAuthCookie
+		} else if hasAuthCookie {
+			token = cookieToken
+			authFromCookie = true
+		}
+		if token == "" {
+			c.Next()
+			return
+		}
+		claims, err := jwtManager.ValidateToken(token)
+		if err != nil {
+			c.Next()
+			return
+		}
+
+		userID := claims.UserID
+		username := claims.Username
+		role := claims.Role
+		if userRepo != nil {
+			user, err := getAuthUserSnapshot(c.Request.Context(), userRepo, claims)
+			if err != nil || claims.TokenVersion != user.TokenVersion {
+				c.Next()
+				return
+			}
+			username = user.Username
+			role = user.Role
+		}
+
+		if sessionStore != nil {
+			if claims.SessionID == "" {
+				c.Next()
+				return
+			}
+			active, err := sessionStore.IsActive(c.Request.Context(), claims.SessionID, claims.UserID, time.Now())
+			if err != nil || !active {
+				c.Next()
+				return
+			}
+		}
+
+		c.Set("user_id", userID)
+		c.Set("username", username)
+		c.Set("role", role)
+		c.Set("session_id", claims.SessionID)
+		c.Set("jwt_id", claims.ID)
+		c.Set(string(authFromCookieKey), authFromCookie)
+		c.Next()
+	}
+}
+
 func getAuthUserSnapshot(ctx context.Context, userRepo *repository.UserRepository, claims *jwt.Claims) (*authUserSnapshot, error) {
 	now := time.Now()
-	if cached, ok := authUserCache.Load(claims.UserID); ok {
-		entry, ok := cached.(authUserCacheEntry)
-		if ok && entry.tokenVersion == claims.TokenVersion && now.Before(entry.expiresAt) {
-			return &authUserSnapshot{
-				username:     entry.username,
-				role:         entry.role,
-				tokenVersion: entry.tokenVersion,
-			}, nil
-		}
+	if snapshot, ok := authcache.Load(claims.UserID, claims.TokenVersion, now); ok {
+		return snapshot, nil
 	}
 
 	user, err := userRepo.WithContext(ctx).FindByID(claims.UserID)
 	if err != nil {
-		authUserCache.Delete(claims.UserID)
+		authcache.Delete(claims.UserID)
 		return nil, err
 	}
-	entry := authUserCacheEntry{
-		username:     user.Username,
-		role:         user.Role,
-		tokenVersion: user.TokenVersion,
-		expiresAt:    now.Add(authUserCacheTTL()),
-	}
-	authUserCache.Store(user.ID, entry)
-	return &authUserSnapshot{
-		username:     entry.username,
-		role:         entry.role,
-		tokenVersion: entry.tokenVersion,
-	}, nil
+	return authcache.Store(user.ID, authcache.Entry{
+		Username:     user.Username,
+		Role:         user.Role,
+		TokenVersion: user.TokenVersion,
+		ExpiresAt:    now.Add(authUserCacheTTL()),
+	}), nil
 }
 
 func authUserCacheTTL() time.Duration {
-	raw := strings.TrimSpace(os.Getenv("AUTH_USER_CACHE_TTL"))
-	if raw == "" {
-		// 缩短默认 TTL 到 10 秒，降低改密/重置后旧会话仍可用的窗口。
-		return 10 * time.Second
-	}
-	if duration, err := time.ParseDuration(raw); err == nil && duration > 0 {
-		return duration
-	}
-	return 10 * time.Second
+	// 缩短默认 TTL 到 10 秒，降低改密/重置后旧会话仍可用的窗口。
+	return envutil.Duration("AUTH_USER_CACHE_TTL", 10*time.Second)
 }
 
 // InvalidateAuthUserCache 在用户改密、重置密码、删除等场景主动清除缓存，
 // 让 token_version 变更立即生效。
 func InvalidateAuthUserCache(userID uint) {
-	authUserCache.Delete(userID)
+	authcache.Delete(userID)
 }
 
 func CSRFMiddleware() gin.HandlerFunc {
@@ -562,7 +740,7 @@ func AdminMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		role := c.GetString("role")
 		if role != "admin" {
-			abortWithError(c, http.StatusForbidden, "需要管理员权限")
+			abortWithBusinessError(c, http.StatusForbidden, appErrors.BusinessCodeAuthPermissionDenied, "需要管理员权限")
 			return
 		}
 		c.Next()
@@ -581,11 +759,9 @@ func CORSMiddleware() gin.HandlerFunc {
 				c.Writer.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS, GET, PUT, DELETE")
 				c.Writer.Header().Set("Access-Control-Max-Age", "600")
 			} else {
-				// Origin 不在白名单：不设置任何 CORS 头，直接拒绝。
-				if c.Request.Method == "OPTIONS" {
-					c.AbortWithStatus(http.StatusForbidden)
-					return
-				}
+				// Origin 不在白名单：显式返回 403，避免浏览器侧看到 CORS 报错但服务端已执行写操作。
+				abortWithError(c, http.StatusForbidden, "跨域来源未被允许")
+				return
 			}
 		}
 
@@ -599,7 +775,7 @@ func CORSMiddleware() gin.HandlerFunc {
 }
 
 func isAllowedOrigin(origin string) bool {
-	allowedOrigins := strings.TrimSpace(os.Getenv("ALLOWED_ORIGINS"))
+	allowedOrigins := envutil.String("ALLOWED_ORIGINS", "")
 	if allowedOrigins == "" {
 		return false
 	}

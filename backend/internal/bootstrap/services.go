@@ -20,6 +20,7 @@ type SharedServices struct {
 	Cloud        *services.CloudService
 	TokenManager *services.TokenManager
 	Exchange     *services.ExchangeService
+	Operation    *services.OperationService
 	TaskQueue    queue.ReliableTaskQueue
 }
 
@@ -42,6 +43,7 @@ func InitSharedServices(core *Core) (*SharedServices, error) {
 
 	tokenManager := services.NewTokenManager(repos.Account, repos.ExchangeAccount, core.Auth)
 	tokenManager.SetDistributedLockCache(core.Redis)
+	accountService.SetTokenProvider(tokenManager)
 	taskService.SetTokenManager(tokenManager)
 
 	exchangeService := services.NewExchangeService(
@@ -56,6 +58,7 @@ func InitSharedServices(core *Core) (*SharedServices, error) {
 		tokenManager,
 	)
 	exchangeService.SetLockStore(core.Redis)
+	operationService := services.NewOperationService(repos.Operation, taskQueue)
 
 	return &SharedServices{
 		Account:      accountService,
@@ -63,6 +66,7 @@ func InitSharedServices(core *Core) (*SharedServices, error) {
 		Cloud:        cloudService,
 		TokenManager: tokenManager,
 		Exchange:     exchangeService,
+		Operation:    operationService,
 		TaskQueue:    taskQueue,
 	}, nil
 }

@@ -6,12 +6,13 @@ import (
 	"caiyun/internal/core/http"
 	"caiyun/internal/core/logger"
 	"caiyun/internal/core/tasks"
+	"caiyun/internal/envutil"
 	"caiyun/internal/models"
 	"caiyun/internal/repository"
+	"caiyun/internal/utils"
 	"caiyun/internal/ws"
+	"context"
 	"fmt"
-	"os"
-	"strconv"
 	"strings"
 	"time"
 )
@@ -179,7 +180,7 @@ func buildTaskRunner(svc *TaskService, account *models.Account, storage tasks.St
 		// 如果达到最大重试次数，禁用账号
 		if account.JWTErrorCount >= opts.maxJWTRetries {
 			account.IsActive = false
-			lg.Error(fmt.Sprintf("账号 %s JWT获取失败超过3次，已自动禁用", account.Phone))
+			lg.Error(fmt.Sprintf("账号 %s JWT获取失败超过3次，已自动禁用", utils.MaskPhone(account.Phone)))
 			// 发送WebSocket通知
 			if wsHub := ws.GetHub(); wsHub != nil {
 				wsHub.SendToUser(account.UserID, ws.Message{
@@ -238,27 +239,27 @@ func sanitizeHeaderValue(s string) string {
 
 // readTaskEnvInt 读取任务相关整数环境变量，解析失败时回退默认值
 func readTaskEnvInt(key string, defaultVal int) int {
-	raw := strings.TrimSpace(os.Getenv(key))
-	if raw == "" {
-		return defaultVal
-	}
-	val, err := strconv.Atoi(raw)
-	if err != nil {
-		return defaultVal
-	}
-	return val
+	return envutil.Int(key, defaultVal)
 }
 
-// GetTaskLogs 获取任务日志
-func (s *TaskService) GetTaskLogs(userID uint, accountID *uint, page, pageSize int) ([]*models.TaskLog, int64, error) {
-	if accountID != nil {
-		account, err := s.accountRepo.FindByID(*accountID)
-		if err != nil || account.UserID != userID {
-			return nil, 0, fmt.Errorf("账号不存在")
-		}
-		return s.taskLogRepo.FindByAccountID(*accountID, (page-1)*pageSize, pageSize)
+// GetTaskLogs 获取任务日志。
+func (s *TaskService) GetTaskLogs(userID uint, accountID *uint, taskType, status string, page, pageSize int) ([]*models.TaskLog, int64, error) {
+	return s.GetTaskLogsContext(context.Background(), userID, accountID, taskType, status, page, pageSize)
+}
+
+// GetTaskLogsContext propagates cancellation through ownership validation and
+// the filtered log query without storing request context on the service.
+func (s *TaskService) GetTaskLogsContext(ctx context.Context, userID uint, accountID *uint, taskType, status string, page, pageSize int) ([]*models.TaskLog, int64, error) {
+	if ctx == nil {
+		ctx = context.Background()
 	}
-	return s.taskLogRepo.FindByUserID(userID, (page-1)*pageSize, pageSize)
+	if accountID != nil {
+		account, err := s.accountRepo.WithContext(ctx).FindByID(*accountID)
+		if err != nil || account.UserID != userID {
+			return nil, 0, ErrAccountNotFound
+		}
+	}
+	return s.taskLogRepo.WithContext(ctx).FindByFilter(userID, accountID, taskType, status, (page-1)*pageSize, pageSize)
 }
 
 // DailyTaskTypes 返回当前配置下参与“每日已执行”判断的日常任务类型。
@@ -274,13 +275,24 @@ func (s *TaskService) HasExecutedToday(accountID uint) bool {
 // HasExecutedTodayForTaskTypes 检查账号今日是否已执行过指定日常任务类型。
 // 只统计当前日常任务注册表中的任务类型，避免兑换、健康检查等系统日志误判为“今日已执行”。
 func (s *TaskService) HasExecutedTodayForTaskTypes(accountID uint, taskTypes []string) bool {
-	// 使用北京时间
+	executed, _ := s.HasExecutedTodayForTaskTypesContext(context.Background(), accountID, taskTypes)
+	return executed
+}
+
+// HasExecutedTodayForTaskTypesContext returns database errors instead of
+// silently treating a failed read as "not executed".
+func (s *TaskService) HasExecutedTodayForTaskTypesContext(ctx context.Context, accountID uint, taskTypes []string) (bool, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	cstZone := time.FixedZone("CST", 8*3600)
 	now := time.Now().In(cstZone)
 	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, cstZone)
 	tomorrow := today.Add(24 * time.Hour)
 
 	var count int64
-	s.taskLogRepo.CountByAccountIDTaskTypesAndDateRange(accountID, taskTypes, today, tomorrow, &count)
-	return count > 0
+	if err := s.taskLogRepo.WithContext(ctx).CountByAccountIDTaskTypesAndDateRangeWithError(accountID, taskTypes, today, tomorrow, &count); err != nil {
+		return false, err
+	}
+	return count > 0, nil
 }

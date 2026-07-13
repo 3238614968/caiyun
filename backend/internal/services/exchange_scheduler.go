@@ -1,12 +1,14 @@
 package services
 
 import (
-	"caiyun/internal/constants"
+	"caiyun/internal/envutil"
 	"caiyun/internal/models"
+	"caiyun/internal/monitor"
 	"caiyun/internal/repository"
 	"caiyun/internal/ws"
 	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"time"
 )
@@ -24,22 +26,20 @@ type ExchangeScheduler struct {
 	hub                 *ws.Hub
 	leaseStore          schedulerLeaseStore
 	leaseOwner          string
+	metrics             *monitor.Metrics
+	runningTimeout      time.Duration
 
 	// 抢兑队列
-	morningQueue []*models.ExchangeTask // 上午10点抢兑队列
-	eveningQueue []*models.ExchangeTask // 下午16点抢兑队列
-	queueMutex   sync.RWMutex
-
-	// 执行状态
-	isMorningRunning bool
-	isEveningRunning bool
-	statusMutex      sync.RWMutex
+	preparedQueue []*models.ExchangeTask
+	queueMutex    sync.RWMutex
 
 	// 停止信号
 	stopChan chan struct{}
 	stopOnce sync.Once
 	loopWG   sync.WaitGroup
 }
+
+const defaultExchangeTaskRunningTimeout = 15 * time.Minute
 
 type schedulerLeaseStore interface {
 	SetNX(key string, value interface{}, expiration time.Duration) (bool, error)
@@ -67,6 +67,7 @@ func NewExchangeScheduler(
 		hub:                 ws.GetHub(),
 		leaseOwner:          randomLockValue(0),
 		stopChan:            make(chan struct{}),
+		runningTimeout:      exchangeTaskRunningTimeoutFromEnv(),
 	}
 }
 
@@ -78,12 +79,28 @@ func (s *ExchangeScheduler) SetLeaseStore(store schedulerLeaseStore) {
 	s.leaseStore = store
 }
 
+// SetMetrics 绑定 Prometheus 指标收集器。
+func (s *ExchangeScheduler) SetMetrics(metrics *monitor.Metrics) {
+	if s == nil {
+		return
+	}
+	s.metrics = metrics
+}
+
+func (s *ExchangeScheduler) SetRunningTimeout(timeout time.Duration) {
+	if s == nil || timeout <= 0 {
+		return
+	}
+	s.runningTimeout = timeout
+}
+
 // Start 启动调度器
 func (s *ExchangeScheduler) Start() {
 	if s == nil {
 		return
 	}
 	log.Println("【抢兑调度器】启动...")
+	s.recoverStaleRunningTasks("startup")
 	s.loopWG.Add(1)
 	go func() {
 		defer s.loopWG.Done()
@@ -105,20 +122,51 @@ func (s *ExchangeScheduler) Stop() {
 
 // scheduleLoop 调度循环
 func (s *ExchangeScheduler) scheduleLoop() {
-	ticker := time.NewTicker(1 * time.Second)
-	defer ticker.Stop()
+	wakeTimer := time.NewTimer(nextSchedulerWakeDelay(time.Now()))
+	recoverTicker := time.NewTicker(time.Minute)
+	defer wakeTimer.Stop()
+	defer recoverTicker.Stop()
 
 	for {
 		select {
 		case <-s.stopChan:
 			return
-		case <-ticker.C:
+		case <-recoverTicker.C:
+			if s.isStopped() {
+				return
+			}
+			s.recoverStaleRunningTasks("ticker")
+		case <-wakeTimer.C:
 			if s.isStopped() {
 				return
 			}
 			s.checkAndPrepareExchange()
+			wakeTimer.Reset(nextSchedulerWakeDelay(time.Now()))
 		}
 	}
+}
+
+func (s *ExchangeScheduler) recoverStaleRunningTasks(source string) {
+	if s == nil || s.exchangeTaskRepo == nil {
+		return
+	}
+	timeout := s.runningTimeout
+	if timeout <= 0 {
+		timeout = exchangeTaskRunningTimeoutFromEnv()
+		s.runningTimeout = timeout
+	}
+	recovered, err := s.exchangeTaskRepo.RecoverStaleRunning(timeout)
+	if err != nil {
+		log.Printf("【抢兑调度器】恢复超时 running 任务失败 source=%s err=%v", source, err)
+		return
+	}
+	if recovered > 0 {
+		log.Printf("【抢兑调度器】已恢复 %d 个超时 running 抢兑任务 source=%s", recovered, source)
+	}
+}
+
+func exchangeTaskRunningTimeoutFromEnv() time.Duration {
+	return envutil.Duration("EXCHANGE_TASK_RUNNING_TIMEOUT", defaultExchangeTaskRunningTimeout)
 }
 
 func (s *ExchangeScheduler) isStopped() bool {
@@ -192,13 +240,15 @@ func (s *ExchangeScheduler) prepareQueueByTime(hour, minute int) {
 	slot := fmt.Sprintf("%02d:%02d", hour, minute)
 
 	// Load tasks for the target slot.
-	tasks, err := s.exchangeTaskRepo.GetTasksByTime(hour, minute)
+	tasks, skipped, err := s.exchangeTaskRepo.GetTasksByTimeAtWithSkips(hour, minute, time.Now())
 	if err != nil {
 		log.Printf("【抢兑调度器】获取 %s 抢兑任务失败: %v", slot, err)
 		return
 	}
+	s.reportScheduleSkips(slot, skipped)
+	s.reportScheduleMatched(slot, tasks)
 
-	log.Printf("【抢兑调度器】查询 %s 找到 %d 个任务", slot, len(tasks))
+	log.Printf("【抢兑调度器】查询 %s 找到 %d 个可执行任务，策略跳过 %d 个任务", slot, len(tasks), len(skipped))
 
 	if len(tasks) == 0 {
 		return
@@ -220,7 +270,7 @@ func (s *ExchangeScheduler) prepareQueueByTime(hour, minute int) {
 
 	s.queueMutex.Lock()
 	// Merge into the shared in-memory queue.
-	s.morningQueue = mergeExchangeTasks(s.morningQueue, tasks)
+	s.preparedQueue = mergeExchangeTasks(s.preparedQueue, tasks)
 	s.queueMutex.Unlock()
 
 	log.Printf("【抢兑调度器】%s 抢兑队列已准备，共 %d 个任务", slot, len(tasks))
@@ -240,34 +290,34 @@ func (s *ExchangeScheduler) executeExchangeByTime(hour, minute int) {
 		return
 	}
 	slot := fmt.Sprintf("%02d:%02d", hour, minute)
+	now := time.Now()
 
 	s.queueMutex.Lock()
 	var tasksToExecute []*models.ExchangeTask
 	var remainingTasks []*models.ExchangeTask
 
-	for _, task := range s.morningQueue {
-		et1 := task.ExchangeAccount.ExchangeTime1
-		et2 := task.ExchangeAccount.ExchangeTime2
-		timeStr := fmt.Sprintf("%02d:%02d:00", hour, minute)
-
-		if et1 == timeStr || et2 == timeStr {
+	for _, task := range s.preparedQueue {
+		if taskMatchesExchangeSlot(task, hour, minute, now) {
 			tasksToExecute = append(tasksToExecute, task)
 		} else {
 			remainingTasks = append(remainingTasks, task)
 		}
 	}
 
-	s.morningQueue = remainingTasks
+	s.preparedQueue = remainingTasks
 	s.queueMutex.Unlock()
 
 	fromPreparedQueue := len(tasksToExecute) > 0
 	if len(tasksToExecute) == 0 {
 		var err error
-		tasksToExecute, err = s.exchangeTaskRepo.GetTasksByTime(hour, minute)
+		var skipped []repository.ExchangeTaskScheduleSkip
+		tasksToExecute, skipped, err = s.exchangeTaskRepo.GetTasksByTimeAtWithSkips(hour, minute, now)
 		if err != nil {
 			log.Printf("【抢兑调度器】补查 %s 抢兑任务失败: %v", slot, err)
 			return
 		}
+		s.reportScheduleSkips(slot, skipped)
+		s.reportScheduleMatched(slot, tasksToExecute)
 		if len(tasksToExecute) == 0 {
 			return
 		}
@@ -293,113 +343,75 @@ func (s *ExchangeScheduler) executeExchangeByTime(hour, minute int) {
 	}
 
 	log.Printf("【抢兑调度器】开始执行 %s 抢兑，共 %d 个任务", slot, len(tasksToExecute))
-	go s.executeExchangeWithAutoSwitch(tasksToExecute, slot)
-}
-
-// prepareMorningQueue 准备上午抢兑队列
-func (s *ExchangeScheduler) prepareMorningQueue() {
-	s.queueMutex.Lock()
-	defer s.queueMutex.Unlock()
-
-	// 获取所有启用的抢兑任务（上午10点）
-	tasks, err := s.exchangeTaskRepo.GetTasksByTime(constants.MorningExchangeHour, constants.MorningExchangeMinute)
-	if err != nil {
-		log.Printf("【抢兑调度器】获取上午抢兑任务失败: %v", err)
-		return
-	}
-
-	s.morningQueue = tasks
-	log.Printf("【抢兑调度器】上午抢兑队列已准备，共 %d 个任务", len(tasks))
-
-	// 发送WebSocket通知
-	s.hub.Broadcast(ws.Message{
-		Type: "exchange_preparing",
-		Data: map[string]interface{}{
-			"period":  "morning",
-			"time":    "10:00",
-			"count":   len(tasks),
-			"message": fmt.Sprintf("上午10点抢兑即将开始，共%d个任务准备就绪", len(tasks)),
-		},
-	})
-}
-
-// prepareEveningQueue 准备下午抢兑队列
-func (s *ExchangeScheduler) prepareEveningQueue() {
-	s.queueMutex.Lock()
-	defer s.queueMutex.Unlock()
-
-	// 获取所有启用的抢兑任务（下午16点）
-	tasks, err := s.exchangeTaskRepo.GetTasksByTime(constants.EveningExchangeHour, constants.EveningExchangeMinute)
-	if err != nil {
-		log.Printf("【抢兑调度器】获取下午抢兑任务失败: %v", err)
-		return
-	}
-
-	s.eveningQueue = tasks
-	log.Printf("【抢兑调度器】下午抢兑队列已准备，共 %d 个任务", len(tasks))
-
-	// 发送WebSocket通知
-	s.hub.Broadcast(ws.Message{
-		Type: "exchange_preparing",
-		Data: map[string]interface{}{
-			"period":  "evening",
-			"time":    "16:00",
-			"count":   len(tasks),
-			"message": fmt.Sprintf("下午16点抢兑即将开始，共%d个任务准备就绪", len(tasks)),
-		},
-	})
-}
-
-// executeMorningExchange 执行上午抢兑
-func (s *ExchangeScheduler) executeMorningExchange() {
-	s.statusMutex.Lock()
-	s.isMorningRunning = true
-	s.statusMutex.Unlock()
-
-	defer func() {
-		s.statusMutex.Lock()
-		s.isMorningRunning = false
-		s.statusMutex.Unlock()
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("【抢兑调度器】%s 抢兑执行 panic: %v", slot, r)
+			}
+		}()
+		s.executeExchangeWithAutoSwitch(tasksToExecute, slot)
 	}()
-
-	s.queueMutex.RLock()
-	tasks := make([]*models.ExchangeTask, len(s.morningQueue))
-	copy(tasks, s.morningQueue)
-	s.queueMutex.RUnlock()
-
-	if len(tasks) == 0 {
-		log.Println("【抢兑调度器】上午抢兑队列为空")
-		return
-	}
-
-	log.Printf("【抢兑调度器】开始执行上午抢兑，共 %d 个任务", len(tasks))
-	s.executeExchangeWithAutoSwitch(tasks, "morning")
-}
-
-// executeEveningExchange 执行下午抢兑
-func (s *ExchangeScheduler) executeEveningExchange() {
-	s.statusMutex.Lock()
-	s.isEveningRunning = true
-	s.statusMutex.Unlock()
-
-	defer func() {
-		s.statusMutex.Lock()
-		s.isEveningRunning = false
-		s.statusMutex.Unlock()
-	}()
-
-	s.queueMutex.RLock()
-	tasks := make([]*models.ExchangeTask, len(s.eveningQueue))
-	copy(tasks, s.eveningQueue)
-	s.queueMutex.RUnlock()
-
-	if len(tasks) == 0 {
-		log.Println("【抢兑调度器】下午抢兑队列为空")
-		return
-	}
-
-	log.Printf("【抢兑调度器】开始执行下午抢兑，共 %d 个任务", len(tasks))
-	s.executeExchangeWithAutoSwitch(tasks, "evening")
 }
 
 // executeExchangeWithAutoSwitch 执行抢兑（带自动切换账号功能）
+
+func (s *ExchangeScheduler) reportScheduleSkips(slot string, skipped []repository.ExchangeTaskScheduleSkip) {
+	for _, item := range skipped {
+		cycle := strings.TrimSpace(item.RestockCycle)
+		if cycle == "" {
+			cycle = "daily"
+		}
+		policy := strings.TrimSpace(item.CalendarPolicy)
+		if policy == "" {
+			policy = "all"
+		}
+		log.Printf("【抢兑调度器】%s 任务 %d 因策略不匹配跳过: %s", slot, item.TaskID, item.Reason)
+		if s.metrics != nil {
+			s.metrics.IncExchangeScheduleSkip(normalizeScheduleSkipMetricReason(item.Reason), cycle, policy)
+		}
+	}
+}
+
+func (s *ExchangeScheduler) reportScheduleMatched(slot string, tasks []*models.ExchangeTask) {
+	if s.metrics == nil {
+		return
+	}
+	for _, task := range tasks {
+		if task == nil {
+			continue
+		}
+		cycle := strings.TrimSpace(task.RestockCycle)
+		if cycle == "" {
+			cycle = "daily"
+		}
+		policy := strings.TrimSpace(task.CalendarPolicy)
+		if policy == "" {
+			policy = "all"
+		}
+		s.metrics.IncExchangeScheduleMatchedTask(
+			slot,
+			cycle,
+			policy,
+			strings.TrimSpace(task.ScheduledExchangeTime) != "" || strings.TrimSpace(task.RestockTimes) != "",
+			strings.TrimSpace(task.CustomCron) != "",
+		)
+	}
+}
+
+func normalizeScheduleSkipMetricReason(reason string) string {
+	reason = strings.TrimSpace(reason)
+	switch {
+	case reason == "":
+		return "unknown"
+	case strings.Contains(reason, "cron"):
+		return "cron_mismatch"
+	case strings.Contains(reason, "补货周期") || strings.Contains(reason, "仅一次"):
+		return "cycle_mismatch"
+	case strings.Contains(reason, "日历策略"):
+		return "calendar_policy"
+	case strings.Contains(reason, "时间"):
+		return "time_mismatch"
+	default:
+		return "other"
+	}
+}

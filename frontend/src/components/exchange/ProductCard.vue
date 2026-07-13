@@ -4,27 +4,69 @@
     class="product-card"
     :class="{ 'sold-out': isSoldOut, mobile: isMobile }"
   >
-    <div class="product-layout" :class="{ mobile: isMobile }">
-      <div class="product-image" :class="{ mobile: isMobile, 'has-image': imageUrl }">
-        <img
+    <div
+      class="product-layout"
+      :class="{ mobile: isMobile }"
+    >
+      <div
+        class="product-image"
+        :class="{ mobile: isMobile, 'has-image': imageUrl }"
+      >
+        <picture
           v-if="imageUrl"
-          :src="imageUrl"
-          :alt="product.prize_name"
-          class="product-img"
-          @error="handleProductImageError"
-        />
+          class="product-picture"
+        >
+          <source
+            v-if="imageSource?.avifSrc"
+            :srcset="imageSource.avifSrc"
+            type="image/avif"
+          >
+          <img
+            :src="imageUrl"
+            :alt="product.prize_name"
+            class="product-img"
+            loading="lazy"
+            decoding="async"
+            fetchpriority="low"
+            @error="handleProductImageError"
+          >
+        </picture>
         <div class="product-image-fallback">
-          <el-icon :size="isMobile ? 36 : 48" color="#409EFF"><Present /></el-icon>
+          <el-icon
+            :size="isMobile ? 36 : 48"
+            color="#409EFF"
+          >
+            <Present />
+          </el-icon>
         </div>
       </div>
 
-      <div class="product-content" :class="{ mobile: isMobile }">
-        <div class="product-title">{{ product.prize_name }}</div>
-        <div class="product-meta" :class="{ mobile: isMobile }">
-          <el-tag size="small" effect="plain" type="info">{{ product.category }}</el-tag>
+      <div
+        class="product-content"
+        :class="{ mobile: isMobile }"
+      >
+        <div class="product-title">
+          {{ product.prize_name }}
+        </div>
+        <div
+          class="product-meta"
+          :class="{ mobile: isMobile }"
+        >
+          <el-tag
+            size="small"
+            effect="plain"
+            type="info"
+          >
+            {{ product.category }}
+          </el-tag>
           <span class="product-price">
-            <svg class="cloud-icon" viewBox="0 0 24 24" fill="currentColor" xmlns="http://www.w3.org/2000/svg">
-              <path d="M19.35 10.04C18.67 6.59 15.64 4 12 4 9.11 4 6.6 5.64 5.35 8.04 2.34 8.36 0 10.91 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96z"/>
+            <svg
+              class="cloud-icon"
+              viewBox="0 0 24 24"
+              fill="currentColor"
+              xmlns="http://www.w3.org/2000/svg"
+            >
+              <path d="M19.35 10.04C18.67 6.59 15.64 4 12 4 9.11 4 6.6 5.64 5.35 8.04 2.34 8.36 0 10.91 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96z" />
             </svg>
             <span class="price-value">{{ product.p_order }}</span>
           </span>
@@ -36,7 +78,10 @@
               <el-icon><Box /></el-icon>
               库存
             </span>
-            <span class="stock-value" :class="{ low: product.daily_remainder_count <= 10, empty: product.daily_remainder_count === 0 }">
+            <span
+              class="stock-value"
+              :class="{ low: product.daily_remainder_count <= 10, empty: product.daily_remainder_count === 0 }"
+            >
               {{ product.daily_remainder_count }}/{{ stockLimit }}
             </span>
           </div>
@@ -66,12 +111,13 @@
 import { computed } from 'vue'
 import { Box, Present } from '@element-plus/icons-vue'
 import type { Product } from '@/api/exchange'
+import type { ProductImageSource } from '@/utils/product-image'
 
 type ProductWithDailyCount = Product & { daily_count?: number }
 
 const props = defineProps<{
   product: ProductWithDailyCount
-  imageUrl?: string
+  imageSource?: ProductImageSource | null
   isMobile: boolean
   immediateEnabled: boolean
 }>()
@@ -82,6 +128,7 @@ const emit = defineEmits<{
   createTask: [product: ProductWithDailyCount]
 }>()
 
+const imageUrl = computed(() => props.imageSource?.src || '')
 const isSoldOut = computed(() => props.product.stock_status === 'sold_out' || props.product.daily_remainder_count === 0)
 const stockLimit = computed(() => props.product.daily_count || props.product.daily_limit_count || '-')
 const stockPercentage = computed(() => {
@@ -109,7 +156,13 @@ const actionText = computed(() => {
 const handleProductImageError = (event: Event) => {
   const image = event.target as HTMLImageElement | null
   if (image) {
-    image.style.display = 'none'
+    const picture = image.closest('picture')
+    if (picture) {
+      const pictureElement = picture as HTMLElement
+      pictureElement.style.display = 'none'
+    } else {
+      image.style.display = 'none'
+    }
   }
 }
 
@@ -202,6 +255,10 @@ const handleAction = () => {
 
 .product-card:hover .product-img {
   transform: scale(1.05);
+}
+
+.product-picture {
+  display: contents;
 }
 
 .product-image-fallback {

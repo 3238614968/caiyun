@@ -3,12 +3,20 @@ package repository
 import (
 	"caiyun/internal/models"
 	"context"
+	"time"
 
 	"gorm.io/gorm"
 )
 
 type SystemConfigRepository struct {
 	db *gorm.DB
+}
+
+// SystemConfigUpdate 表示一次配置写入。
+type SystemConfigUpdate struct {
+	Key         string
+	Value       string
+	Description string
 }
 
 func NewSystemConfigRepository(db *gorm.DB) *SystemConfigRepository {
@@ -45,11 +53,14 @@ func (r *SystemConfigRepository) Set(key, value string) error {
 		Where("key_name = ?", key).
 		Update("key_value", value)
 
+	if result.Error != nil {
+		return result.Error
+	}
 	if result.RowsAffected == 0 {
 		return r.db.Create(config).Error
 	}
 
-	return result.Error
+	return nil
 }
 
 // UpdateByKey 根据 key 更新配置
@@ -66,14 +77,33 @@ func (r *SystemConfigRepository) UpdateByKey(key, value, description string) err
 		Updates(map[string]interface{}{
 			"key_value":   value,
 			"description": description,
-			"updated_at":  gorm.Expr("NOW()"),
+			"updated_at":  time.Now(),
 		})
 
+	if result.Error != nil {
+		return result.Error
+	}
 	if result.RowsAffected == 0 {
 		return r.db.Create(config).Error
 	}
 
-	return result.Error
+	return nil
+}
+
+// BatchUpdate 在同一事务中批量更新配置，避免校验通过后的部分写入。
+func (r *SystemConfigRepository) BatchUpdate(updates []SystemConfigUpdate) error {
+	if len(updates) == 0 {
+		return nil
+	}
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		txRepo := &SystemConfigRepository{db: tx}
+		for _, update := range updates {
+			if err := txRepo.UpdateByKey(update.Key, update.Value, update.Description); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }
 
 // GetAll 获取所有配置

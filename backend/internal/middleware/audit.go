@@ -4,34 +4,53 @@ import (
 	"bytes"
 	"caiyun/internal/models"
 	"caiyun/internal/repository"
+	"context"
 	"encoding/json"
 	"io"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"github.com/gin-gonic/gin"
 )
 
 const (
-	auditWorkerCount = 4
-	auditBufferSize  = 4096
+	auditWorkerCount        = 4
+	auditBufferSize         = 4096
+	auditCaptureSize        = 64 << 10
+	auditPersistTimeout     = 3 * time.Second
+	auditShutdownDrainTime  = 15 * time.Second
+	auditShutdownCancelWait = time.Second
 )
 
 // asyncAuditWriter 是应用级单例，所有审计中间件共享同一组 worker，
 // 避免每个请求都新建 worker goroutine 造成泄漏。
+type auditDroppedMetrics interface {
+	IncAuditDropped()
+}
+
+type auditDroppedMetricsHolder struct {
+	metrics auditDroppedMetrics
+}
+
 type asyncAuditWriter struct {
 	repo     *repository.AuditLogRepository
 	ch       chan *models.AuditLog
 	stopOnce sync.Once
-	stopCh   chan struct{}
+	mu       sync.RWMutex
+	closed   bool
+	wg       sync.WaitGroup
+	ctx      context.Context
+	cancel   context.CancelFunc
 }
 
 var (
-	globalAuditWriter   *asyncAuditWriter
-	globalAuditWriterMu sync.Mutex
-	auditDroppedTotal   atomic.Int64
+	globalAuditWriter        *asyncAuditWriter
+	globalAuditWriterMu      sync.Mutex
+	globalAuditDroppedMetric atomic.Pointer[auditDroppedMetricsHolder]
+	auditDroppedTotal        atomic.Int64
 )
 
 // InitGlobalAuditWriter 在应用启动时调用一次，创建共享的审计 writer 并启动 worker。
@@ -61,12 +80,24 @@ func StopGlobalAuditWriter() {
 	}
 }
 
+// SetAuditDroppedMetrics 注册审计丢弃指标写入器，使队列满时可实时反映到 Prometheus。
+func SetAuditDroppedMetrics(metrics auditDroppedMetrics) {
+	if metrics == nil {
+		globalAuditDroppedMetric.Store(nil)
+		return
+	}
+	globalAuditDroppedMetric.Store(&auditDroppedMetricsHolder{metrics: metrics})
+}
+
 func newAsyncAuditWriter(repo *repository.AuditLogRepository) *asyncAuditWriter {
+	ctx, cancel := context.WithCancel(context.Background())
 	w := &asyncAuditWriter{
 		repo:   repo,
 		ch:     make(chan *models.AuditLog, auditBufferSize),
-		stopCh: make(chan struct{}),
+		ctx:    ctx,
+		cancel: cancel,
 	}
+	w.wg.Add(auditWorkerCount)
 	for i := 0; i < auditWorkerCount; i++ {
 		go w.worker()
 	}
@@ -78,14 +109,43 @@ func (w *asyncAuditWriter) stop() {
 		return
 	}
 	w.stopOnce.Do(func() {
-		close(w.stopCh)
+		w.mu.Lock()
+		w.closed = true
 		close(w.ch)
+		w.mu.Unlock()
+
+		drained := make(chan struct{})
+		go func() {
+			w.wg.Wait()
+			close(drained)
+		}()
+		timer := time.NewTimer(auditShutdownDrainTime)
+		defer timer.Stop()
+		select {
+		case <-drained:
+			w.cancel()
+		case <-timer.C:
+			// Bound shutdown even when the database is unhealthy. Cancelling the
+			// writer context interrupts in-flight GORM operations and causes
+			// workers to discard the remaining buffered entries.
+			w.cancel()
+			select {
+			case <-drained:
+			case <-time.After(auditShutdownCancelWait):
+			}
+		}
 	})
 }
 
 func (w *asyncAuditWriter) worker() {
+	defer w.wg.Done()
 	for {
+		if w.ctx.Err() != nil {
+			return
+		}
 		select {
+		case <-w.ctx.Done():
+			return
 		case auditLog, ok := <-w.ch:
 			if !ok {
 				return
@@ -93,11 +153,12 @@ func (w *asyncAuditWriter) worker() {
 			if auditLog == nil || w.repo == nil {
 				continue
 			}
-			if err := w.repo.Create(auditLog); err != nil {
+			persistCtx, cancel := context.WithTimeout(w.ctx, auditPersistTimeout)
+			err := w.repo.WithContext(persistCtx).Create(auditLog)
+			cancel()
+			if err != nil {
 				gin.DefaultErrorWriter.Write([]byte("保存审计日志失败: " + err.Error() + "\n"))
 			}
-		case <-w.stopCh:
-			return
 		}
 	}
 }
@@ -106,12 +167,25 @@ func (w *asyncAuditWriter) enqueue(auditLog *models.AuditLog) {
 	if w == nil || auditLog == nil {
 		return
 	}
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+	if w.closed {
+		recordAuditDrop("审计日志 writer 已关闭，丢弃当前审计日志\n")
+		return
+	}
 	select {
 	case w.ch <- auditLog:
 	default:
-		auditDroppedTotal.Add(1)
-		gin.DefaultErrorWriter.Write([]byte("审计日志队列已满，丢弃当前审计日志\n"))
+		recordAuditDrop("审计日志队列已满，丢弃当前审计日志\n")
 	}
+}
+
+func recordAuditDrop(message string) {
+	auditDroppedTotal.Add(1)
+	if holder := globalAuditDroppedMetric.Load(); holder != nil && holder.metrics != nil {
+		holder.metrics.IncAuditDropped()
+	}
+	gin.DefaultErrorWriter.Write([]byte(message))
 }
 
 // AuditDroppedCount 返回因异步队列满而丢弃的审计日志累计数量。
@@ -146,16 +220,24 @@ func AuditMiddleware(auditRepo *repository.AuditLogRepository) gin.HandlerFunc {
 		userID, _ := c.Get("user_id")
 		username, _ := c.Get("username")
 
-		// 读取请求体
-		var requestBody []byte
-		if c.Request.Body != nil {
-			requestBody, _ = io.ReadAll(c.Request.Body)
-			// 重新设置请求体，以便后续处理
-			c.Request.Body = io.NopCloser(bytes.NewBuffer(requestBody))
+		// 通过有界 Tee 捕获请求体，避免为审计而完整复制大请求。
+		captureBody := shouldCaptureAuditBody(c)
+		requestCapture := newLimitedAuditCapture(auditCaptureSize)
+		if c.Request.Body != nil && captureBody {
+			originalBody := c.Request.Body
+			c.Request.Body = &auditReadCloser{
+				Reader: io.TeeReader(originalBody, requestCapture),
+				Closer: originalBody,
+			}
 		}
 
-		// 创建响应写入器来捕获响应
-		blw := &bodyLogWriter{body: bytes.NewBufferString(""), ResponseWriter: c.Writer}
+		// 响应体同样只保留前 auditCaptureSize 字节，实际响应仍完整写给客户端。
+		responseCapture := newLimitedAuditCapture(auditCaptureSize)
+		blw := &bodyLogWriter{
+			ResponseWriter: c.Writer,
+			capture:        responseCapture,
+			captureBody:    captureBody,
+		}
 		c.Writer = blw
 
 		// 继续处理请求
@@ -175,10 +257,11 @@ func AuditMiddleware(auditRepo *repository.AuditLogRepository) gin.HandlerFunc {
 			Resource:     string(resource),
 			Method:       c.Request.Method,
 			Path:         c.Request.URL.Path,
+			RequestID:    GetRequestID(c),
 			IP:           c.ClientIP(),
 			UserAgent:    c.Request.UserAgent(),
-			RequestData:  truncateString(redactAuditPayload(requestBody), 2000),
-			ResponseData: truncateString(redactAuditPayload(blw.body.Bytes()), 2000),
+			RequestData:  formatAuditCapture(requestCapture),
+			ResponseData: formatAuditCapture(responseCapture),
 			StatusCode:   c.Writer.Status(),
 			ExecTimeMs:   int(execTime),
 		}
@@ -194,15 +277,90 @@ func AuditMiddleware(auditRepo *repository.AuditLogRepository) gin.HandlerFunc {
 	}
 }
 
-// bodyLogWriter 用于捕获响应体的写入器
+type auditReadCloser struct {
+	io.Reader
+	io.Closer
+}
+
+type limitedAuditCapture struct {
+	body      bytes.Buffer
+	limit     int
+	truncated bool
+}
+
+func newLimitedAuditCapture(limit int) *limitedAuditCapture {
+	return &limitedAuditCapture{limit: limit}
+}
+
+func (c *limitedAuditCapture) Write(p []byte) (int, error) {
+	if c == nil {
+		return len(p), nil
+	}
+	remaining := c.limit - c.body.Len()
+	if remaining > 0 {
+		toWrite := len(p)
+		if toWrite > remaining {
+			toWrite = remaining
+		}
+		_, _ = c.body.Write(p[:toWrite])
+	}
+	if len(p) > remaining {
+		c.truncated = true
+	}
+	return len(p), nil
+}
+
+func formatAuditCapture(capture *limitedAuditCapture) string {
+	if capture == nil || capture.body.Len() == 0 {
+		return ""
+	}
+	value := truncateString(redactAuditPayload(capture.body.Bytes()), 2000)
+	if capture.truncated {
+		value += " [capture_truncated]"
+	}
+	return value
+}
+
+func shouldCaptureAuditBody(c *gin.Context) bool {
+	if c == nil || c.Request == nil {
+		return false
+	}
+	path := strings.ToLower(c.Request.URL.Path)
+	if path == "/ws" || strings.Contains(path, "/export") || strings.Contains(path, "/download") {
+		return false
+	}
+	contentType := strings.ToLower(c.GetHeader("Content-Type"))
+	if strings.Contains(contentType, "multipart/form-data") || strings.Contains(contentType, "application/octet-stream") {
+		return false
+	}
+	return !strings.EqualFold(c.GetHeader("Upgrade"), "websocket")
+}
+
+// bodyLogWriter 用于有界捕获响应体，不改变真实响应的写入行为。
 type bodyLogWriter struct {
 	gin.ResponseWriter
-	body *bytes.Buffer
+	capture     *limitedAuditCapture
+	captureBody bool
 }
 
 func (w *bodyLogWriter) Write(b []byte) (int, error) {
-	w.body.Write(b)
+	if w.captureBody && w.capture != nil && !isDownloadResponse(w.Header()) {
+		_, _ = w.capture.Write(b)
+	}
 	return w.ResponseWriter.Write(b)
+}
+
+func (w *bodyLogWriter) WriteString(value string) (int, error) {
+	if w.captureBody && w.capture != nil && !isDownloadResponse(w.Header()) {
+		_, _ = w.capture.Write([]byte(value))
+	}
+	return w.ResponseWriter.WriteString(value)
+}
+
+func isDownloadResponse(header map[string][]string) bool {
+	contentDisposition := strings.ToLower(strings.Join(header["Content-Disposition"], ","))
+	contentType := strings.ToLower(strings.Join(header["Content-Type"], ","))
+	return strings.Contains(contentDisposition, "attachment") || strings.Contains(contentType, "application/octet-stream")
 }
 
 // determineActionAndResource 根据请求方法和路径确定操作类型和资源
@@ -294,10 +452,18 @@ func getStringValue(v interface{}) string {
 
 // truncateString 截断字符串
 func truncateString(s string, maxLen int) string {
+	if maxLen <= 0 {
+		return ""
+	}
+	s = strings.ToValidUTF8(s, "�")
 	if len(s) <= maxLen {
 		return s
 	}
-	return s[:maxLen] + "..."
+	end := maxLen
+	for end > 0 && !utf8.RuneStart(s[end]) {
+		end--
+	}
+	return s[:end] + "..."
 }
 
 // redactAuditPayload 脱敏审计日志中的请求/响应载荷，避免凭据二次落库。
@@ -389,6 +555,7 @@ func NewAuditLogFilter() *AuditLogFilter {
 			"/health",
 			"/ws",
 			"/api/auth/refresh",
+			"/api/v1/auth/refresh",
 		},
 	}
 }

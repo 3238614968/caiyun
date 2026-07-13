@@ -4,6 +4,7 @@ import (
 	"caiyun/internal/cache"
 	"caiyun/internal/core/auth"
 	corehttp "caiyun/internal/core/http"
+	"caiyun/internal/envutil"
 	"caiyun/internal/models"
 	"caiyun/internal/repository"
 	"context"
@@ -14,6 +15,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 )
 
 // TokenManager 统一管理账号 JWT Token 的缓存、刷新与健康状态。
@@ -49,13 +51,14 @@ type tokenRefreshSession struct {
 }
 
 const (
-	tokenRefreshErrorTTL    = 2 * time.Minute
-	maxJWTRefreshFailures   = 3
-	tokenRefreshHealthySkew = 2 * time.Minute
-	tokenPreRefreshSkew     = 5 * time.Minute
-	tokenRefreshLockTTL     = 30 * time.Second
-	tokenRefreshLockWait    = 10 * time.Second
-	tokenRefreshPollDelay   = 500 * time.Millisecond
+	tokenRefreshErrorTTL          = 2 * time.Minute
+	maxJWTRefreshFailures         = 3
+	tokenRefreshHealthySkew       = 2 * time.Minute
+	tokenPreRefreshSkew           = 5 * time.Minute
+	tokenRefreshLockTTL           = 30 * time.Second
+	tokenRefreshLockWait          = 10 * time.Second
+	tokenRefreshPollDelay         = 500 * time.Millisecond
+	defaultTokenPreRefreshMaxScan = 50
 )
 
 // NewTokenManager 创建 Token 管理器，并启动后台维护协程。
@@ -417,20 +420,29 @@ func (tm *TokenManager) preRefreshLoop() {
 
 // preRefreshExpiredTokens 将即将过期的 Token 放入预刷新队列。
 func (tm *TokenManager) preRefreshExpiredTokens() {
+	maxScan := tokenPreRefreshMaxScanFromEnv()
+	readyBefore := time.Now().Add(tokenPreRefreshSkew)
+	queued := 0
+
 	tm.tokenCache.Range(func(key, value interface{}) bool {
+		if maxScan > 0 && queued >= maxScan {
+			return false
+		}
+
 		accountID := key.(uint)
 		tokenInfo := value.(*TokenInfo)
-
 		if tokenInfo == nil || tokenInfo.JWTToken == "" || tokenInfo.HealthStatus == "error" {
 			return true
 		}
 
 		// Token 即将过期时提前刷新。
-		if time.Now().Add(tokenPreRefreshSkew).After(tokenInfo.ExpiresAt) {
+		if readyBefore.After(tokenInfo.ExpiresAt) {
 			select {
 			case tm.preRefreshChan <- accountID:
+				queued++
 			default:
-				// 通道已满时跳过，避免阻塞扫描。
+				// 通道已满时提前结束本轮扫描，避免无意义遍历。
+				return false
 			}
 		}
 		return true
@@ -562,14 +574,23 @@ func (tm *TokenManager) CreateAuthenticatedClient(accountID uint, auth string) (
 	return client, nil
 }
 
-// sanitizeAuthValue 清理认证值中的非法字符，只保留可打印 ASCII。
+func tokenPreRefreshMaxScanFromEnv() int {
+	value := envutil.Int("TOKEN_PREREFRESH_MAX_SCAN", defaultTokenPreRefreshMaxScan)
+	if value <= 0 {
+		return defaultTokenPreRefreshMaxScan
+	}
+	return value
+}
+
+// sanitizeAuthValue 清理认证值中的控制字符，保留合法的 Unicode / Base64 / JWT 内容。
 func sanitizeAuthValue(authValue string) string {
 	var b strings.Builder
 	b.Grow(len(authValue))
 	for _, c := range authValue {
-		if c >= 32 && c < 127 {
-			b.WriteRune(c)
+		if unicode.IsControl(c) {
+			continue
 		}
+		b.WriteRune(c)
 	}
 	return strings.TrimSpace(b.String())
 }

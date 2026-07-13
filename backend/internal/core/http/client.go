@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math/rand"
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
@@ -18,9 +19,38 @@ import (
 	"time"
 )
 
+const (
+	defaultMaxRetries   = 3
+	defaultRetryDelay   = time.Second
+	retryDrainBodyLimit = 64 << 10
+)
+
+// RequestOption controls opt-in retry behavior for a single request.
+// Safe methods (GET, HEAD and OPTIONS) retry by default; all other methods
+// require an explicit idempotency guarantee.
+type RequestOption func(*requestOptions)
+
+type requestOptions struct {
+	idempotencyKey string
+}
+
+// WithIdempotencyKey opts a request into retries and sends Idempotency-Key.
+// An empty key is ignored and therefore does not enable retries for an unsafe
+// method.
+func WithIdempotencyKey(key string) RequestOption {
+	return func(options *requestOptions) {
+		key = strings.TrimSpace(key)
+		if key != "" {
+			options.idempotencyKey = key
+		}
+	}
+}
+
 // Client HTTP 客户端
 type Client struct {
 	client     *http.Client
+	maxRetries int
+	retryDelay time.Duration
 	userAgent  string
 	auth       string // Basic Auth
 	jwtToken   string
@@ -52,6 +82,8 @@ func NewClient() *Client {
 			Timeout: 30 * time.Second,
 			Jar:     jar,
 		},
+		maxRetries: defaultMaxRetries,
+		retryDelay: defaultRetryDelay,
 		userAgent:  shumei.RandomMarketUserAgent(),
 		clientInfo: androidClientInfo,
 		deviceInfo: androidClientInfo,
@@ -303,31 +335,60 @@ func (c *Client) buildHeaders(reqURL string, customHeaders map[string]string) ma
 	return headers
 }
 
-// Request HTTP 请求方法（带重试）
-// 重试策略：网络错误、超时、5xx 状态码自动重试，最多 3 次
-// 4xx 状态码不重试，立即返回
+// Request HTTP 请求方法。GET、HEAD 和 OPTIONS 会在网络错误、超时或
+// 5xx 响应时自动重试；其他方法默认只发送一次。
 func (c *Client) Request(method, reqURL string, headers map[string]string, body interface{}) (*http.Response, error) {
-	return c.RequestWithContext(context.Background(), method, reqURL, headers, body)
+	return c.RequestWithOptions(method, reqURL, headers, body)
 }
 
-// RequestWithContext HTTP 请求方法（带重试与 context 取消）。
-// 重试策略：网络错误、超时、5xx 状态码自动重试，最多 3 次。
-// 4xx 状态码不重试，立即返回。
+// RequestWithOptions performs a request without a caller-provided context.
+// Unsafe methods retry only when a non-empty WithIdempotencyKey is
+// supplied explicitly and the upstream honors that key.
+func (c *Client) RequestWithOptions(method, reqURL string, headers map[string]string, body interface{}, options ...RequestOption) (*http.Response, error) {
+	return c.RequestWithContextOptions(context.Background(), method, reqURL, headers, body, options...)
+}
+
+// RequestWithContext HTTP 请求方法（带 context 取消）。GET、HEAD 和
+// OPTIONS 默认重试；POST、PATCH、PUT、DELETE 等方法默认禁止自动重试。
 func (c *Client) RequestWithContext(ctx context.Context, method, reqURL string, headers map[string]string, body interface{}) (*http.Response, error) {
+	return c.RequestWithContextOptions(ctx, method, reqURL, headers, body)
+}
+
+// RequestWithContextOptions performs a request with explicit per-request retry
+// options. WithIdempotencyKey both enables retries for an unsafe method and
+// attaches the key. Unsafe operations cannot opt in without a server-side key.
+func (c *Client) RequestWithContextOptions(ctx context.Context, method, reqURL string, headers map[string]string, body interface{}, optionFns ...RequestOption) (*http.Response, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	const maxRetries = 3
-	const retryDelay = 1 * time.Second
 
-	// 预先序列化请求体为 []byte，确保重试时可以重新构建 Reader
+	requestOptions := requestOptions{}
+	for _, apply := range optionFns {
+		if apply != nil {
+			apply(&requestOptions)
+		}
+	}
+
+	maxRetries := 0
+	if methodRetriesByDefault(method) || requestOptions.idempotencyKey != "" {
+		maxRetries = c.maxRetries
+		if maxRetries < 0 {
+			maxRetries = 0
+		}
+	}
+	retryDelay := c.retryDelay
+	if retryDelay < 0 {
+		retryDelay = 0
+	}
+
+	// 预先序列化请求体为 []byte，确保允许重试时可以重新构建 Reader。
 	var bodyBytes []byte
 	if body != nil {
-		switch v := body.(type) {
+		switch value := body.(type) {
 		case string:
-			bodyBytes = []byte(v)
+			bodyBytes = []byte(value)
 		case []byte:
-			bodyBytes = v
+			bodyBytes = value
 		default:
 			jsonData, err := json.Marshal(body)
 			if err != nil {
@@ -341,19 +402,21 @@ func (c *Client) RequestWithContext(ctx context.Context, method, reqURL string, 
 	var lastErr error
 
 	for attempt := 0; attempt <= maxRetries; attempt++ {
-		// 重试前等待 1 秒（首次请求不等待）
-		if attempt > 0 {
+		if attempt > 0 && retryDelay > 0 {
+			timer := time.NewTimer(retryBackoff(retryDelay, attempt))
 			select {
 			case <-ctx.Done():
+				if !timer.Stop() {
+					<-timer.C
+				}
 				return nil, ctx.Err()
-			case <-time.After(retryDelay):
+			case <-timer.C:
 			}
 		}
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
 
-		// 每次重新创建 body reader
 		var reqBody io.Reader
 		if bodyBytes != nil {
 			reqBody = bytes.NewReader(bodyBytes)
@@ -364,43 +427,76 @@ func (c *Client) RequestWithContext(ctx context.Context, method, reqURL string, 
 			return nil, fmt.Errorf("创建请求失败: %w", err)
 		}
 
-		// 构建并设置请求头
 		allHeaders := c.buildHeaders(reqURL, headers)
+		if requestOptions.idempotencyKey != "" {
+			allHeaders["Idempotency-Key"] = requestOptions.idempotencyKey
+		}
 		for key, value := range allHeaders {
-			// 直接设置header map，避免key被规范化
-			// 服务器可能只识别小写的header key（如jwttoken）
+			// 直接设置 header map，避免 key 被规范化。部分上游只识别
+			// 小写 header key（如 jwttoken）。
 			req.Header[key] = []string{value}
 		}
 
-		// 执行请求
 		resp, err := c.client.Do(req)
 		if err != nil {
-			// 网络错误/超时 → 记录错误，继续重试
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return nil, ctxErr
+			}
 			lastErr = fmt.Errorf("请求失败: %w", err)
 			lastResp = nil
 			continue
 		}
 
-		// HTTP 5xx → 关闭响应体防止连接泄漏，继续重试
-		if resp.StatusCode >= 500 {
+		if resp.StatusCode >= http.StatusInternalServerError {
 			lastResp = resp
 			lastErr = nil
-			// 非最后一次尝试时关闭响应体，防止连接泄漏
 			if attempt < maxRetries {
-				resp.Body.Close()
+				// Drain a bounded prefix so keep-alive connections can be reused
+				// without buffering an untrusted large error response.
+				_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, retryDrainBodyLimit))
+				_ = resp.Body.Close()
 			}
 			continue
 		}
 
-		// 成功或 4xx → 立即返回，不重试
+		// 成功或 4xx 响应均立即返回。
 		return resp, nil
 	}
 
-	// 全部失败，返回最后一次结果
 	if lastResp != nil {
 		return lastResp, nil
 	}
 	return nil, lastErr
+}
+
+// retryBackoff applies capped exponential backoff plus up to 25% jitter so
+// concurrent clients do not retry a recovering upstream in lockstep.
+func retryBackoff(base time.Duration, attempt int) time.Duration {
+	if base <= 0 {
+		return 0
+	}
+	if attempt < 1 {
+		attempt = 1
+	}
+	shift := attempt - 1
+	if shift > 6 {
+		shift = 6
+	}
+	backoff := base * time.Duration(1<<shift)
+	jitterWindow := backoff / 4
+	if jitterWindow <= 0 {
+		return backoff
+	}
+	return backoff + time.Duration(rand.Int63n(int64(jitterWindow)+1))
+}
+
+func methodRetriesByDefault(method string) bool {
+	switch strings.ToUpper(strings.TrimSpace(method)) {
+	case http.MethodGet, http.MethodHead, http.MethodOptions:
+		return true
+	default:
+		return false
+	}
 }
 
 // Get GET 请求

@@ -1,11 +1,18 @@
 <template>
-  <el-card shadow="hover" class="announcement-card">
+  <el-card
+    shadow="hover"
+    class="announcement-card"
+  >
     <template #header>
       <div class="card-header">
         <div class="announcement-title">
           <el-icon><Bell /></el-icon>
           <span>公告</span>
-          <el-tag v-if="unreadCount > 0" type="danger" size="small">
+          <el-tag
+            v-if="unreadCount > 0"
+            type="danger"
+            size="small"
+          >
             {{ unreadCount }} 条未读
           </el-tag>
         </div>
@@ -21,8 +28,15 @@
       </div>
     </template>
 
-    <div v-loading="loading" class="announcement-list">
-      <el-empty v-if="!loading && announcements.length === 0" description="暂无公告" :image-size="80" />
+    <div
+      v-loading="loading"
+      class="announcement-list"
+    >
+      <el-empty
+        v-if="!loading && announcements.length === 0"
+        description="暂无公告"
+        :image-size="80"
+      />
       <div
         v-for="item in announcements"
         :key="item.id"
@@ -32,14 +46,36 @@
       >
         <div class="announcement-main">
           <div class="announcement-line">
-            <el-tag v-if="item.is_top" type="danger" size="small">置顶</el-tag>
-            <el-tag v-if="item.is_popup" type="warning" size="small">弹窗</el-tag>
-            <el-tag v-if="!isRead(item.id)" type="success" size="small">未读</el-tag>
+            <el-tag
+              v-if="item.is_top"
+              type="danger"
+              size="small"
+            >
+              置顶
+            </el-tag>
+            <el-tag
+              v-if="item.is_popup"
+              type="warning"
+              size="small"
+            >
+              弹窗
+            </el-tag>
+            <el-tag
+              v-if="!isRead(item.id)"
+              type="success"
+              size="small"
+            >
+              未读
+            </el-tag>
             <span class="announcement-name">{{ item.title }}</span>
           </div>
-          <div class="announcement-preview">{{ item.content }}</div>
+          <div class="announcement-preview">
+            {{ item.content }}
+          </div>
         </div>
-        <div class="announcement-date">{{ formatDateTime(item.created_at) }}</div>
+        <div class="announcement-date">
+          {{ formatDateTime(item.created_at) }}
+        </div>
       </div>
     </div>
   </el-card>

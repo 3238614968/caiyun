@@ -1,0 +1,22 @@
+[Unit]
+Description=Caiyun database migration (unified binary)
+After=network-online.target mysql.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/www/wwwroot/caiyun
+EnvironmentFile=-/www/wwwroot/caiyun/.env
+Environment=APP_ENV=production
+Environment=DB_AUTO_MIGRATE=false
+ExecStart=/www/wwwroot/caiyun/caiyun-linux migrate
+User=www
+Group=www
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ReadWritePaths=/www/wwwroot/caiyun /www/wwwroot/caiyun/logs
+TimeoutStartSec=5min
+
+[Install]
+WantedBy=multi-user.target

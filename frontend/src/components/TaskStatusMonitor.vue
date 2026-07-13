@@ -1,9 +1,16 @@
-﻿<template>
-  <el-card shadow="hover" class="task-status-card">
+<template>
+  <el-card
+    shadow="hover"
+    class="task-status-card"
+  >
     <template #header>
       <div class="card-header">
         <span>任务执行状态</span>
-        <el-button type="text" size="small" @click="refreshStatus">
+        <el-button
+          type="text"
+          size="small"
+          @click="refreshStatus"
+        >
           <el-icon><Refresh /></el-icon>
           刷新
         </el-button>
@@ -14,52 +21,98 @@
     <div class="queue-meta">
       <div class="meta-item">
         <span class="meta-label">队列后端</span>
-        <el-tag type="primary" effect="plain">{{ backendName }}</el-tag>
+        <el-tag
+          type="primary"
+          effect="plain"
+        >
+          {{ backendName }}
+        </el-tag>
       </div>
-      <div class="meta-item" v-if="queueStatus.backend_meta?.consumer_group">
+      <div
+        v-if="queueStatus.backend_meta?.consumer_group"
+        class="meta-item"
+      >
         <span class="meta-label">消费组</span>
         <span class="meta-value">{{ queueStatus.backend_meta.consumer_group }}</span>
       </div>
       <div class="meta-item">
         <span class="meta-label">健康状态</span>
-        <el-tag :type="queueStatus.is_healthy === false ? 'danger' : 'success'" effect="plain">
+        <el-tag
+          :type="queueStatus.is_healthy === false ? 'danger' : 'success'"
+          effect="plain"
+        >
           {{ queueStatus.is_healthy === false ? '异常' : '健康' }}
         </el-tag>
       </div>
     </div>
 
-    <div v-if="queueErrors.length > 0" class="queue-errors">
-      <div v-for="item in queueErrors" :key="item" class="queue-error-item">{{ item }}</div>
+    <div
+      v-if="queueErrors.length > 0"
+      class="queue-errors"
+    >
+      <div
+        v-for="item in queueErrors"
+        :key="item"
+        class="queue-error-item"
+      >
+        {{ item }}
+      </div>
     </div>
 
     <!-- 队列状态 -->
     <div class="queue-status">
       <div class="status-item">
-        <div class="status-label">队列长度</div>
-        <div class="status-value queue-length">{{ queueStatus.queue_length }}</div>
+        <div class="status-label">
+          队列长度
+        </div>
+        <div class="status-value queue-length">
+          {{ queueStatus.queue_length }}
+        </div>
       </div>
       <div class="status-item">
-        <div class="status-label">处理中</div>
-        <div class="status-value processing-count">{{ queueStatus.processing_count || 0 }}</div>
+        <div class="status-label">
+          处理中
+        </div>
+        <div class="status-value processing-count">
+          {{ queueStatus.processing_count || 0 }}
+        </div>
       </div>
       <div class="status-item">
-        <div class="status-label">延迟重试</div>
-        <div class="status-value delayed-count">{{ queueStatus.delayed_count || 0 }}</div>
+        <div class="status-label">
+          延迟重试
+        </div>
+        <div class="status-value delayed-count">
+          {{ queueStatus.delayed_count || 0 }}
+        </div>
       </div>
       <div class="status-item">
-        <div class="status-label">活跃Worker</div>
-        <div class="status-value">{{ queueStatus.active_workers }}</div>
+        <div class="status-label">
+          活跃Worker
+        </div>
+        <div class="status-value">
+          {{ queueStatus.active_workers }}
+        </div>
       </div>
       <div class="status-item">
-        <div class="status-label">待处理任务</div>
-        <div class="status-value">{{ queueStatus.pending_tasks }}</div>
+        <div class="status-label">
+          待处理任务
+        </div>
+        <div class="status-value">
+          {{ queueStatus.pending_tasks }}
+        </div>
       </div>
       <div class="status-item">
-        <div class="status-label">死信</div>
-        <div class="status-value dead-letter-count">{{ queueStatus.dead_letter_count || 0 }}</div>
+        <div class="status-label">
+          死信
+        </div>
+        <div class="status-value dead-letter-count">
+          {{ queueStatus.dead_letter_count || 0 }}
+        </div>
       </div>
       <div class="status-item">
-        <div class="status-label">成功率</div>
+        <div class="status-label">
+          成功率
+        </div>
         <div class="status-value success-rate">
           {{ successRate }}%
         </div>
@@ -67,12 +120,25 @@
     </div>
 
     <!-- 执行中的任务 -->
-    <div v-if="activeTasks.length > 0" class="active-tasks">
-      <div class="section-title">执行中的任务</div>
-      <div v-for="task in activeTasks" :key="`${task.account_id}_${task.task_type}`" class="task-item">
+    <div
+      v-if="activeTasks.length > 0"
+      class="active-tasks"
+    >
+      <div class="section-title">
+        执行中的任务
+      </div>
+      <div
+        v-for="task in activeTasks"
+        :key="`${task.account_id}_${task.task_type}`"
+        class="task-item"
+      >
         <div class="task-info">
-          <div class="task-name">{{ getTaskTypeName(task.task_type) }}</div>
-          <div class="task-account">账号ID: {{ task.account_id }}</div>
+          <div class="task-name">
+            {{ getTaskTypeName(task.task_type) }}
+          </div>
+          <div class="task-account">
+            账号ID: {{ task.account_id }}
+          </div>
         </div>
         <div class="task-progress">
           <el-progress
@@ -80,13 +146,19 @@
             :status="getProgressStatus(task.status)"
             :stroke-width="8"
           />
-          <div class="task-message">{{ task.message || '执行中...' }}</div>
+          <div class="task-message">
+            {{ task.message || '执行中...' }}
+          </div>
         </div>
       </div>
     </div>
 
     <!-- 空状态 -->
-    <el-empty v-else description="暂无执行中的任务" :image-size="100" />
+    <el-empty
+      v-else
+      description="暂无执行中的任务"
+      :image-size="100"
+    />
   </el-card>
 </template>
 

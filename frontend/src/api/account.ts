@@ -1,5 +1,6 @@
 import request from './axios'
-import { unwrapApiData, type ApiResponse } from './response'
+import { unwrapApiData, unwrapOperationResponse, type ApiResponse, type OperationResponse } from './response'
+import { operationHeaders } from './operation'
 
 // 账号接口
 export interface Account {
@@ -113,11 +114,8 @@ export function refreshAccountToken(id: number): Promise<Account> {
 }
 
 // 触发账号任务
-export function triggerAccountTask(id: number): Promise<{ message: string }> {
-  return request({
-    url: `/api/accounts/${id}/trigger`,
-    method: 'post'
-  })
+export function triggerAccountTask(id: number): Promise<OperationResponse> {
+  return request<OperationResponse | ApiResponse<OperationResponse>>({ url: `/api/accounts/${id}/trigger`, method: 'post', headers: operationHeaders() }).then(unwrapOperationResponse)
 }
 
 // 发送短信验证码

@@ -2,20 +2,24 @@ package handlers
 
 import (
 	"crypto/rand"
+	"crypto/subtle"
 	"encoding/base64"
 	"errors"
 	"net/http"
+	"strings"
 	"time"
 
 	"caiyun/internal/services"
+	appErrors "caiyun/pkg/errors"
 	"caiyun/pkg/jwt"
 	apiresponse "caiyun/pkg/response"
 	"github.com/gin-gonic/gin"
 )
 
 const (
-	authCookieName = "auth_token"
-	csrfCookieName = "csrf_token"
+	authCookieName    = "auth_token"
+	refreshCookieName = "refresh_token"
+	csrfCookieName    = "csrf_token"
 )
 
 // AuthHandler 认证处理器
@@ -56,8 +60,9 @@ type SendPasswordResetCodeRequest struct {
 }
 
 type AuthResponse struct {
-	ExpiresAt int64        `json:"expires_at"`
-	User      UserResponse `json:"user"`
+	ExpiresAt        int64        `json:"expires_at"`
+	RefreshExpiresAt int64        `json:"refresh_expires_at,omitempty"`
+	User             UserResponse `json:"user"`
 }
 
 type UserResponse struct {
@@ -84,13 +89,13 @@ func (h *AuthHandler) Register(c *gin.Context) {
 		return
 	}
 
-	resp, err := h.authService.Register(&req)
+	resp, err := h.authService.RegisterContext(c.Request.Context(), &req, requestSessionMetadata(c))
 	if err != nil {
 		switch {
 		case errors.Is(err, services.ErrUserExists):
-			respondError(c, http.StatusConflict, "用户名已存在")
+			respondBusinessError(c, http.StatusConflict, appErrors.BusinessCodeIdentityUsernameExists, "用户名已存在")
 		case errors.Is(err, services.ErrEmailExists):
-			respondError(c, http.StatusConflict, "邮箱已被注册")
+			respondBusinessError(c, http.StatusConflict, appErrors.BusinessCodeIdentityEmailExists, "邮箱已被注册")
 		case errors.Is(err, services.ErrWeakPassword):
 			respondError(c, http.StatusBadRequest, err.Error())
 		default:
@@ -99,12 +104,13 @@ func (h *AuthHandler) Register(c *gin.Context) {
 		return
 	}
 
-	if err := setAuthCookies(c, resp.Token, time.Until(time.Unix(resp.ExpiresAt, 0))); err != nil {
+	if err := setAuthCookies(c, resp.Token, time.Until(time.Unix(resp.ExpiresAt, 0)), resp.RefreshToken, time.Until(time.Unix(resp.RefreshExpiresAt, 0))); err != nil {
 		respondInternalServer(c)
 		return
 	}
 	apiresponse.SuccessCreated(c, AuthResponse{
-		ExpiresAt: resp.ExpiresAt,
+		ExpiresAt:        resp.ExpiresAt,
+		RefreshExpiresAt: resp.RefreshExpiresAt,
 		User: UserResponse{
 			ID:       resp.User.ID,
 			Username: resp.User.Username,
@@ -131,11 +137,11 @@ func (h *AuthHandler) Login(c *gin.Context) {
 		return
 	}
 
-	resp, err := h.authService.Login(&req)
+	resp, err := h.authService.LoginContext(c.Request.Context(), &req, requestSessionMetadata(c))
 	if err != nil {
 		switch err {
 		case services.ErrUserNotFound, services.ErrInvalidCredentials:
-			respondError(c, http.StatusUnauthorized, "用户名或密码错误")
+			respondBusinessError(c, http.StatusUnauthorized, appErrors.BusinessCodeAuthInvalidCredentials, "用户名或密码错误")
 		case services.ErrAccountLocked:
 			respondError(c, http.StatusTooManyRequests, "登录失败次数过多，请稍后再试")
 		default:
@@ -144,12 +150,13 @@ func (h *AuthHandler) Login(c *gin.Context) {
 		return
 	}
 
-	if err := setAuthCookies(c, resp.Token, time.Until(time.Unix(resp.ExpiresAt, 0))); err != nil {
+	if err := setAuthCookies(c, resp.Token, time.Until(time.Unix(resp.ExpiresAt, 0)), resp.RefreshToken, time.Until(time.Unix(resp.RefreshExpiresAt, 0))); err != nil {
 		respondInternalServer(c)
 		return
 	}
 	apiresponse.Success(c, AuthResponse{
-		ExpiresAt: resp.ExpiresAt,
+		ExpiresAt:        resp.ExpiresAt,
+		RefreshExpiresAt: resp.RefreshExpiresAt,
 		User: UserResponse{
 			ID:       resp.User.ID,
 			Username: resp.User.Username,
@@ -208,36 +215,87 @@ func (h *AuthHandler) ResetPassword(c *gin.Context) {
 	apiresponse.Message(c, "密码已重置，请使用新密码登录")
 }
 
-// RefreshToken 刷新Token
-// @Summary 刷新Token
-// @Tags 认证
-// @Accept json
-// @Produce json
-// @Success 200 {object} TokenResponse
-// @Failure 401 {object} ErrorResponse
-// @Router /api/auth/refresh [post]
-func (h *AuthHandler) RefreshToken(c *gin.Context) {
-	userID := c.GetUint("user_id")
+// RefreshToken rotates an opaque refresh credential. Cookie clients must
+// provide the double-submit CSRF token; non-browser clients may send the token
+// explicitly in JSON and are not relying on ambient cookie authority.
+type RefreshTokenRequest struct {
+	RefreshToken string `json:"refresh_token"`
+}
 
-	resp, err := h.authService.RefreshToken(userID)
-	if err != nil {
-		respondError(c, http.StatusInternalServerError, "刷新token失败")
+func (h *AuthHandler) RefreshToken(c *gin.Context) {
+	var req RefreshTokenRequest
+	if c.Request.ContentLength != 0 {
+		if err := c.ShouldBindJSON(&req); err != nil {
+			respondError(c, http.StatusBadRequest, "请求格式错误")
+			return
+		}
+	}
+
+	bodyToken := strings.TrimSpace(req.RefreshToken)
+	cookieToken, cookieErr := c.Cookie(refreshCookieName)
+	cookieToken = strings.TrimSpace(cookieToken)
+	fromCookie := cookieErr == nil && cookieToken != ""
+	if fromCookie && bodyToken != "" && bodyToken != cookieToken {
+		clearAuthCookie(c)
+		respondError(c, http.StatusUnauthorized, "刷新凭证无效或已过期")
+		return
+	}
+	rawToken := bodyToken
+	if rawToken == "" {
+		rawToken = cookieToken
+	}
+	if rawToken == "" {
+		clearAuthCookie(c)
+		respondError(c, http.StatusUnauthorized, "刷新凭证无效或已过期")
+		return
+	}
+	if fromCookie && !validRefreshCSRF(c) {
+		respondError(c, http.StatusForbidden, "CSRF令牌无效")
 		return
 	}
 
-	if err := setAuthCookies(c, resp.Token, time.Until(time.Unix(resp.ExpiresAt, 0))); err != nil {
+	resp, err := h.authService.RefreshWithToken(c.Request.Context(), rawToken, requestSessionMetadata(c))
+	if err != nil {
+		clearAuthCookie(c)
+		switch {
+		case errors.Is(err, services.ErrInvalidRefreshToken), errors.Is(err, services.ErrRefreshTokenReuse):
+			respondError(c, http.StatusUnauthorized, "刷新凭证无效或已过期")
+		default:
+			respondInternalServer(c)
+		}
+		return
+	}
+	if err := setAuthCookies(c, resp.Token, time.Until(time.Unix(resp.ExpiresAt, 0)), resp.RefreshToken, time.Until(time.Unix(resp.RefreshExpiresAt, 0))); err != nil {
 		respondInternalServer(c)
 		return
 	}
 	apiresponse.Success(c, TokenResponse{
-		ExpiresAt: resp.ExpiresAt,
+		ExpiresAt:        resp.ExpiresAt,
+		RefreshExpiresAt: resp.RefreshExpiresAt,
 	})
 }
 
-// Logout 清除认证 Cookie。
+// Logout revokes the current sid before clearing browser credentials.
 func (h *AuthHandler) Logout(c *gin.Context) {
+	userID := c.GetUint("user_id")
+	sessionID := c.GetString("session_id")
 	clearAuthCookie(c)
+	if err := h.authService.RevokeSession(c.Request.Context(), userID, sessionID); err != nil {
+		respondInternalServer(c)
+		return
+	}
 	apiresponse.Message(c, "退出成功")
+}
+
+// LogoutAll revokes every active browser/device session for the current user.
+func (h *AuthHandler) LogoutAll(c *gin.Context) {
+	userID := c.GetUint("user_id")
+	clearAuthCookie(c)
+	if err := h.authService.RevokeAllSessions(c.Request.Context(), userID); err != nil {
+		respondInternalServer(c)
+		return
+	}
+	apiresponse.Message(c, "所有会话已退出")
 }
 
 // GetCurrentUser 获取当前用户信息
@@ -267,27 +325,57 @@ func (h *AuthHandler) GetCurrentUser(c *gin.Context) {
 
 // TokenResponse Token响应
 type TokenResponse struct {
-	ExpiresAt int64 `json:"expires_at"`
+	ExpiresAt        int64 `json:"expires_at"`
+	RefreshExpiresAt int64 `json:"refresh_expires_at,omitempty"`
 }
 
-func setAuthCookies(c *gin.Context, token string, maxAge time.Duration) error {
-	if maxAge <= 0 {
-		maxAge = 7 * 24 * time.Hour
+func setAuthCookies(c *gin.Context, token string, accessMaxAge time.Duration, refreshToken string, refreshMaxAge time.Duration) error {
+	if accessMaxAge <= 0 {
+		accessMaxAge = 15 * time.Minute
+	}
+	if refreshMaxAge <= 0 {
+		refreshMaxAge = 30 * 24 * time.Hour
 	}
 	csrfToken, err := generateCSRFToken()
 	if err != nil {
 		return err
 	}
 	c.SetSameSite(http.SameSiteLaxMode)
-	c.SetCookie(authCookieName, token, int(maxAge.Seconds()), "/", "", isSecureRequest(c), true)
-	c.SetCookie(csrfCookieName, csrfToken, int(maxAge.Seconds()), "/", "", isSecureRequest(c), false)
+	c.SetCookie(authCookieName, token, int(accessMaxAge.Seconds()), "/", "", isSecureRequest(c), true)
+	if refreshToken != "" {
+		c.SetCookie(refreshCookieName, refreshToken, int(refreshMaxAge.Seconds()), "/", "", isSecureRequest(c), true)
+	}
+	c.SetCookie(csrfCookieName, csrfToken, int(refreshMaxAge.Seconds()), "/", "", isSecureRequest(c), false)
 	return nil
 }
 
 func clearAuthCookie(c *gin.Context) {
 	c.SetSameSite(http.SameSiteLaxMode)
 	c.SetCookie(authCookieName, "", -1, "/", "", isSecureRequest(c), true)
+	c.SetCookie(refreshCookieName, "", -1, "/", "", isSecureRequest(c), true)
 	c.SetCookie(csrfCookieName, "", -1, "/", "", isSecureRequest(c), false)
+}
+
+func validRefreshCSRF(c *gin.Context) bool {
+	cookieToken, err := c.Cookie(csrfCookieName)
+	if err != nil || cookieToken == "" {
+		return false
+	}
+	headerToken := c.GetHeader("X-CSRF-Token")
+	if len(cookieToken) != len(headerToken) {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(cookieToken), []byte(headerToken)) == 1
+}
+
+func requestSessionMetadata(c *gin.Context) services.SessionMetadata {
+	deviceID := strings.TrimSpace(c.GetHeader("X-Device-ID"))
+	userAgent := strings.TrimSpace(c.Request.UserAgent())
+	value := userAgent
+	if deviceID != "" {
+		value = deviceID + " | " + userAgent
+	}
+	return services.SessionMetadata{DeviceInfo: value}
 }
 
 func isSecureRequest(c *gin.Context) bool {

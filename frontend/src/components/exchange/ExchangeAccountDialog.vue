@@ -1,7 +1,7 @@
 <template>
   <el-dialog
     v-model="visible"
-    :title="isEditingAccount ? '编辑兑换账号' : '添加兑换账号'"
+    :title="isEditingAccount ? '编辑抢兑规则' : '添加抢兑规则'"
     :width="width"
     :top="top"
     class="account-dialog"
@@ -13,10 +13,16 @@
           <el-icon><User /></el-icon>
           <span>基本信息</span>
         </div>
-        <el-form :model="form" label-position="top">
+        <el-form
+          :model="form"
+          label-position="top"
+        >
           <el-row :gutter="16">
             <el-col :span="isMobile ? 24 : 12">
-              <el-form-item label="云盘账号" required>
+              <el-form-item
+                label="云盘账号"
+                required
+              >
                 <el-select
                   v-if="!isAdmin"
                   v-model="form.account_id"
@@ -26,13 +32,26 @@
                   :loading="userAccountsLoading"
                   :no-data-text="userAccountsLoading ? '正在加载云盘账号...' : '暂无云盘账号，请先到账号页面添加'"
                   :size="controlSize"
+                  filterable
+                  clearable
+                  reserve-keyword
                 >
                   <el-option
                     v-for="acc in userAccounts"
                     :key="acc.id"
                     :label="acc.remark ? `${acc.remark} (${acc.phone})` : acc.phone"
                     :value="acc.id"
-                  />
+                    :disabled="acc.is_active === false"
+                  >
+                    <span>{{ acc.remark ? `${acc.remark} (${acc.phone})` : acc.phone }}</span>
+                    <el-tag
+                      size="small"
+                      :type="acc.is_active === false ? 'danger' : 'success'"
+                      style="float: right; margin-top: 3px;"
+                    >
+                      {{ acc.is_active === false ? '停用' : '可用' }}
+                    </el-tag>
+                  </el-option>
                 </el-select>
                 <el-select
                   v-else
@@ -43,20 +62,36 @@
                   :size="controlSize"
                   filterable
                   remote
+                  clearable
+                  reserve-keyword
                   :remote-method="(keyword: string) => $emit('searchAccounts', keyword)"
                   :loading="accountSearchLoading"
+                  no-data-text="输入手机号/备注/用户名进行搜索"
                 >
                   <el-option
                     v-for="acc in allAccountsSearchResults"
                     :key="acc.id"
                     :label="acc.remark ? `${acc.remark} (${acc.phone}) [${acc.username}]` : `${acc.phone} [${acc.username}]`"
                     :value="acc.id"
-                  />
+                    :disabled="acc.is_active === false"
+                  >
+                    <span>{{ acc.remark ? `${acc.remark} (${acc.phone}) [${acc.username}]` : `${acc.phone} [${acc.username}]` }}</span>
+                    <el-tag
+                      size="small"
+                      :type="acc.is_active === false ? 'danger' : 'success'"
+                      style="float: right; margin-top: 3px;"
+                    >
+                      {{ acc.is_active === false ? '停用' : '可用' }}
+                    </el-tag>
+                  </el-option>
                 </el-select>
               </el-form-item>
             </el-col>
             <el-col :span="isMobile ? 24 : 12">
-              <el-form-item label="选择商品" required>
+              <el-form-item
+                label="选择商品"
+                required
+              >
                 <el-select
                   v-model="form.product_id"
                   placeholder="选择要兑换的商品"
@@ -89,10 +124,16 @@
           <el-icon><Timer /></el-icon>
           <span>抢兑时间设置</span>
         </div>
-        <el-form :model="form" label-position="top">
+        <el-form
+          :model="form"
+          label-position="top"
+        >
           <el-row :gutter="16">
             <el-col :span="isMobile ? 24 : 12">
-              <el-form-item label="第一次抢兑" required>
+              <el-form-item
+                label="第一次抢兑"
+                required
+              >
                 <el-time-picker
                   v-model="form.exchange_time_1"
                   format="HH:mm"
@@ -104,7 +145,10 @@
               </el-form-item>
             </el-col>
             <el-col :span="isMobile ? 24 : 12">
-              <el-form-item label="第二次抢兑" required>
+              <el-form-item
+                label="第二次抢兑"
+                required
+              >
                 <el-time-picker
                   v-model="form.exchange_time_2"
                   format="HH:mm"
@@ -119,12 +163,18 @@
         </el-form>
       </div>
 
-      <div v-if="isEditingAccount" class="form-section">
+      <div
+        v-if="isEditingAccount"
+        class="form-section"
+      >
         <div class="section-title">
           <el-icon><Setting /></el-icon>
           <span>账号状态</span>
         </div>
-        <el-form :model="form" label-position="top">
+        <el-form
+          :model="form"
+          label-position="top"
+        >
           <el-form-item>
             <el-switch
               v-model="form.is_active"
@@ -138,8 +188,19 @@
     </div>
     <template #footer>
       <div class="dialog-footer">
-        <el-button :size="controlSize" @click="visible = false">取消</el-button>
-        <el-button type="primary" :size="controlSize" @click="$emit('submit')">确定</el-button>
+        <el-button
+          :size="controlSize"
+          @click="visible = false"
+        >
+          取消
+        </el-button>
+        <el-button
+          type="primary"
+          :size="controlSize"
+          @click="$emit('submit')"
+        >
+          确定
+        </el-button>
       </div>
     </template>
   </el-dialog>
@@ -148,10 +209,10 @@
 <script setup lang="ts">
 import { Setting, Timer, User } from '@element-plus/icons-vue'
 import type { AccountSearchItem } from '@/api/account'
-import type { ExchangeAccountForm } from '@/composables/exchange/useExchangeForms'
+import type { ExchangeRuleForm } from '@/composables/exchange/useExchangeForms'
 
 const visible = defineModel<boolean>({ required: true })
-const form = defineModel<ExchangeAccountForm>('form', { required: true })
+const form = defineModel<ExchangeRuleForm>('form', { required: true })
 
 defineProps<{
   isMobile: boolean

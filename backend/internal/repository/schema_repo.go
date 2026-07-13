@@ -34,12 +34,21 @@ func (r *SchemaRepository) ValidateCriticalSchema() error {
 	}
 
 	checks := map[string][]string{
-		"users":             {"token_version"},
-		"task_configs":      {"task_type", "task_name", "description", "is_enabled", "sort_order", "run_in_batch", "updated_at", "deleted_at"},
-		"accounts":          {"is_active", "jwt_error_count"},
-		"products":          {"prize_id", "prize_name", "image_url", "stock_status", "is_active", "is_deleted"},
-		"exchange_accounts": {"exchange_time_1", "exchange_time_2", "is_active"},
-		"exchange_tasks":    {"task_type", "status", "priority", "task_group", "timeout_seconds", "max_retries", "retry_count", "last_retry_at", "last_result", "success_count", "fail_count", "deleted_at"},
+		"users":            {"token_version", "normalized_username", "normalized_email"},
+		"task_configs":     {"task_type", "task_name", "description", "is_enabled", "sort_order", "run_in_batch", "updated_at", "deleted_at"},
+		"accounts":         {"is_active", "jwt_error_count"},
+		"products":         {"prize_id", "prize_name", "image_url", "stock_status", "is_active", "is_deleted"},
+		"exchange_rules":   {"exchange_time_1", "exchange_time_2", "is_active"},
+		"exchange_tasks":   {"source_operation_id", "exchange_rule_id", "task_type", "status", "scheduled_exchange_time", "restock_cycle", "restock_weekday", "restock_day_of_month", "restock_times", "custom_cron", "calendar_policy", "holiday_dates", "workday_dates", "skip_reason", "priority", "task_group", "timeout_seconds", "max_retries", "retry_count", "last_retry_at", "last_result", "success_count", "fail_count", "active_dedupe_key", "deleted_at"},
+		"exchange_records": {"exchange_rule_id"},
+		"calendar_dates":   {"date", "day_type", "name", "source"},
+		"audit_logs":       {"request_id"},
+		"operations":       {"id", "user_id", "operation_type", "status", "account_id", "resource_id", "payload", "idempotency_key", "attempt_count", "error_summary", "queued_at", "started_at", "completed_at", "created_at", "updated_at"},
+		"refresh_sessions": {"id", "user_id", "refresh_token_hash", "token_version", "device_info", "expires_at", "revoked_at", "replaced_by_session_id", "last_used_at", "created_at", "updated_at"},
+		"web_socket_messages": {
+			"id", "user_id", "message_id", "sequence", "type", "data", "is_read", "is_delivered",
+			"created_at", "expires_at", "read_at", "delivered_at", "acked_at",
+		},
 	}
 
 	for table, requiredCols := range checks {
@@ -92,7 +101,7 @@ func (r *SchemaRepository) validateColumns(table string, requiredCols []string) 
 	}
 
 	sort.Strings(missing)
-	return fmt.Errorf("表 %s 缺少字段: %s，请执行 backend/migrations/init.sql 或补齐迁移", table, strings.Join(missing, ", "))
+	return fmt.Errorf("表 %s 缺少字段: %s，请执行 backend/migrations/init.sql 或 backend/migrations/00x_*.sql 补齐迁移", table, strings.Join(missing, ", "))
 }
 
 func (r *SchemaRepository) tableExists(table string) (bool, error) {

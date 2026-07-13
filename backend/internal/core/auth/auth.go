@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -298,7 +299,11 @@ func ParseLoginVar(varStr string) (sid, rmkey string, err error) {
 
 // QuerySpecTokenForJWT 获取 ssoToken（用于 JWT）
 func (a *Auth) QuerySpecTokenForJWT(phone string) (string, error) {
-	return a.querySpecTokenWithRetry("", phone)
+	return a.QuerySpecTokenForJWTContext(context.Background(), phone)
+}
+
+func (a *Auth) QuerySpecTokenForJWTContext(ctx context.Context, phone string) (string, error) {
+	return a.querySpecTokenWithRetryContext(ctx, "", phone)
 }
 
 // TyrzLoginResp tyrzLogin 响应
@@ -311,13 +316,27 @@ type TyrzLoginResp struct {
 
 // TyrzLogin 使用 ssoToken 获取 JWT token
 func (a *Auth) TyrzLogin(ssoToken string) (string, error) {
-	return a.tyrzLoginWithCandidates(ssoToken)
+	return a.TyrzLoginContext(context.Background(), ssoToken)
+}
+
+func (a *Auth) TyrzLoginContext(ctx context.Context, ssoToken string) (string, error) {
+	return a.tyrzLoginWithCandidatesContext(ctx, ssoToken)
 }
 
 // GetJWTTokenWithSSOToken 获取 JWT Token 和对应的 ssoToken（单次 sso 查询）
 func (a *Auth) GetJWTTokenWithSSOToken(phone string) (string, string, error) {
+	return a.GetJWTTokenWithSSOTokenContext(context.Background(), phone)
+}
+
+func (a *Auth) GetJWTTokenWithSSOTokenContext(ctx context.Context, phone string) (string, string, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return "", "", err
+	}
 	// 1. 获取 ssoToken
-	ssoToken, err := a.QuerySpecTokenForJWT(phone)
+	ssoToken, err := a.QuerySpecTokenForJWTContext(ctx, phone)
 	if err != nil {
 		return "", "", fmt.Errorf("获取 ssoToken 失败: %w", err)
 	}
@@ -327,7 +346,7 @@ func (a *Auth) GetJWTTokenWithSSOToken(phone string) (string, string, error) {
 	}
 
 	// 2. 使用 ssoToken 获取 JWT token
-	jwtToken, err := a.TyrzLogin(ssoToken)
+	jwtToken, err := a.TyrzLoginContext(ctx, ssoToken)
 	if err != nil {
 		return "", ssoToken, fmt.Errorf("获取 JWT token 失败: %w", err)
 	}

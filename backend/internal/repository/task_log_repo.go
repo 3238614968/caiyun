@@ -26,10 +26,25 @@ type AccountLogSummary struct {
 // 北京时间时区
 var cstZone = time.FixedZone("CST", 8*3600)
 
+const (
+	defaultTaskLogPageLimit = 200
+	maxTaskLogPageLimit     = 1000
+)
+
 // todayStart 获取北京时间今天0点
 func todayStart() time.Time {
 	now := time.Now().In(cstZone)
 	return time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, cstZone)
+}
+
+func normalizeTaskLogPage(offset, limit int) (int, int) {
+	if offset < 0 {
+		offset = 0
+	}
+	if limit <= 0 || limit > maxTaskLogPageLimit {
+		limit = defaultTaskLogPageLimit
+	}
+	return offset, limit
 }
 
 func NewTaskLogRepository(db *gorm.DB) *TaskLogRepository {
@@ -63,6 +78,7 @@ func (r *TaskLogRepository) FindByID(id uint) (*models.TaskLog, error) {
 func (r *TaskLogRepository) FindByAccountID(accountID uint, offset, limit int) ([]*models.TaskLog, int64, error) {
 	var logs []*models.TaskLog
 	var total int64
+	offset, limit = normalizeTaskLogPage(offset, limit)
 
 	query := r.db.Model(&models.TaskLog{}).Where("account_id = ?", accountID)
 	if err := query.Count(&total).Error; err != nil {
@@ -77,8 +93,34 @@ func (r *TaskLogRepository) FindByAccountID(accountID uint, offset, limit int) (
 func (r *TaskLogRepository) FindByUserID(userID uint, offset, limit int) ([]*models.TaskLog, int64, error) {
 	var logs []*models.TaskLog
 	var total int64
+	offset, limit = normalizeTaskLogPage(offset, limit)
 
 	query := r.db.Model(&models.TaskLog{}).Where("user_id = ?", userID)
+	if err := query.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+
+	err := query.Preload("Account").Order("created_at DESC").Offset(offset).Limit(limit).Find(&logs).Error
+	return logs, total, err
+}
+
+// FindByFilter 根据用户、账号、任务类型和状态组合过滤任务日志。
+func (r *TaskLogRepository) FindByFilter(userID uint, accountID *uint, taskType, status string, offset, limit int) ([]*models.TaskLog, int64, error) {
+	var logs []*models.TaskLog
+	var total int64
+	offset, limit = normalizeTaskLogPage(offset, limit)
+
+	query := r.db.Model(&models.TaskLog{}).Where("user_id = ?", userID)
+	if accountID != nil {
+		query = query.Where("account_id = ?", *accountID)
+	}
+	if taskType != "" {
+		query = query.Where("task_type = ?", taskType)
+	}
+	if status != "" {
+		query = query.Where("status = ?", status)
+	}
+
 	if err := query.Count(&total).Error; err != nil {
 		return nil, 0, err
 	}
@@ -91,6 +133,7 @@ func (r *TaskLogRepository) FindByUserID(userID uint, offset, limit int) ([]*mod
 func (r *TaskLogRepository) FindByTaskType(taskType string, offset, limit int) ([]*models.TaskLog, int64, error) {
 	var logs []*models.TaskLog
 	var total int64
+	offset, limit = normalizeTaskLogPage(offset, limit)
 
 	query := r.db.Model(&models.TaskLog{}).Where("task_type = ?", taskType)
 	if err := query.Count(&total).Error; err != nil {
@@ -105,6 +148,7 @@ func (r *TaskLogRepository) FindByTaskType(taskType string, offset, limit int) (
 func (r *TaskLogRepository) FindByStatus(status string, offset, limit int) ([]*models.TaskLog, int64, error) {
 	var logs []*models.TaskLog
 	var total int64
+	offset, limit = normalizeTaskLogPage(offset, limit)
 
 	query := r.db.Model(&models.TaskLog{}).Where("status = ?", status)
 	if err := query.Count(&total).Error; err != nil {
@@ -119,6 +163,7 @@ func (r *TaskLogRepository) FindByStatus(status string, offset, limit int) ([]*m
 func (r *TaskLogRepository) FindByDateRange(startDate, endDate time.Time, offset, limit int) ([]*models.TaskLog, int64, error) {
 	var logs []*models.TaskLog
 	var total int64
+	offset, limit = normalizeTaskLogPage(offset, limit)
 
 	query := r.db.Model(&models.TaskLog{}).Where("created_at BETWEEN ? AND ?", startDate, endDate)
 	if err := query.Count(&total).Error; err != nil {
@@ -133,6 +178,7 @@ func (r *TaskLogRepository) FindByDateRange(startDate, endDate time.Time, offset
 func (r *TaskLogRepository) FindByAccountIDAndDateRange(accountID uint, startDate, endDate time.Time, offset, limit int) ([]*models.TaskLog, int64, error) {
 	var logs []*models.TaskLog
 	var total int64
+	offset, limit = normalizeTaskLogPage(offset, limit)
 
 	query := r.db.Model(&models.TaskLog{}).
 		Where("account_id = ? AND created_at BETWEEN ? AND ?", accountID, startDate, endDate)
@@ -198,13 +244,14 @@ func (r *TaskLogRepository) Delete(id uint) error {
 
 // DeleteByAccountID 删除指定账号的所有日志
 func (r *TaskLogRepository) DeleteByAccountID(accountID uint) error {
-	return r.db.Where("account_id = ?", accountID).Delete(&models.TaskLog{}).Error
+	return r.db.Unscoped().Where("account_id = ?", accountID).Delete(&models.TaskLog{}).Error
 }
 
 // List 列出所有任务日志
 func (r *TaskLogRepository) List(offset, limit int) ([]*models.TaskLog, int64, error) {
 	var logs []*models.TaskLog
 	var total int64
+	offset, limit = normalizeTaskLogPage(offset, limit)
 
 	if err := r.db.Model(&models.TaskLog{}).Count(&total).Error; err != nil {
 		return nil, 0, err
@@ -236,13 +283,19 @@ func (r *TaskLogRepository) CountByAccountIDAndDateRange(accountID uint, startDa
 
 // CountByAccountIDTaskTypesAndDateRange 统计指定账号在日期范围内指定任务类型的日志数量。
 func (r *TaskLogRepository) CountByAccountIDTaskTypesAndDateRange(accountID uint, taskTypes []string, startDate, endDate time.Time, count *int64) {
+	_ = r.CountByAccountIDTaskTypesAndDateRangeWithError(accountID, taskTypes, startDate, endDate, count)
+}
+
+// CountByAccountIDTaskTypesAndDateRangeWithError is the request-aware variant
+// used by handlers that must observe cancellation and database failures.
+func (r *TaskLogRepository) CountByAccountIDTaskTypesAndDateRangeWithError(accountID uint, taskTypes []string, startDate, endDate time.Time, count *int64) error {
 	if len(taskTypes) == 0 {
 		*count = 0
-		return
+		return nil
 	}
-	r.db.Model(&models.TaskLog{}).
+	return r.db.Model(&models.TaskLog{}).
 		Where("account_id = ? AND task_type IN ? AND created_at >= ? AND created_at < ?", accountID, taskTypes, startDate, endDate).
-		Count(count)
+		Count(count).Error
 }
 
 // GetCloudGainedByAccountAndRange 获取指定账号在日期范围内获得的云朵数

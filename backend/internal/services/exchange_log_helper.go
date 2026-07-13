@@ -3,6 +3,7 @@ package services
 import (
 	"caiyun/internal/models"
 	"caiyun/internal/repository"
+	"caiyun/internal/utils"
 	"fmt"
 	"log"
 	"strings"
@@ -16,6 +17,10 @@ func exchangeAccountName(account *models.ExchangeAccount) string {
 		return account.Remark
 	}
 	return account.Phone
+}
+
+func maskExchangeAccountName(name string) string {
+	return utils.MaskAccountName(name)
 }
 
 func isSingleRunExchangeTask(taskType string) bool {
@@ -72,7 +77,7 @@ func createExchangeSystemLog(taskLogRepo *repository.TaskLogRepository, userID, 
 		parts = append(parts, fmt.Sprintf("商品: %s", prizeName))
 	}
 	if accountName != "" {
-		parts = append(parts, fmt.Sprintf("兑换账号: %s", accountName))
+		parts = append(parts, fmt.Sprintf("兑换账号: %s", maskExchangeAccountName(accountName)))
 	}
 	if message != "" {
 		parts = append(parts, fmt.Sprintf("结果: %s", sanitizeExchangeMessageForDisplay(message)))

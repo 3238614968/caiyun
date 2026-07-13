@@ -3,7 +3,9 @@ package repository
 import (
 	"caiyun/internal/models"
 	"context"
+	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"gorm.io/gorm"
@@ -14,8 +16,49 @@ type ExchangeTaskRepository struct {
 	db *gorm.DB
 }
 
+// ExchangeTaskFilter 描述抢兑任务列表筛选条件。
+type ExchangeTaskFilter struct {
+	AccountKeyword string
+	Remark         string
+	Status         string
+	RestockCycle   string
+	MinCloud       *int
+	MaxCloud       *int
+	OnlyActive     *bool
+}
+
 func NewExchangeTaskRepository(db *gorm.DB) *ExchangeTaskRepository {
 	return &ExchangeTaskRepository{db: db}
+}
+
+// CalculateNextRun 使用真实节假日表计算任务下一次预计触发时间。
+func (r *ExchangeTaskRepository) CalculateNextRun(task *models.ExchangeTask, from time.Time) *time.Time {
+	return CalculateExchangeTaskNextRunWithCalendar(task, from, r.lookupCalendarHoliday)
+}
+
+func (r *ExchangeTaskRepository) lookupCalendarHoliday(now time.Time) (bool, bool) {
+	if r == nil || r.db == nil {
+		return false, false
+	}
+	var row struct {
+		DayType string `gorm:"column:day_type"`
+	}
+	result := r.db.Table("calendar_dates").
+		Select("day_type").
+		Where("date = ?", now.Format("2006-01-02")).
+		Limit(1).
+		Scan(&row)
+	if result.Error != nil || result.RowsAffected == 0 {
+		return false, false
+	}
+	switch strings.ToLower(strings.TrimSpace(row.DayType)) {
+	case "holiday", "off", "rest", "节假日", "休息日":
+		return true, true
+	case "workday", "working_day", "work", "调休工作日", "工作日":
+		return false, true
+	default:
+		return false, false
+	}
 }
 
 // WithContext 返回绑定到指定 context 的仓库副本，便于数据库操作响应请求取消和超时。
@@ -28,12 +71,59 @@ func (r *ExchangeTaskRepository) WithContext(ctx context.Context) *ExchangeTaskR
 
 // Create 创建抢兑任务
 func (r *ExchangeTaskRepository) Create(task *models.ExchangeTask) error {
-	return r.db.Create(task).Error
+	return mapExchangeTaskWriteError(r.db.Create(task).Error)
 }
 
-// Update 更新抢兑任务
-func (r *ExchangeTaskRepository) Update(task *models.ExchangeTask) error {
-	return r.db.Save(task).Error
+// FindBySourceOperationID returns the task created by a durable operation.
+// A nil task with nil error means no task has been linked yet.
+func (r *ExchangeTaskRepository) FindBySourceOperationID(operationID string) (*models.ExchangeTask, error) {
+	operationID = strings.TrimSpace(operationID)
+	if operationID == "" {
+		return nil, nil
+	}
+	var task models.ExchangeTask
+	err := r.db.Where("source_operation_id = ?", operationID).First(&task).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &task, nil
+}
+
+// UpdateTaskDefinition 精确更新任务定义快照，避免 Save 全量覆盖并发修改的其他列。
+func (r *ExchangeTaskRepository) UpdateTaskDefinition(id, productID uint, prizeID, prizeName, taskType string, maxAttempts int, status string) error {
+	if maxAttempts <= 0 {
+		maxAttempts = 1
+	}
+	updates := map[string]interface{}{
+		"product_id":   productID,
+		"prize_id":     prizeID,
+		"prize_name":   prizeName,
+		"task_type":    taskType,
+		"max_attempts": maxAttempts,
+		"updated_at":   time.Now(),
+	}
+	if status != "" {
+		updates["status"] = status
+	}
+	return r.db.Model(&models.ExchangeTask{}).
+		Where("id = ?", id).
+		Updates(updates).Error
+}
+
+// UpdateMaxAttempts 更新任务最大执行次数，避免全量覆盖任务快照。
+func (r *ExchangeTaskRepository) UpdateMaxAttempts(id uint, maxAttempts int) error {
+	if maxAttempts <= 0 {
+		maxAttempts = 1
+	}
+	return r.db.Model(&models.ExchangeTask{}).
+		Where("id = ?", id).
+		Updates(map[string]interface{}{
+			"max_attempts": maxAttempts,
+			"updated_at":   time.Now(),
+		}).Error
 }
 
 // Delete 删除抢兑任务
@@ -45,6 +135,7 @@ func (r *ExchangeTaskRepository) Delete(id uint) error {
 func (r *ExchangeTaskRepository) GetByID(id uint) (*models.ExchangeTask, error) {
 	var task models.ExchangeTask
 	err := r.db.Preload("ExchangeAccount").
+		Preload("ExchangeAccount.Account").
 		Preload("Product").
 		Preload("Records").
 		First(&task, id).Error
@@ -56,30 +147,93 @@ func (r *ExchangeTaskRepository) GetByID(id uint) (*models.ExchangeTask, error) 
 
 // GetByUserID 根据用户 ID 获取所有抢兑任务
 func (r *ExchangeTaskRepository) GetByUserID(userID uint) ([]*models.ExchangeTask, error) {
+	return r.GetByUserIDWithFilter(userID, ExchangeTaskFilter{})
+}
+
+// GetByUserIDWithFilter 根据用户 ID 和筛选条件获取抢兑任务。
+func (r *ExchangeTaskRepository) GetByUserIDWithFilter(userID uint, filter ExchangeTaskFilter) ([]*models.ExchangeTask, error) {
+	query := r.db.Model(&models.ExchangeTask{}).Where("exchange_tasks.user_id = ?", userID)
+	query = applyExchangeTaskFilter(query, filter)
 	var tasks []*models.ExchangeTask
-	err := r.db.Where("user_id = ?", userID).
+	err := query.
 		Preload("ExchangeAccount").
+		Preload("ExchangeAccount.Account").
 		Preload("Product").
-		Order("status ASC, created_at DESC").
+		Order("exchange_tasks.status ASC, exchange_tasks.created_at DESC").
 		Find(&tasks).Error
 	return tasks, err
 }
 
 // GetAll 获取所有抢兑任务（管理员用）
 func (r *ExchangeTaskRepository) GetAll() ([]*models.ExchangeTask, error) {
+	return r.GetAllWithFilter(ExchangeTaskFilter{})
+}
+
+// GetAllWithFilter 获取所有抢兑任务（管理员用，支持筛选）。
+func (r *ExchangeTaskRepository) GetAllWithFilter(filter ExchangeTaskFilter) ([]*models.ExchangeTask, error) {
+	query := applyExchangeTaskFilter(r.db.Model(&models.ExchangeTask{}), filter)
 	var tasks []*models.ExchangeTask
-	err := r.db.
+	err := query.
 		Preload("ExchangeAccount").
+		Preload("ExchangeAccount.Account").
 		Preload("Product").
-		Order("status ASC, created_at DESC").
+		Order("exchange_tasks.status ASC, exchange_tasks.created_at DESC").
 		Find(&tasks).Error
 	return tasks, err
+}
+
+func applyExchangeTaskFilter(query *gorm.DB, filter ExchangeTaskFilter) *gorm.DB {
+	joinedRules := false
+	joinedAccounts := false
+	joinRules := func() {
+		if !joinedRules {
+			query = query.Joins("LEFT JOIN exchange_rules filter_exchange_rules ON filter_exchange_rules.id = exchange_tasks.exchange_rule_id")
+			joinedRules = true
+		}
+	}
+	joinAccounts := func() {
+		joinRules()
+		if !joinedAccounts {
+			query = query.Joins("LEFT JOIN accounts filter_accounts ON filter_accounts.id = filter_exchange_rules.account_id")
+			joinedAccounts = true
+		}
+	}
+
+	if filter.Status != "" {
+		query = query.Where("exchange_tasks.status = ?", filter.Status)
+	}
+	if filter.RestockCycle != "" {
+		query = query.Where("exchange_tasks.restock_cycle = ?", filter.RestockCycle)
+	}
+	if filter.Remark != "" {
+		joinRules()
+		like := "%" + filter.Remark + "%"
+		query = query.Where("filter_exchange_rules.remark LIKE ?", like)
+	}
+	if filter.AccountKeyword != "" {
+		joinAccounts()
+		like := "%" + filter.AccountKeyword + "%"
+		query = query.Where("filter_exchange_rules.phone LIKE ? OR filter_exchange_rules.remark LIKE ? OR filter_accounts.phone LIKE ? OR filter_accounts.remark LIKE ?", like, like, like, like)
+	}
+	if filter.MinCloud != nil {
+		joinAccounts()
+		query = query.Where("COALESCE(filter_accounts.cloud_count, 0) >= ?", *filter.MinCloud)
+	}
+	if filter.MaxCloud != nil {
+		joinAccounts()
+		query = query.Where("COALESCE(filter_accounts.cloud_count, 0) <= ?", *filter.MaxCloud)
+	}
+	if filter.OnlyActive != nil {
+		joinAccounts()
+		query = query.Where("filter_exchange_rules.is_active = ? AND filter_accounts.is_active = ?", *filter.OnlyActive, *filter.OnlyActive)
+	}
+	return query
 }
 
 // GetByExchangeAccountID 根据兑换账号 ID 获取抢兑任务
 func (r *ExchangeTaskRepository) GetByExchangeAccountID(accountID uint) ([]*models.ExchangeTask, error) {
 	var tasks []*models.ExchangeTask
-	err := r.db.Where("exchange_account_id = ?", accountID).
+	err := r.db.Where("exchange_rule_id = ?", accountID).
 		Preload("Product").
 		Order("created_at DESC").
 		Find(&tasks).Error
@@ -134,16 +288,79 @@ func (r *ExchangeTaskRepository) UpdateLastResult(id uint, result string) error 
 		Update("last_result", result).Error
 }
 
+func (r *ExchangeTaskRepository) UpdatePrizeSnapshot(id, productID uint, prizeID, prizeName string) error {
+	updates := map[string]interface{}{
+		"product_id": productID,
+		"prize_id":   prizeID,
+		"prize_name": prizeName,
+		"updated_at": time.Now(),
+	}
+	return r.db.Model(&models.ExchangeTask{}).
+		Where("id = ?", id).
+		Updates(updates).Error
+}
+
+// UpdateSkipReason 更新任务最近一次调度跳过原因。
+func (r *ExchangeTaskRepository) UpdateSkipReason(id uint, reason string) error {
+	return r.db.Model(&models.ExchangeTask{}).
+		Where("id = ?", id).
+		Updates(map[string]interface{}{
+			"skip_reason": reason,
+			"updated_at":  time.Now(),
+		}).Error
+}
+
 // TryMarkRunning 以条件更新方式抢占任务执行权。
 // 多 Worker/多副本同时拿到同一任务时，只有一个实例能从 pending 更新为 running。
 func (r *ExchangeTaskRepository) TryMarkRunning(id uint) (bool, error) {
 	result := r.db.Model(&models.ExchangeTask{}).
 		Where("id = ? AND status = ?", id, string(models.ExchangeTaskPending)).
-		Update("status", string(models.ExchangeTaskRunning))
+		Updates(map[string]interface{}{
+			"status":     string(models.ExchangeTaskRunning),
+			"updated_at": time.Now(),
+		})
 	if result.Error != nil {
 		return false, result.Error
 	}
 	return result.RowsAffected > 0, nil
+}
+
+// ReleaseRunning returns a task claimed by the current execution to pending.
+// The conditional update prevents cancellation cleanup from overwriting a
+// terminal state concurrently persisted by another execution path.
+func (r *ExchangeTaskRepository) ReleaseRunning(id uint, reason string) (bool, error) {
+	result := r.db.Model(&models.ExchangeTask{}).
+		Where("id = ? AND status = ?", id, string(models.ExchangeTaskRunning)).
+		Updates(map[string]interface{}{
+			"status":      string(models.ExchangeTaskPending),
+			"last_result": strings.TrimSpace(reason),
+			"updated_at":  time.Now(),
+		})
+	if result.Error != nil {
+		return false, result.Error
+	}
+	return result.RowsAffected > 0, nil
+}
+
+// RecoverStaleRunning 将长时间停留在 running 的抢兑任务恢复为 pending。
+// 这主要用于 Worker/进程在任务完成前崩溃后的自愈，避免任务永久卡住。
+func (r *ExchangeTaskRepository) RecoverStaleRunning(timeout time.Duration) (int64, error) {
+	if timeout <= 0 {
+		timeout = 15 * time.Minute
+	}
+	cutoff := time.Now().Add(-timeout)
+	message := fmt.Sprintf("任务执行超过 %s 未完成，已自动恢复为待执行", timeout)
+	result := r.db.Model(&models.ExchangeTask{}).
+		Where("status = ? AND updated_at < ?", string(models.ExchangeTaskRunning), cutoff).
+		Updates(map[string]interface{}{
+			"status":      string(models.ExchangeTaskPending),
+			"last_result": message,
+			"updated_at":  time.Now(),
+		})
+	if result.Error != nil {
+		return 0, result.Error
+	}
+	return result.RowsAffected, nil
 }
 
 // UpdateAttempt 更新任务抢兑尝试
@@ -165,14 +382,21 @@ func (r *ExchangeTaskRepository) UpdateAttempt(id uint, success bool, result str
 		Updates(updates).Error
 }
 
-// CheckTaskExists 检查任务是否存在 (同一账号同一商品)
-func (r *ExchangeTaskRepository) CheckTaskExists(userID uint, accountID uint, prizeID string) bool {
+// ActiveTaskExists checks for an active task and preserves database errors.
+func (r *ExchangeTaskRepository) ActiveTaskExists(userID uint, accountID uint, prizeID string) (bool, error) {
 	var count int64
-	r.db.Model(&models.ExchangeTask{}).
-		Where("user_id = ? AND exchange_account_id = ? AND prize_id = ? AND status IN ?",
+	err := r.db.Model(&models.ExchangeTask{}).
+		Where("user_id = ? AND exchange_rule_id = ? AND prize_id = ? AND status IN ?",
 			userID, accountID, prizeID, []string{string(models.ExchangeTaskPending), string(models.ExchangeTaskRunning)}).
-		Count(&count)
-	return count > 0
+		Count(&count).Error
+	return count > 0, err
+}
+
+// CheckTaskExists is retained for compatibility. New write paths must call
+// ActiveTaskExists so query failures cannot be mistaken for "not found".
+func (r *ExchangeTaskRepository) CheckTaskExists(userID uint, accountID uint, prizeID string) bool {
+	exists, _ := r.ActiveTaskExists(userID, accountID, prizeID)
+	return exists
 }
 
 // GetTasksByPrizeID 根据商品 ID 获取抢兑任务
@@ -221,7 +445,7 @@ func (r *ExchangeTaskRepository) GetRecordsWithFilter(userID uint, accountID uin
 	query := r.db.Model(&models.ExchangeRecord{}).Where("user_id = ?", userID)
 
 	if accountID > 0 {
-		query = query.Where("exchange_account_id = ?", accountID)
+		query = query.Where("exchange_rule_id = ?", accountID)
 	}
 
 	if productName != "" {
@@ -253,39 +477,55 @@ func (r *ExchangeTaskRepository) GetRecordsWithFilter(userID uint, accountID uin
 	return records, total, err
 }
 
-// GetTasksByTime 根据时间获取待执行的抢兑任务
-// 参数：
-//   - hour: 小时（0-23）
-//   - minute: 分钟（0-59）
-//
-// 返回：该时间段需要执行的抢兑任务列表
-func (r *ExchangeTaskRepository) GetTasksByTime(hour, minute int) ([]*models.ExchangeTask, error) {
+// GetTasksByTimeAtWithSkips 返回当前时间槽可执行任务以及因周期/日历/时间策略跳过的任务摘要。
+func (r *ExchangeTaskRepository) GetTasksByTimeAtWithSkips(hour, minute int, now time.Time) ([]*models.ExchangeTask, []ExchangeTaskScheduleSkip, error) {
 	var tasks []*models.ExchangeTask
-
-	// 格式化时间为字符串（例如：10:00）
 	timeStr := fmt.Sprintf("%02d:%02d:00", hour, minute)
 
-	// 查询条件：
-	// 1. 状态为待执行或运行中
-	// 2. 关联的兑换账号在指定时间有抢兑任务
-	// 3. 账号处于启用状态
-	// 4. 任务未删除
-	err := r.db.Joins("JOIN exchange_accounts ON exchange_accounts.id = exchange_tasks.exchange_account_id").
-		Joins("JOIN accounts ON accounts.id = exchange_accounts.account_id").
+	err := r.db.Joins("JOIN exchange_rules ON exchange_rules.id = exchange_tasks.exchange_rule_id").
+		Joins("JOIN accounts ON accounts.id = exchange_rules.account_id").
 		Where("exchange_tasks.status IN ?", []string{string(models.ExchangeTaskPending), string(models.ExchangeTaskRunning)}).
-		Where("(exchange_accounts.exchange_time_1 = ? OR exchange_accounts.exchange_time_2 = ?)", timeStr, timeStr).
-		Where("exchange_accounts.is_active = ?", true).
+		Where(`(
+			(exchange_tasks.custom_cron IS NOT NULL AND exchange_tasks.custom_cron <> '')
+			OR (exchange_tasks.restock_times IS NOT NULL AND exchange_tasks.restock_times <> '')
+			OR (exchange_tasks.scheduled_exchange_time IS NOT NULL AND exchange_tasks.scheduled_exchange_time <> '' AND exchange_tasks.scheduled_exchange_time = ?)
+			OR ((exchange_tasks.scheduled_exchange_time IS NULL OR exchange_tasks.scheduled_exchange_time = '') AND (exchange_rules.exchange_time_1 = ? OR exchange_rules.exchange_time_2 = ?))
+		)`, timeStr, timeStr, timeStr).
+		Where("exchange_rules.is_active = ?", true).
 		Where("accounts.is_active = ?", true).
 		Where("accounts.auth <> ''").
-		Where("exchange_accounts.deleted_at IS NULL AND accounts.deleted_at IS NULL").
+		Where("exchange_rules.deleted_at IS NULL AND accounts.deleted_at IS NULL").
 		Where("exchange_tasks.deleted_at IS NULL").
 		Preload("ExchangeAccount").
 		Preload("ExchangeAccount.Account").
 		Preload("Product").
 		Order("exchange_tasks.priority DESC, exchange_tasks.created_at ASC").
 		Find(&tasks).Error
+	if err != nil {
+		return nil, nil, err
+	}
 
-	return tasks, err
+	runnable := make([]*models.ExchangeTask, 0, len(tasks))
+	skipped := make([]ExchangeTaskScheduleSkip, 0)
+	for _, task := range tasks {
+		if ok, reason := ShouldRunExchangeTaskAtWithCalendar(task, now, r.lookupCalendarHoliday); ok {
+			if task.SkipReason != "" {
+				_ = r.UpdateSkipReason(task.ID, "")
+				task.SkipReason = ""
+			}
+			runnable = append(runnable, task)
+		} else {
+			_ = r.UpdateSkipReason(task.ID, reason)
+			task.SkipReason = reason
+			skipped = append(skipped, ExchangeTaskScheduleSkip{
+				TaskID:         task.ID,
+				RestockCycle:   task.RestockCycle,
+				CalendarPolicy: task.CalendarPolicy,
+				Reason:         reason,
+			})
+		}
+	}
+	return runnable, skipped, nil
 }
 
 // IncrementSuccessCount 增加任务成功次数

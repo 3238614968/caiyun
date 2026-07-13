@@ -36,7 +36,7 @@ test('账号管理支持创建、编辑和删除账号', async ({ page }) => {
   await expect(page.getByText('E2E编辑账号')).toBeHidden()
 })
 
-test('兑换中心可基于商品创建抢兑任务', async ({ page }) => {
+test('兑换中心可批量选择账号创建抢兑任务', async ({ page }) => {
   await page.goto('/exchange')
 
   await expect(page.getByText('商品中心')).toBeVisible()
@@ -46,12 +46,36 @@ test('兑换中心可基于商品创建抢兑任务', async ({ page }) => {
   await productCard.getByRole('button', { name: '立即抢兑' }).click()
 
   const taskDialog = page.getByRole('dialog', { name: '创建抢兑任务' })
-  await expect(taskDialog.getByText('E2E月卡')).toBeVisible()
+  await expect(taskDialog.getByText('E2E月卡', { exact: true })).toBeVisible()
+  await taskDialog.getByRole('button', { name: '全选可用规则' }).click()
+  await expect(taskDialog.getByText('已选择 2 个抢兑规则')).toBeVisible()
   await taskDialog.getByRole('button', { name: '确定' }).click()
 
   await page.getByRole('tab', { name: '抢兑任务' }).click()
-  await expect(page.getByRole('table').filter({ hasText: 'E2E月卡' })).toBeVisible()
-  await expect(page.getByRole('table').filter({ hasText: '抢兑主账号' })).toBeVisible()
+  const table = page.getByRole('table')
+  await expect(table.filter({ hasText: 'E2E月卡' })).toBeVisible()
+  await expect(table.filter({ hasText: '抢兑主账号' })).toBeVisible()
+  await expect(table.filter({ hasText: '抢兑备用账号' })).toBeVisible()
+})
+
+test('兑换中心预定商品支持指定抢兑时间和补货周期', async ({ page }) => {
+  await page.goto('/exchange')
+
+  const soldOutCard = page.locator('.product-card').filter({ hasText: 'E2E售罄券' })
+  await expect(soldOutCard).toBeVisible()
+  await soldOutCard.getByRole('button', { name: '预定' }).click()
+
+  const taskDialog = page.getByRole('dialog', { name: '创建抢兑任务' })
+  await expect(taskDialog.getByText('E2E售罄券', { exact: true })).toBeVisible()
+  await expect(taskDialog.getByText('指定抢兑时间')).toBeVisible()
+  await expect(taskDialog.getByText('补货周期')).toBeVisible()
+  await expect(taskDialog.getByText('每周')).toBeVisible()
+  await expect(taskDialog.getByText('周五')).toBeVisible()
+  await taskDialog.getByRole('button', { name: '确定' }).click()
+
+  await page.getByRole('tab', { name: '抢兑任务' }).click()
+  await expect(page.getByRole('table').filter({ hasText: 'E2E售罄券' })).toBeVisible()
+  await expect(page.getByRole('table').filter({ hasText: '10:30 · 每周 周五' })).toBeVisible()
 })
 
 test('管理员可保存抢兑配置并切换任务配置', async ({ page }) => {

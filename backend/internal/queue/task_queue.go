@@ -41,13 +41,23 @@ type redisQueueStore interface {
 	Del(keys ...string) error
 }
 
+type atomicListQueueStore interface {
+	ReplaceListItem(key, oldValue, newValue string) (bool, error)
+	MoveListItemToList(source, destination, oldValue, newValue string) (bool, error)
+	MoveListItemToZSet(source, destination, oldValue, newValue string, score float64) (bool, error)
+	MoveZSetItemToList(source, destination, member string) (bool, error)
+}
+
 // TaskMessage 任务消息
 type TaskMessage struct {
-	AccountID  uint   `json:"account_id"`
-	UserID     uint   `json:"user_id"`
-	TaskType   string `json:"task_type"` // "all" 或具体任务类型
-	CreatedAt  int64  `json:"created_at"`
-	RetryCount int    `json:"retry_count"`
+	AccountID      uint   `json:"account_id"`
+	UserID         uint   `json:"user_id"`
+	TaskType       string `json:"task_type"` // "all" 或具体任务类型
+	OperationID    string `json:"operation_id,omitempty"`
+	OperationType  string `json:"operation_type,omitempty"`
+	CreatedAt      int64  `json:"created_at"`
+	RetryCount     int    `json:"retry_count"`
+	IdempotencyKey string `json:"idempotency_key,omitempty"`
 
 	// ProcessingAt 仅用于可靠队列的可见性超时恢复。
 	ProcessingAt int64 `json:"processing_at,omitempty"`
@@ -90,6 +100,27 @@ func (q *TaskQueue) Enqueue(accountID, userID uint, taskType string) error {
 		CreatedAt:  time.Now().Unix(),
 		RetryCount: 0,
 	}
+	return q.EnqueueMessage(&message)
+}
+
+// EnqueueMessage publishes an already constructed command. It is used by the
+// durable operation outbox while Enqueue remains the compatibility API for
+// scheduled account tasks.
+func (q *TaskQueue) EnqueueMessage(message *TaskMessage) error {
+	if message == nil {
+		return fmt.Errorf("任务消息为空")
+	}
+	if message.CreatedAt == 0 {
+		message.CreatedAt = time.Now().Unix()
+	}
+
+	claimed, err := claimTaskEnqueueDedupe(q.cache, message)
+	if err != nil {
+		return err
+	}
+	if !claimed {
+		return nil
+	}
 
 	data, err := json.Marshal(message)
 	if err != nil {
@@ -114,7 +145,8 @@ func (q *TaskQueue) RequeueDelayed(message *TaskMessage, delay time.Duration) er
 	if message == nil {
 		return fmt.Errorf("任务消息为空")
 	}
-	if err := q.removeProcessing(message); err != nil {
+	raw, err := messageRaw(message)
+	if err != nil {
 		return err
 	}
 	message.ProcessingAt = 0
@@ -126,15 +158,42 @@ func (q *TaskQueue) RequeueDelayed(message *TaskMessage, delay time.Duration) er
 	if err != nil {
 		return fmt.Errorf("序列化任务消息失败: %w", err)
 	}
+	payload := string(data)
 	if delay == 0 {
-		if err := q.cache.LPush(TaskQueueKey, string(data)); err != nil {
+		if atomic, ok := q.cache.(atomicListQueueStore); ok {
+			moved, err := atomic.MoveListItemToList(TaskProcessingKey, TaskQueueKey, raw, payload)
+			if err != nil {
+				return fmt.Errorf("重新加入队列失败: %w", err)
+			}
+			if !moved {
+				return fmt.Errorf("重新加入队列失败: 原始处理中消息不存在")
+			}
+			return nil
+		}
+		if err := q.removeProcessingRaw(raw); err != nil {
+			return err
+		}
+		if err := q.cache.LPush(TaskQueueKey, payload); err != nil {
 			return fmt.Errorf("重新加入队列失败: %w", err)
 		}
 		return nil
 	}
 
 	availableAt := time.Now().Add(delay).Unix()
-	if err := q.cache.ZAdd(TaskDelayedKey, float64(availableAt), string(data)); err != nil {
+	if atomic, ok := q.cache.(atomicListQueueStore); ok {
+		moved, err := atomic.MoveListItemToZSet(TaskProcessingKey, TaskDelayedKey, raw, payload, float64(availableAt))
+		if err != nil {
+			return fmt.Errorf("加入延迟队列失败: %w", err)
+		}
+		if !moved {
+			return fmt.Errorf("加入延迟队列失败: 原始处理中消息不存在")
+		}
+		return nil
+	}
+	if err := q.removeProcessingRaw(raw); err != nil {
+		return err
+	}
+	if err := q.cache.ZAdd(TaskDelayedKey, float64(availableAt), payload); err != nil {
 		return fmt.Errorf("加入延迟队列失败: %w", err)
 	}
 	return nil
@@ -145,7 +204,8 @@ func (q *TaskQueue) DeadLetter(message *TaskMessage, reason string) error {
 	if message == nil {
 		return fmt.Errorf("任务消息为空")
 	}
-	if err := q.removeProcessing(message); err != nil {
+	raw, err := messageRaw(message)
+	if err != nil {
 		return err
 	}
 	message.ProcessingAt = 0
@@ -158,7 +218,21 @@ func (q *TaskQueue) DeadLetter(message *TaskMessage, reason string) error {
 	if err != nil {
 		return fmt.Errorf("序列化死信消息失败: %w", err)
 	}
-	if err := q.cache.LPush(TaskDeadLetterKey, string(data)); err != nil {
+	deadPayload := string(data)
+	if atomic, ok := q.cache.(atomicListQueueStore); ok {
+		moved, err := atomic.MoveListItemToList(TaskProcessingKey, TaskDeadLetterKey, raw, deadPayload)
+		if err != nil {
+			return fmt.Errorf("写入死信队列失败: %w", err)
+		}
+		if !moved {
+			return fmt.Errorf("写入死信队列失败: 原始处理中消息不存在")
+		}
+		return nil
+	}
+	if err := q.removeProcessingRaw(raw); err != nil {
+		return err
+	}
+	if err := q.cache.LPush(TaskDeadLetterKey, deadPayload); err != nil {
 		return fmt.Errorf("写入死信队列失败: %w", err)
 	}
 	return nil
@@ -201,16 +275,26 @@ func (q *TaskQueue) Dequeue(timeout time.Duration) (*TaskMessage, error) {
 	}
 	updatedData := string(updated)
 	if updatedData != data {
-		removed, err := q.cache.LRem(TaskProcessingKey, 1, data)
-		if err != nil {
-			return nil, fmt.Errorf("更新处理中任务失败: %w", err)
-		}
-		if removed == 0 {
-			return nil, fmt.Errorf("更新处理中任务失败: 原始消息不存在")
-		}
-		if err := q.cache.LPush(TaskProcessingKey, updatedData); err != nil {
-			_ = q.cache.LPush(TaskProcessingKey, data)
-			return nil, fmt.Errorf("写入处理中任务失败: %w", err)
+		if atomic, ok := q.cache.(atomicListQueueStore); ok {
+			replaced, err := atomic.ReplaceListItem(TaskProcessingKey, data, updatedData)
+			if err != nil {
+				return nil, fmt.Errorf("更新处理中任务失败: %w", err)
+			}
+			if !replaced {
+				return nil, fmt.Errorf("更新处理中任务失败: 原始消息不存在")
+			}
+		} else {
+			removed, err := q.cache.LRem(TaskProcessingKey, 1, data)
+			if err != nil {
+				return nil, fmt.Errorf("更新处理中任务失败: %w", err)
+			}
+			if removed == 0 {
+				return nil, fmt.Errorf("更新处理中任务失败: 原始消息不存在")
+			}
+			if err := q.cache.LPush(TaskProcessingKey, updatedData); err != nil {
+				_ = q.cache.LPush(TaskProcessingKey, data)
+				return nil, fmt.Errorf("写入处理中任务失败: %w", err)
+			}
 		}
 		data = updatedData
 	}
@@ -220,7 +304,6 @@ func (q *TaskQueue) Dequeue(timeout time.Duration) (*TaskMessage, error) {
 }
 
 func (q *TaskQueue) deadLetterRaw(raw, reason string) error {
-	_, _ = q.cache.LRem(TaskProcessingKey, 1, raw)
 	payload := map[string]interface{}{
 		"raw_message": raw,
 		"reason":      reason,
@@ -230,7 +313,25 @@ func (q *TaskQueue) deadLetterRaw(raw, reason string) error {
 	if err != nil {
 		return fmt.Errorf("序列化死信消息失败: %w", err)
 	}
-	if err := q.cache.LPush(TaskDeadLetterKey, string(data)); err != nil {
+	deadPayload := string(data)
+	if atomic, ok := q.cache.(atomicListQueueStore); ok {
+		moved, err := atomic.MoveListItemToList(TaskProcessingKey, TaskDeadLetterKey, raw, deadPayload)
+		if err != nil {
+			return fmt.Errorf("写入死信队列失败: %w", err)
+		}
+		if !moved {
+			return fmt.Errorf("写入死信队列失败: 原始处理中消息不存在")
+		}
+		return nil
+	}
+	removed, err := q.cache.LRem(TaskProcessingKey, 1, raw)
+	if err != nil {
+		return fmt.Errorf("写入死信队列失败: %w", err)
+	}
+	if removed == 0 {
+		return fmt.Errorf("写入死信队列失败: 原始处理中消息不存在")
+	}
+	if err := q.cache.LPush(TaskDeadLetterKey, deadPayload); err != nil {
 		return fmt.Errorf("写入死信队列失败: %w", err)
 	}
 	return nil
@@ -270,16 +371,27 @@ func (q *TaskQueue) RecoverStaleProcessing(visibilityTimeout time.Duration) (int
 			continue
 		}
 
-		if _, err := q.cache.LRem(TaskProcessingKey, 1, item); err != nil {
-			return recovered, err
-		}
 		message.ProcessingAt = 0
 		data, err := json.Marshal(message)
 		if err != nil {
 			return recovered, err
 		}
-		if err := q.cache.LPush(TaskQueueKey, string(data)); err != nil {
-			return recovered, err
+		payload := string(data)
+		if atomic, ok := q.cache.(atomicListQueueStore); ok {
+			moved, err := atomic.MoveListItemToList(TaskProcessingKey, TaskQueueKey, item, payload)
+			if err != nil {
+				return recovered, err
+			}
+			if !moved {
+				continue
+			}
+		} else {
+			if _, err := q.cache.LRem(TaskProcessingKey, 1, item); err != nil {
+				return recovered, err
+			}
+			if err := q.cache.LPush(TaskQueueKey, payload); err != nil {
+				return recovered, err
+			}
 		}
 		recovered++
 	}
@@ -300,6 +412,17 @@ func (q *TaskQueue) PromoteDueDelayed(limit int64) (int, error) {
 
 	promoted := 0
 	for _, item := range items {
+		if atomic, ok := q.cache.(atomicListQueueStore); ok {
+			moved, err := atomic.MoveZSetItemToList(TaskDelayedKey, TaskQueueKey, item)
+			if err != nil {
+				return promoted, err
+			}
+			if !moved {
+				continue
+			}
+			promoted++
+			continue
+		}
 		removed, err := q.cache.ZRem(TaskDelayedKey, item)
 		if err != nil {
 			return promoted, err
@@ -336,23 +459,39 @@ func (q *TaskQueue) GetDelayedLength() (int64, error) {
 
 // Clear 清空队列
 func (q *TaskQueue) Clear() error {
-	return q.cache.Del(TaskQueueKey, TaskProcessingKey, TaskDelayedKey, TaskDeadLetterKey)
+	if err := q.cache.Del(TaskQueueKey, TaskProcessingKey, TaskDelayedKey, TaskDeadLetterKey); err != nil {
+		return err
+	}
+	return clearTaskDedupeKeys(q.cache)
 }
 
 func (q *TaskQueue) removeProcessing(message *TaskMessage) error {
-	raw := message.raw
-	if raw == "" {
-		data, err := json.Marshal(message)
-		if err != nil {
-			return fmt.Errorf("序列化任务消息失败: %w", err)
-		}
-		raw = string(data)
+	raw, err := messageRaw(message)
+	if err != nil {
+		return err
 	}
+	return q.removeProcessingRaw(raw)
+}
 
+func (q *TaskQueue) removeProcessingRaw(raw string) error {
 	if _, err := q.cache.LRem(TaskProcessingKey, 1, raw); err != nil {
 		return fmt.Errorf("移除处理中任务失败: %w", err)
 	}
 	return nil
+}
+
+func messageRaw(message *TaskMessage) (string, error) {
+	if message == nil {
+		return "", fmt.Errorf("任务消息为空")
+	}
+	if message.raw != "" {
+		return message.raw, nil
+	}
+	data, err := json.Marshal(message)
+	if err != nil {
+		return "", fmt.Errorf("序列化任务消息失败: %w", err)
+	}
+	return string(data), nil
 }
 
 func retryBackoff(message *TaskMessage) time.Duration {

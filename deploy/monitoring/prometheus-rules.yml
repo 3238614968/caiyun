@@ -1,0 +1,171 @@
+groups:
+  - name: caiyun.exchange
+    rules:
+      - alert: CaiyunExchangeLowSuccessRate
+        expr: caiyun_exchange_recent_total >= 10 and caiyun_exchange_success_rate < 0.5
+        for: 10m
+        labels:
+          severity: warning
+          service: caiyun
+        annotations:
+          summary: "抢兑成功率低于 50%"
+          description: "最近窗口内抢兑总数={{ $value }}，成功率持续偏低，请检查失败原因、账号状态和上游库存。"
+
+      - alert: CaiyunExchangeFailureSpike
+        expr: increase(caiyun_exchange_failed_total[10m]) > 20
+        for: 5m
+        labels:
+          severity: warning
+          service: caiyun
+        annotations:
+          summary: "抢兑失败数快速上升"
+          description: "10 分钟内抢兑失败次数超过 20 次，请查看 caiyun_exchange_failure_reason_total。"
+
+      - alert: CaiyunExchangeSchedulerSkipSpike
+        expr: sum(increase(caiyun_exchange_scheduler_skipped_total[10m])) > 100
+        for: 10m
+        labels:
+          severity: info
+          service: caiyun
+        annotations:
+          summary: "抢兑调度跳过任务异常增多"
+          description: "可能由补货周期、节假日策略或 cron 配置导致，请检查 skip_reason 与 calendar_dates。"
+
+      - alert: CaiyunExchangeDurationHigh
+        expr: histogram_quantile(0.95, sum(rate(caiyun_exchange_duration_seconds_bucket[10m])) by (le)) > 5
+        for: 10m
+        labels:
+          severity: warning
+          service: caiyun
+        annotations:
+          summary: "抢兑执行 P95 耗时超过 5 秒"
+          description: "上游接口、验证码识别或网络可能变慢。"
+
+
+      - alert: CaiyunRateLimitSpike
+        expr: sum(increase(caiyun_security_rate_limit_rejected_total[10m])) by (route, reason) > 20
+        for: 5m
+        labels:
+          severity: warning
+          service: caiyun
+        annotations:
+          summary: "限流拒绝次数快速上升"
+          description: "路由 {{ $labels.route }} 在 10 分钟内因 {{ $labels.reason }} 被限流超过 20 次，请检查恶意流量、登录爆破或前端重试风暴。"
+
+      - alert: CaiyunAuditDropped
+        expr: increase(caiyun_audit_dropped_total[10m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+          service: caiyun
+        annotations:
+          summary: "审计日志出现丢弃"
+          description: "最近 10 分钟内异步审计队列发生丢弃，请检查 auditBufferSize、数据库写入速度与异常流量。"
+
+  - name: caiyun.http
+    rules:
+      - alert: CaiyunAPIHighLatency
+        expr: histogram_quantile(0.95, sum(rate(caiyun_http_request_duration_seconds_bucket[10m])) by (le, route)) > 2
+        for: 10m
+        labels:
+          severity: warning
+          service: caiyun
+        annotations:
+          summary: "API P95 延迟超过 2 秒"
+          description: "路由 {{ $labels.route }} 的 P95 延迟过高。"
+
+      - alert: CaiyunAPI5xxSpike
+        expr: sum(rate(caiyun_http_requests_total{status=~"5.."}[5m])) > 0.5
+        for: 5m
+        labels:
+          severity: critical
+          service: caiyun
+        annotations:
+          summary: "API 5xx 错误率升高"
+          description: "5 分钟内 5xx 错误速率持续升高，请检查 API 日志。"
+
+  - name: caiyun.queue
+    rules:
+      - alert: CaiyunQueueBacklog
+        expr: caiyun_queue_pending > 100
+        for: 10m
+        labels:
+          severity: warning
+          service: caiyun
+        annotations:
+          summary: "任务队列积压"
+          description: "待消费任务超过 100，可能需要增加 Worker 或检查死锁。"
+
+      - alert: CaiyunDeadLetterNotEmpty
+        expr: caiyun_queue_dead_letter > 0
+        for: 5m
+        labels:
+          severity: warning
+          service: caiyun
+        annotations:
+          summary: "死信队列非空"
+          description: "存在无法处理的任务，请排查失败原因并按需重试。"
+
+      - alert: CaiyunDelayedQueueBacklog
+        expr: caiyun_queue_delayed > 50
+        for: 10m
+        labels:
+          severity: warning
+          service: caiyun
+        annotations:
+          summary: "延迟队列积压"
+          description: "延迟队列持续超过 50，可能存在补货周期触发堆积或恢复逻辑异常。"
+
+  - name: caiyun.worker
+    rules:
+      - alert: CaiyunWorkerMetricsDown
+        expr: up{job=~".*caiyun.*worker.*"} == 0
+        for: 2m
+        labels:
+          severity: critical
+          service: caiyun
+        annotations:
+          summary: "Worker metrics 不可用"
+          description: "Prometheus 无法抓取 Worker /metrics，请检查服务状态或监控 token。"
+
+      - alert: CaiyunWorkerHeartbeatStale
+        expr: (time() - caiyun_worker_heartbeat_unix) > 180
+        for: 3m
+        labels:
+          severity: critical
+          service: caiyun
+        annotations:
+          summary: "Worker 心跳超过 3 分钟未更新"
+          description: "Worker 进程可能卡死、任务线程阻塞或监控上报异常，请检查 /status 与服务日志。"
+
+  - name: caiyun.history_archive
+    rules:
+      - alert: CaiyunHistoryArchiveFailure
+        expr: increase(caiyun_history_archive_runs_total{status="failed"}[30m]) > 0
+        for: 10m
+        labels:
+          severity: warning
+          service: caiyun
+        annotations:
+          summary: "历史归档任务执行失败"
+          description: "最近 30 分钟内历史归档任务出现失败，请检查 Worker 日志、数据库连接与 archive 表结构。"
+
+      - alert: CaiyunHistoryArchiveBatchLimitReached
+        expr: increase(caiyun_history_archive_hit_batch_limit_total[24h]) > 0
+        for: 10m
+        labels:
+          severity: info
+          service: caiyun
+        annotations:
+          summary: "历史归档触发批次上限"
+          description: "单轮归档命中过批次上限，说明 backlog 偏大；建议增加 ARCHIVE_MAX_BATCHES_PER_RUN 或临时手工执行归档。"
+
+      - alert: CaiyunHistoryArchiveStale
+        expr: (time() - caiyun_history_archive_last_success_unix) > 172800 and caiyun_history_archive_last_success_unix > 0
+        for: 30m
+        labels:
+          severity: warning
+          service: caiyun
+        annotations:
+          summary: "历史归档超过 48 小时未成功执行"
+          description: "请检查 ARCHIVE_JOB_ENABLED、cron 调度、分布式锁和 Worker 运行状态。"

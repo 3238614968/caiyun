@@ -2,6 +2,7 @@ package sms
 
 import (
 	"caiyun/internal/utils"
+	"context"
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
@@ -63,7 +64,11 @@ func newHTTPClient() *http.Client {
 
 // SendCode 发送短信验证码，返回 task_id。
 func SendCode(phone string) (string, error) {
-	apiResp, err := postJSON("/api/sms/send", map[string]string{"phone": phone}, phone)
+	return SendCodeContext(context.Background(), phone)
+}
+
+func SendCodeContext(ctx context.Context, phone string) (string, error) {
+	apiResp, err := postJSONContext(ctx, "/api/sms/send", map[string]string{"phone": phone}, phone)
 	if err != nil {
 		return "", err
 	}
@@ -80,6 +85,10 @@ func SendCode(phone string) (string, error) {
 
 // VerifyCode 校验短信验证码，返回 authorization。
 func VerifyCode(phone, smsCode, taskID string) (string, error) {
+	return VerifyCodeContext(context.Background(), phone, smsCode, taskID)
+}
+
+func VerifyCodeContext(ctx context.Context, phone, smsCode, taskID string) (string, error) {
 	payload := map[string]string{
 		"phone": phone,
 		"code":  smsCode,
@@ -88,7 +97,7 @@ func VerifyCode(phone, smsCode, taskID string) (string, error) {
 		payload["task_id"] = taskID
 	}
 
-	apiResp, err := postJSON("/api/sms/verify", payload, phone)
+	apiResp, err := postJSONContext(ctx, "/api/sms/verify", payload, phone)
 	if err != nil {
 		return "", err
 	}
@@ -107,25 +116,32 @@ func VerifyCode(phone, smsCode, taskID string) (string, error) {
 
 // GetCodeStatus 查询验证码发送状态。
 func GetCodeStatus(phone string) (*CodeStatus, error) {
+	return GetCodeStatusContext(context.Background(), phone)
+}
+
+func GetCodeStatusContext(ctx context.Context, phone string) (*CodeStatus, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	client := newHTTPClient()
 	requestURL := buildSMSAPIURL("/api/sms/status/" + url.PathEscape(phone))
 
-	req, err := http.NewRequest(http.MethodGet, requestURL, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, requestURL, nil)
 	if err != nil {
-		return nil, fmt.Errorf("创建请求失败: %s", err.Error())
+		return nil, fmt.Errorf("创建请求失败: %w", err)
 	}
 	applyCommonHeaders(req)
 
 	resp, err := client.Do(req)
 	if err != nil {
-		log.Printf("[SMS] 查询状态请求失败 phone=%s url=%s err=%v", phone, requestURL, err)
-		return nil, fmt.Errorf("请求失败: %s", err.Error())
+		log.Printf("[SMS] 查询状态请求失败 phone=%s err=%v", maskPhone(phone), err)
+		return nil, fmt.Errorf("请求失败: %w", err)
 	}
 	defer resp.Body.Close()
 
 	respBody, err := utils.ReadLimitedBody(resp.Body, maxSMSResponseBytes)
 	if err != nil {
-		return nil, fmt.Errorf("读取响应失败: %s", err.Error())
+		return nil, fmt.Errorf("读取响应失败: %w", err)
 	}
 
 	if resp.StatusCode != http.StatusOK {
@@ -135,7 +151,7 @@ func GetCodeStatus(phone string) (*CodeStatus, error) {
 
 	var apiResp SmsApiResponse
 	if err := json.Unmarshal(respBody, &apiResp); err != nil {
-		return nil, fmt.Errorf("解析响应失败: %s", err.Error())
+		return nil, fmt.Errorf("解析响应失败: %w", err)
 	}
 	log.Printf("[SMS] 查询状态响应 phone=%s status=%d code=%d message=%s data_keys=%s",
 		maskPhone(phone), resp.StatusCode, apiResp.Code, apiResp.Message, responseDataKeys(apiResp.Data))
@@ -168,13 +184,17 @@ func GetCodeStatus(phone string) (*CodeStatus, error) {
 // SolveSlide 调用短信登录服务的 /api/sms/solve 接口识别滑块偏移量。
 // 仅依赖远端接口返回的 offset，项目内不做本地图像识别。
 func SolveSlide(puzzle, picture string) (*SlideSolveResult, error) {
+	return SolveSlideContext(context.Background(), puzzle, picture)
+}
+
+func SolveSlideContext(ctx context.Context, puzzle, picture string) (*SlideSolveResult, error) {
 	puzzle = strings.TrimSpace(puzzle)
 	picture = strings.TrimSpace(picture)
 	if puzzle == "" || picture == "" {
 		return nil, fmt.Errorf("缺少滑块图片数据")
 	}
 
-	apiResp, err := postJSON("/api/sms/solve", map[string]string{
+	apiResp, err := postJSONContext(ctx, "/api/sms/solve", map[string]string{
 		"puzzle":  puzzle,
 		"picture": picture,
 	}, "")
@@ -204,6 +224,13 @@ func SolveSlide(puzzle, picture string) (*SlideSolveResult, error) {
 
 // postJSON 调用短信服务 JSON POST 接口。
 func postJSON(path string, payload map[string]string, phone string) (*SmsApiResponse, error) {
+	return postJSONContext(context.Background(), path, payload, phone)
+}
+
+func postJSONContext(ctx context.Context, path string, payload map[string]string, phone string) (*SmsApiResponse, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	requestURL := buildSMSAPIURL(path)
 	body, err := json.Marshal(payload)
 	if err != nil {
@@ -211,23 +238,23 @@ func postJSON(path string, payload map[string]string, phone string) (*SmsApiResp
 	}
 
 	client := newHTTPClient()
-	req, err := http.NewRequest(http.MethodPost, requestURL, strings.NewReader(string(body)))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, requestURL, strings.NewReader(string(body)))
 	if err != nil {
-		return nil, fmt.Errorf("创建请求失败: %s", err.Error())
+		return nil, fmt.Errorf("创建请求失败: %w", err)
 	}
 	applyCommonHeaders(req)
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := client.Do(req)
 	if err != nil {
-		log.Printf("[SMS] 请求失败 phone=%s url=%s err=%v", phone, requestURL, err)
-		return nil, fmt.Errorf("请求失败: %s", err.Error())
+		log.Printf("[SMS] 请求失败 phone=%s path=%s err=%v", maskPhone(phone), path, err)
+		return nil, fmt.Errorf("请求失败: %w", err)
 	}
 	defer resp.Body.Close()
 
 	respBody, err := utils.ReadLimitedBody(resp.Body, maxSMSResponseBytes)
 	if err != nil {
-		return nil, fmt.Errorf("读取响应失败: %s", err.Error())
+		return nil, fmt.Errorf("读取响应失败: %w", err)
 	}
 
 	if resp.StatusCode != http.StatusOK {
@@ -237,7 +264,7 @@ func postJSON(path string, payload map[string]string, phone string) (*SmsApiResp
 
 	var apiResp SmsApiResponse
 	if err := json.Unmarshal(respBody, &apiResp); err != nil {
-		return nil, fmt.Errorf("解析响应失败: %s", err.Error())
+		return nil, fmt.Errorf("解析响应失败: %w", err)
 	}
 	log.Printf("[SMS] 响应 phone=%s path=%s status=%d code=%d message=%s data_keys=%s",
 		maskPhone(phone), path, resp.StatusCode, apiResp.Code, apiResp.Message, responseDataKeys(apiResp.Data))
@@ -286,11 +313,7 @@ func isSMSTLSSkipVerifyEnabled() bool {
 }
 
 func maskPhone(phone string) string {
-	phone = strings.TrimSpace(phone)
-	if len(phone) < 7 {
-		return "***"
-	}
-	return phone[:3] + "****" + phone[len(phone)-4:]
+	return utils.MaskPhone(phone)
 }
 
 func responseDataKeys(data map[string]interface{}) string {

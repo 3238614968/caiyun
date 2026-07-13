@@ -1,9 +1,60 @@
 import { defineConfig } from 'vitest/config'
 import vue from '@vitejs/plugin-vue'
+import Components from 'unplugin-vue-components/vite'
+import { ElementPlusResolver } from 'unplugin-vue-components/resolvers'
 import { resolve } from 'path'
 
+const elementPlusIconNames = new Set([
+  'ArrowDown',
+  'Bell',
+  'Box',
+  'CircleCheck',
+  'CircleClose',
+  'Cloudy',
+  'Close',
+  'DataLine',
+  'Document',
+  'Download',
+  'Expand',
+  'Fold',
+  'FullScreen',
+  'HomeFilled',
+  'InfoFilled',
+  'List',
+  'Lock',
+  'Message',
+  'PieChart',
+  'Plus',
+  'Present',
+  'Refresh',
+  'Search',
+  'Setting',
+  'Shop',
+  'SwitchButton',
+  'Timer',
+  'User',
+  'Warning'
+])
+
+const elementPlusIconResolver = (name: string) => {
+  if (!elementPlusIconNames.has(name)) return undefined
+  return {
+    name,
+    from: '@element-plus/icons-vue'
+  }
+}
+
 export default defineConfig({
-  plugins: [vue()],
+  plugins: [
+    vue(),
+    Components({
+      dts: 'src/components.d.ts',
+      resolvers: [
+        ElementPlusResolver({ importStyle: 'css' }),
+        elementPlusIconResolver
+      ]
+    })
+  ],
   test: {
     environment: 'jsdom',
     globals: true,
@@ -17,12 +68,6 @@ export default defineConfig({
           if (!id.includes('node_modules')) return undefined
           if (id.includes('/vue') || id.includes('\\vue') || id.includes('vue-router') || id.includes('pinia')) {
             return 'vue'
-          }
-          if (id.includes('element-plus') || id.includes('@element-plus')) {
-            return 'element'
-          }
-          if (id.includes('echarts')) {
-            return 'charts'
           }
           return undefined
         }

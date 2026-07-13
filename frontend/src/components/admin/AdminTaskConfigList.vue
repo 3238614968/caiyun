@@ -1,14 +1,39 @@
 <template>
-  <div class="responsive-data-shell" v-loading="loading">
-    <el-table v-if="!isMobile" :data="configs" stripe style="width: 100%">
-      <el-table-column prop="sort_order" label="序号" width="70" />
-      <el-table-column prop="task_name" label="任务名称" width="120" />
-      <el-table-column prop="task_type" label="任务类型" width="140">
+  <div
+    v-loading="loading"
+    class="responsive-data-shell"
+  >
+    <el-table
+      v-if="!isMobile"
+      :data="configs"
+      stripe
+      style="width: 100%"
+    >
+      <el-table-column
+        prop="sort_order"
+        label="序号"
+        width="70"
+      />
+      <el-table-column
+        prop="task_name"
+        label="任务名称"
+        width="120"
+      />
+      <el-table-column
+        prop="task_type"
+        label="任务类型"
+        width="140"
+      >
         <template #default="{ row }">
-          <el-tag size="small">{{ getTaskTypeName(row.task_type, row.task_name) }}</el-tag>
+          <el-tag size="small">
+            {{ getTaskTypeName(row.task_type, row.task_name) }}
+          </el-tag>
         </template>
       </el-table-column>
-      <el-table-column label="状态" width="160">
+      <el-table-column
+        label="状态"
+        width="160"
+      >
         <template #default="{ row }">
           <div class="task-status-cell">
             <el-switch
@@ -21,13 +46,25 @@
           </div>
         </template>
       </el-table-column>
-      <el-table-column prop="updated_at" label="更新时间" min-width="180">
-        <template #default="{ row }">{{ formatDate(row.updated_at) }}</template>
+      <el-table-column
+        prop="updated_at"
+        label="更新时间"
+        min-width="180"
+      >
+        <template #default="{ row }">
+          {{ formatDate(row.updated_at) }}
+        </template>
       </el-table-column>
     </el-table>
 
-    <div v-else class="mobile-admin-list">
-      <el-empty v-if="configs.length === 0" description="暂无任务配置" />
+    <div
+      v-else
+      class="mobile-admin-list"
+    >
+      <el-empty
+        v-if="configs.length === 0"
+        description="暂无任务配置"
+      />
       <template v-else>
         <el-card
           v-for="row in configs"
@@ -37,10 +74,16 @@
         >
           <div class="mobile-admin-card-head">
             <div>
-              <div class="mobile-admin-card-title">{{ row.task_name }}</div>
-              <div class="mobile-admin-card-meta">#{{ row.sort_order }}</div>
+              <div class="mobile-admin-card-title">
+                {{ row.task_name }}
+              </div>
+              <div class="mobile-admin-card-meta">
+                #{{ row.sort_order }}
+              </div>
             </div>
-            <el-tag size="small">{{ getTaskTypeName(row.task_type, row.task_name) }}</el-tag>
+            <el-tag size="small">
+              {{ getTaskTypeName(row.task_type, row.task_name) }}
+            </el-tag>
           </div>
           <div class="mobile-admin-card-grid">
             <div class="mobile-admin-card-row">

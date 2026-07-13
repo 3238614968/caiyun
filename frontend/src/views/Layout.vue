@@ -1,12 +1,23 @@
 <template>
   <el-container class="layout-container">
     <!-- 侧边栏 -->
-    <el-aside :width="asideWidth" class="sidebar">
+    <el-aside
+      :width="asideWidth"
+      class="sidebar"
+    >
       <div class="logo-container">
         <div class="logo">
-          <el-icon :size="28" color="#fff"><Cloudy /></el-icon>
+          <el-icon
+            :size="28"
+            color="#fff"
+          >
+            <Cloudy />
+          </el-icon>
         </div>
-        <span v-show="!menuCollapsed" class="logo-text">移动云盘</span>
+        <span
+          v-show="!menuCollapsed"
+          class="logo-text"
+        >移动云盘</span>
       </div>
 
       <el-menu
@@ -21,27 +32,40 @@
       >
         <el-menu-item index="/dashboard">
           <el-icon><DataLine /></el-icon>
-          <template #title>首页</template>
+          <template #title>
+            首页
+          </template>
         </el-menu-item>
 
         <el-menu-item index="/accounts">
           <el-icon><User /></el-icon>
-          <template #title>账号</template>
+          <template #title>
+            账号
+          </template>
         </el-menu-item>
 
         <el-menu-item index="/logs">
           <el-icon><List /></el-icon>
-          <template #title>日志</template>
+          <template #title>
+            日志
+          </template>
         </el-menu-item>
 
         <el-menu-item index="/exchange">
           <el-icon><Shop /></el-icon>
-          <template #title>兑换</template>
+          <template #title>
+            兑换
+          </template>
         </el-menu-item>
 
-        <el-menu-item v-if="isAdmin" index="/admin">
+        <el-menu-item
+          v-if="isAdmin"
+          index="/admin"
+        >
           <el-icon><Setting /></el-icon>
-          <template #title>管理</template>
+          <template #title>
+            管理
+          </template>
         </el-menu-item>
       </el-menu>
 
@@ -65,7 +89,12 @@
       <el-header class="header glass-effect-light">
         <div class="header-left">
           <breadcrumb v-if="!isMobileViewport" />
-          <div v-else class="mobile-page-title">{{ currentTitle }}</div>
+          <div
+            v-else
+            class="mobile-page-title"
+          >
+            {{ currentTitle }}
+          </div>
         </div>
 
         <div class="header-right">
@@ -73,21 +102,35 @@
           <NotificationCenter />
 
           <!-- 全屏 -->
-          <el-button type="text" class="header-btn hidden-mobile-control" @click="toggleFullscreen">
-            <el-icon :size="20"><FullScreen /></el-icon>
+          <el-button
+            type="text"
+            class="header-btn hidden-mobile-control"
+            @click="toggleFullscreen"
+          >
+            <el-icon :size="20">
+              <FullScreen />
+            </el-icon>
           </el-button>
 
           <!-- 用户菜单 -->
-          <el-dropdown @command="handleCommand" class="user-dropdown">
+          <el-dropdown
+            class="user-dropdown"
+            @command="handleCommand"
+          >
             <div class="user-info">
-              <el-avatar :size="isMobileViewport ? 34 : 36" class="user-avatar">
+              <el-avatar
+                :size="isMobileViewport ? 34 : 36"
+                class="user-avatar"
+              >
                 {{ userInitials }}
               </el-avatar>
               <div class="user-copy">
                 <span class="username">{{ authStore.user?.username }}</span>
                 <span class="user-role">{{ isAdmin ? '管理员' : '普通用户' }}</span>
               </div>
-              <el-icon class="user-arrow"><ArrowDown /></el-icon>
+              <el-icon class="user-arrow">
+                <ArrowDown />
+              </el-icon>
             </div>
             <template #dropdown>
               <el-dropdown-menu>
@@ -97,7 +140,10 @@
                 <el-dropdown-item command="settings">
                   <el-icon><Setting /></el-icon>系统设置
                 </el-dropdown-item>
-                <el-dropdown-item divided command="logout">
+                <el-dropdown-item
+                  divided
+                  command="logout"
+                >
                   <el-icon><SwitchButton /></el-icon>退出登录
                 </el-dropdown-item>
               </el-dropdown-menu>
@@ -110,8 +156,11 @@
       <el-main class="main-content">
         <div class="page-shell">
           <router-view v-slot="{ Component }">
-            <transition name="fade-transform" mode="out-in">
-            <component :is="Component" />
+            <transition
+              name="fade-transform"
+              mode="out-in"
+            >
+              <component :is="Component" />
             </transition>
           </router-view>
         </div>
@@ -124,11 +173,24 @@
     </el-container>
   </el-container>
 
-  <el-dialog v-model="profileVisible" title="个人中心" width="520px">
-    <el-descriptions :column="1" border>
-      <el-descriptions-item label="用户名">{{ authStore.user?.username || '-' }}</el-descriptions-item>
-      <el-descriptions-item label="角色">{{ authStore.user?.role || '-' }}</el-descriptions-item>
-      <el-descriptions-item label="用户 ID">{{ (authStore.user as any)?.id ?? '-' }}</el-descriptions-item>
+  <el-dialog
+    v-model="profileVisible"
+    title="个人中心"
+    width="520px"
+  >
+    <el-descriptions
+      :column="1"
+      border
+    >
+      <el-descriptions-item label="用户名">
+        {{ authStore.user?.username || '-' }}
+      </el-descriptions-item>
+      <el-descriptions-item label="角色">
+        {{ authStore.user?.role || '-' }}
+      </el-descriptions-item>
+      <el-descriptions-item label="用户 ID">
+        {{ (authStore.user as any)?.id ?? '-' }}
+      </el-descriptions-item>
       <el-descriptions-item label="WebSocket 状态">
         <el-tag :type="wsClient.connected.value ? 'success' : 'danger'">
           {{ wsClient.connected.value ? '已连接' : '未连接' }}
@@ -136,27 +198,49 @@
       </el-descriptions-item>
     </el-descriptions>
     <template #footer>
-      <el-button @click="profileVisible = false">关闭</el-button>
+      <el-button @click="profileVisible = false">
+        关闭
+      </el-button>
     </template>
   </el-dialog>
 
-  <el-dialog v-model="settingsVisible" title="系统设置" width="560px">
+  <el-dialog
+    v-model="settingsVisible"
+    title="系统设置"
+    width="560px"
+  >
     <el-form label-width="120px">
       <el-form-item label="侧边栏折叠">
-        <el-switch v-model="isCollapse" active-text="折叠" inactive-text="展开" />
+        <el-switch
+          v-model="isCollapse"
+          active-text="折叠"
+          inactive-text="展开"
+        />
       </el-form-item>
       <el-form-item label="WebSocket">
         <div style="display: flex; gap: 8px; align-items: center;">
           <el-tag :type="wsClient.connected.value ? 'success' : 'info'">
             {{ wsClient.connected.value ? '已连接' : '未连接' }}
           </el-tag>
-          <el-button size="small" @click="wsClient.connect">重连</el-button>
-          <el-button size="small" @click="wsClient.disconnect">断开</el-button>
+          <el-button
+            size="small"
+            @click="wsClient.connect"
+          >
+            重连
+          </el-button>
+          <el-button
+            size="small"
+            @click="wsClient.disconnect"
+          >
+            断开
+          </el-button>
         </div>
       </el-form-item>
     </el-form>
     <template #footer>
-      <el-button @click="settingsVisible = false">关闭</el-button>
+      <el-button @click="settingsVisible = false">
+        关闭
+      </el-button>
     </template>
   </el-dialog>
 
@@ -169,7 +253,6 @@
 </template>
 
 <script setup lang="ts">
-import '@/styles/element/layout'
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'

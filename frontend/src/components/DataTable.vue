@@ -1,18 +1,25 @@
-﻿<template>
+<template>
   <div class="data-table-wrapper">
     <el-table
-      :data="data"
       v-loading="loading"
+      :data="data"
       stripe
       :border="border"
       style="width: 100%"
       @selection-change="handleSelectionChange"
     >
-      <el-table-column v-if="selectable" type="selection" width="55" />
+      <el-table-column
+        v-if="selectable"
+        type="selection"
+        width="55"
+      />
       <slot />
     </el-table>
 
-    <div v-if="showPagination" class="pagination-wrapper">
+    <div
+      v-if="showPagination"
+      class="pagination-wrapper"
+    >
       <el-pagination
         v-model:current-page="currentPage"
         v-model:page-size="pageSize"

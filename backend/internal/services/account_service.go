@@ -6,6 +6,8 @@ import (
 	corehttp "caiyun/internal/core/http"
 	"caiyun/internal/models"
 	"caiyun/internal/queue"
+	"caiyun/internal/repository"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -22,12 +24,14 @@ var (
 )
 
 type AccountService struct {
-	accountRepo  accountRepository
-	exchangeRepo accountExchangeRepository
-	userRepo     accountUserRepository
-	cache        *cache.RedisCache
-	authMgr      *auth.Auth
-	taskQueue    queue.ReliableTaskQueue
+	accountRepo   accountRepository
+	exchangeRepo  accountExchangeRepository
+	userRepo      accountUserRepository
+	cache         *cache.RedisCache
+	authMgr       *auth.Auth
+	taskQueue     queue.ReliableTaskQueue
+	tokenProvider accountTokenProvider
+	unitOfWork    repository.UnitOfWork
 }
 
 type accountRepository interface {
@@ -55,6 +59,10 @@ type accountExchangeRepository interface {
 	UpdateAuthByAccountID(accountID uint, auth, token, jwtToken string) error
 }
 
+type accountTokenProvider interface {
+	GetToken(accountID uint) (*TokenInfo, error)
+}
+
 func NewAccountService(
 	accountRepo accountRepository,
 	userRepo accountUserRepository,
@@ -68,6 +76,9 @@ func NewAccountService(
 		cache:       cache,
 		authMgr:     authMgr,
 	}
+	if concrete, ok := accountRepo.(*repository.AccountRepository); ok {
+		service.unitOfWork = repository.NewUnitOfWorkFromAccountRepository(concrete)
+	}
 	if len(exchangeRepos) > 0 {
 		service.exchangeRepo = exchangeRepos[0]
 	}
@@ -80,6 +91,52 @@ func (s *AccountService) SetTaskQueue(taskQueue queue.ReliableTaskQueue) {
 
 func (s *AccountService) SetExchangeAccountRepository(exchangeRepo accountExchangeRepository) {
 	s.exchangeRepo = exchangeRepo
+}
+
+func (s *AccountService) SetTokenProvider(tokenProvider accountTokenProvider) {
+	s.tokenProvider = tokenProvider
+}
+
+// SetUnitOfWork overrides the repository-derived transaction boundary.
+func (s *AccountService) SetUnitOfWork(unitOfWork repository.UnitOfWork) {
+	s.unitOfWork = unitOfWork
+}
+
+func accountServiceContext(ctx context.Context) context.Context {
+	if ctx == nil {
+		return context.Background()
+	}
+	return ctx
+}
+
+func (s *AccountService) accountRepositoryWithContext(ctx context.Context) accountRepository {
+	repo := s.accountRepo
+	if binder, ok := repo.(interface {
+		WithContext(context.Context) *repository.AccountRepository
+	}); ok {
+		repo = binder.WithContext(accountServiceContext(ctx))
+	}
+	return repo
+}
+
+func (s *AccountService) userRepositoryWithContext(ctx context.Context) accountUserRepository {
+	repo := s.userRepo
+	if binder, ok := repo.(interface {
+		WithContext(context.Context) *repository.UserRepository
+	}); ok {
+		repo = binder.WithContext(accountServiceContext(ctx))
+	}
+	return repo
+}
+
+func (s *AccountService) exchangeRepositoryWithContext(ctx context.Context) accountExchangeRepository {
+	repo := s.exchangeRepo
+	if binder, ok := repo.(interface {
+		WithContext(context.Context) *repository.ExchangeAccountRepository
+	}); ok {
+		repo = binder.WithContext(accountServiceContext(ctx))
+	}
+	return repo
 }
 
 // CreateAccountRequest 创建账号请求
@@ -98,19 +155,34 @@ type UpdateAccountRequest struct {
 
 // CreateAccount 创建账号（如果当前用户已存在则更新）
 func (s *AccountService) CreateAccount(userID uint, req *CreateAccountRequest) (*models.Account, error) {
+	return s.CreateAccountContext(context.Background(), userID, req)
+}
+
+// CreateAccountContext 创建账号，并让数据库操作响应调用方取消与超时。
+func (s *AccountService) CreateAccountContext(ctx context.Context, userID uint, req *CreateAccountRequest) (*models.Account, error) {
+	ctx = accountServiceContext(ctx)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	accountRepo := s.accountRepositoryWithContext(ctx)
+	userRepo := s.userRepositoryWithContext(ctx)
+
 	req.Phone = strings.TrimSpace(req.Phone)
 	if !validator.IsValidPhone(req.Phone) {
 		return nil, ErrInvalidPhone
 	}
 
 	// 验证用户存在
-	_, err := s.userRepo.FindByID(userID)
+	_, err := userRepo.FindByID(userID)
 	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, ctxErr
+		}
 		return nil, ErrAccountNotFound
 	}
 
 	// 检查该用户是否已存在该手机号
-	existingAccount, err := s.accountRepo.FindByPhoneAndUserID(req.Phone, userID)
+	existingAccount, err := accountRepo.FindByPhoneAndUserID(req.Phone, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -130,7 +202,7 @@ func (s *AccountService) CreateAccount(userID uint, req *CreateAccountRequest) (
 			}
 		}
 
-		if err := s.accountRepo.Update(existingAccount); err != nil {
+		if err := accountRepo.Update(existingAccount); err != nil {
 			return nil, err
 		}
 
@@ -156,7 +228,7 @@ func (s *AccountService) CreateAccount(userID uint, req *CreateAccountRequest) (
 		}
 	}
 
-	if err := s.accountRepo.Create(account); err != nil {
+	if err := accountRepo.Create(account); err != nil {
 		return nil, err
 	}
 
@@ -164,8 +236,20 @@ func (s *AccountService) CreateAccount(userID uint, req *CreateAccountRequest) (
 }
 
 func (s *AccountService) GetAccount(userID, accountID uint) (*models.Account, error) {
-	account, err := s.accountRepo.FindByID(accountID)
+	return s.GetAccountContext(context.Background(), userID, accountID)
+}
+
+// GetAccountContext 获取账号，并让数据库操作响应调用方取消与超时。
+func (s *AccountService) GetAccountContext(ctx context.Context, userID, accountID uint) (*models.Account, error) {
+	ctx = accountServiceContext(ctx)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	account, err := s.accountRepositoryWithContext(ctx).FindByID(accountID)
 	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, ctxErr
+		}
 		return nil, ErrAccountNotFound
 	}
 
@@ -189,20 +273,43 @@ func (s *AccountService) GetAccountByID(accountID uint) (*models.Account, error)
 
 // ListAccounts 列出用户的账号
 func (s *AccountService) ListAccounts(userID uint, page, pageSize int, phone string) ([]*models.Account, int64, error) {
+	return s.ListAccountsContext(context.Background(), userID, page, pageSize, phone)
+}
+
+// ListAccountsContext 列出用户账号，并让数据库操作响应调用方取消与超时。
+func (s *AccountService) ListAccountsContext(ctx context.Context, userID uint, page, pageSize int, phone string) ([]*models.Account, int64, error) {
+	ctx = accountServiceContext(ctx)
+	if err := ctx.Err(); err != nil {
+		return nil, 0, err
+	}
 	offset := (page - 1) * pageSize
-	return s.accountRepo.ListByUserID(userID, offset, pageSize, phone)
+	return s.accountRepositoryWithContext(ctx).ListByUserID(userID, offset, pageSize, phone)
 }
 
 // UpdateAccount 更新账号
 func (s *AccountService) UpdateAccount(userID, accountID uint, req *UpdateAccountRequest) (*models.Account, error) {
+	return s.UpdateAccountContext(context.Background(), userID, accountID, req)
+}
+
+// UpdateAccountContext 更新账号，并让数据库操作响应调用方取消与超时。
+func (s *AccountService) UpdateAccountContext(ctx context.Context, userID, accountID uint, req *UpdateAccountRequest) (*models.Account, error) {
+	ctx = accountServiceContext(ctx)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	accountRepo := s.accountRepositoryWithContext(ctx)
+
 	req.Phone = strings.TrimSpace(req.Phone)
 	if !validator.IsValidPhone(req.Phone) {
 		return nil, ErrInvalidPhone
 	}
 
 	// 获取账号
-	account, err := s.accountRepo.FindByID(accountID)
+	account, err := accountRepo.FindByID(accountID)
 	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, ctxErr
+		}
 		return nil, ErrAccountNotFound
 	}
 
@@ -213,7 +320,7 @@ func (s *AccountService) UpdateAccount(userID, accountID uint, req *UpdateAccoun
 
 	// 检查该用户是否已有其他账号使用此手机号
 	if req.Phone != account.Phone {
-		exists, err := s.accountRepo.ExistsByPhoneAndUserID(req.Phone, userID)
+		exists, err := accountRepo.ExistsByPhoneAndUserID(req.Phone, userID)
 		if err != nil {
 			return nil, err
 		}
@@ -238,7 +345,7 @@ func (s *AccountService) UpdateAccount(userID, accountID uint, req *UpdateAccoun
 		}
 	}
 
-	if err := s.accountRepo.Update(account); err != nil {
+	if err := accountRepo.Update(account); err != nil {
 		return nil, err
 	}
 
@@ -247,9 +354,23 @@ func (s *AccountService) UpdateAccount(userID, accountID uint, req *UpdateAccoun
 
 // DeleteAccount 删除账号
 func (s *AccountService) DeleteAccount(userID, accountID uint) error {
+	return s.DeleteAccountContext(context.Background(), userID, accountID)
+}
+
+// DeleteAccountContext 删除账号，并让数据库操作响应调用方取消与超时。
+func (s *AccountService) DeleteAccountContext(ctx context.Context, userID, accountID uint) error {
+	ctx = accountServiceContext(ctx)
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	accountRepo := s.accountRepositoryWithContext(ctx)
+
 	// 获取账号
-	account, err := s.accountRepo.FindByID(accountID)
+	account, err := accountRepo.FindByID(accountID)
 	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
 		return ErrAccountNotFound
 	}
 
@@ -258,14 +379,28 @@ func (s *AccountService) DeleteAccount(userID, accountID uint) error {
 		return ErrAccountNotFound
 	}
 
-	return s.accountRepo.Delete(accountID)
+	return accountRepo.Delete(accountID)
 }
 
 // SetAccountStatus 设置账号状态
 func (s *AccountService) SetAccountStatus(userID, accountID uint, isActive bool) error {
+	return s.SetAccountStatusContext(context.Background(), userID, accountID, isActive)
+}
+
+// SetAccountStatusContext 设置账号状态，并让数据库操作响应调用方取消与超时。
+func (s *AccountService) SetAccountStatusContext(ctx context.Context, userID, accountID uint, isActive bool) error {
+	ctx = accountServiceContext(ctx)
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	accountRepo := s.accountRepositoryWithContext(ctx)
+
 	// 获取账号
-	account, err := s.accountRepo.FindByID(accountID)
+	account, err := accountRepo.FindByID(accountID)
 	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
 		return ErrAccountNotFound
 	}
 
@@ -274,90 +409,130 @@ func (s *AccountService) SetAccountStatus(userID, accountID uint, isActive bool)
 		return ErrAccountNotFound
 	}
 
-	return s.accountRepo.SetActiveStatus(accountID, isActive)
+	return accountRepo.SetActiveStatus(accountID, isActive)
 }
 
-// GetToken 获取账号Token（优先从缓存获取）
+// GetToken 获取账号 Token（优先委托 TokenManager，未注入时回退到数据库+按需刷新路径）。
 func (s *AccountService) GetToken(accountID uint) (string, error) {
-	// 从缓存获取
-	cacheKey := fmt.Sprintf("account:token:%d", accountID)
-	var token string
-	err := s.cache.Get(cacheKey, &token)
-	if err == nil && token != "" {
-		return token, nil
+	if s.tokenProvider != nil {
+		tokenInfo, err := s.tokenProvider.GetToken(accountID)
+		if err != nil {
+			return "", err
+		}
+		if tokenInfo == nil {
+			return "", fmt.Errorf("账号 %d Token 为空", accountID)
+		}
+		if tokenInfo.SSOToken != "" {
+			return tokenInfo.SSOToken, nil
+		}
+		if tokenInfo.JWTToken != "" {
+			return tokenInfo.JWTToken, nil
+		}
+		return "", fmt.Errorf("账号 %d Token 为空", accountID)
 	}
 
-	// 从数据库获取
 	account, err := s.accountRepo.FindByID(accountID)
 	if err != nil {
 		return "", err
 	}
 
-	// 如果数据库中也没有Token，则刷新
 	if account.Token == "" {
 		if err := s.RefreshToken(account); err != nil {
 			return "", err
 		}
-		token = account.Token
-	} else {
-		token = account.Token
 	}
-
-	// 缓存Token（24小时）
-	tokenCacheKey := fmt.Sprintf("account:token:%d", accountID)
-	s.cache.Set(tokenCacheKey, token, 24*time.Hour)
-
-	return token, nil
+	if account.Token == "" {
+		return "", fmt.Errorf("账号 %d Token 为空", accountID)
+	}
+	return account.Token, nil
 }
 
 // RefreshToken 刷新账号Token
 func (s *AccountService) RefreshToken(account *models.Account) error {
+	return s.RefreshTokenContext(context.Background(), account)
+}
+
+// RefreshTokenContext 刷新账号 Token，并将取消传播到认证重试、上游 HTTP 与数据库写入。
+func (s *AccountService) RefreshTokenContext(ctx context.Context, account *models.Account) error {
+	ctx = accountServiceContext(ctx)
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if account == nil {
 		return fmt.Errorf("账号为空")
 	}
 
-	// 使用账号自己的 authorization 创建临时认证客户端，避免复用全局 client 造成串号。
 	authClient := corehttp.NewClient()
 	if authStr := sanitizeAuthValue(account.Auth); authStr != "" {
 		authClient.SetAuth(authStr)
 	}
 	authForAccount := auth.NewAuth(authClient)
 
-	// refreshToken 新接口推荐携带 userDomainId；先尽力使用当前 authorization 换取 JWT 并解析。
 	userDomainID := ""
 	jwtToken := account.JWTToken
-	if token, _, err := authForAccount.GetJWTTokenWithSSOToken(account.Phone); err == nil && token != "" {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if token, _, err := authForAccount.GetJWTTokenWithSSOTokenContext(ctx, account.Phone); err == nil && token != "" {
 		jwtToken = token
 		userDomainID = jwtUserDomainID(token)
 	}
-
-	refreshed, err := authForAccount.RefreshAuthorization(account.Auth, account.Phone, userDomainID)
-	if err != nil {
+	if err := ctx.Err(); err != nil {
 		return err
 	}
 
-	// 刷新成功后再落库；如果后续 JWT 换取失败，也保留成功刷新的 authorization。
+	refreshed, err := authForAccount.RefreshAuthorizationContext(ctx, account.Auth, account.Phone, userDomainID)
+	if err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
 	if refreshed.SSOToken != "" {
-		if token, err := authForAccount.TyrzLogin(refreshed.SSOToken); err == nil && token != "" {
+		if token, err := authForAccount.TyrzLoginContext(ctx, refreshed.SSOToken); err == nil && token != "" {
 			jwtToken = token
+		}
+		if err := ctx.Err(); err != nil {
+			return err
 		}
 	}
 	applyAuthorizationRefreshToAccount(account, refreshed, jwtToken)
 
-	if err := s.accountRepo.UpdateAuthorizationFields(account.ID, account.Auth, account.Token, account.JWTToken, account.Platform, account.ExpireAt); err != nil {
+	return s.persistAuthorizationRefreshContext(ctx, account)
+}
+
+func (s *AccountService) persistAuthorizationRefreshContext(ctx context.Context, account *models.Account) error {
+	if account == nil {
+		return fmt.Errorf("账号为空")
+	}
+	if s.unitOfWork != nil {
+		return s.unitOfWork.WithinTransaction(ctx, func(repos repository.TransactionRepositories) error {
+			if err := repos.Account.UpdateAuthorizationFields(account.ID, account.Auth, account.Token, account.JWTToken, account.Platform, account.ExpireAt); err != nil {
+				return err
+			}
+			if s.exchangeRepo != nil {
+				if err := repos.ExchangeAccount.UpdateAuthByAccountID(account.ID, account.Auth, account.Token, account.JWTToken); err != nil {
+					return fmt.Errorf("同步抢兑账号鉴权失败: %w", err)
+				}
+			}
+			return nil
+		})
+	}
+
+	accountRepo := s.accountRepositoryWithContext(ctx)
+	if err := accountRepo.UpdateAuthorizationFields(account.ID, account.Auth, account.Token, account.JWTToken, account.Platform, account.ExpireAt); err != nil {
 		return err
 	}
-	if s.exchangeRepo != nil {
-		if err := s.exchangeRepo.UpdateAuthByAccountID(account.ID, account.Auth, account.Token, account.JWTToken); err != nil {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if exchangeRepo := s.exchangeRepositoryWithContext(ctx); exchangeRepo != nil {
+		if err := exchangeRepo.UpdateAuthByAccountID(account.ID, account.Auth, account.Token, account.JWTToken); err != nil {
 			return fmt.Errorf("同步抢兑账号鉴权失败: %w", err)
 		}
 	}
-
-	// 更新缓存
-	cacheKey := fmt.Sprintf("account:token:%d", account.ID)
-	s.cache.Set(cacheKey, account.Token, 24*time.Hour)
-
-	return nil
+	return ctx.Err()
 }
 
 // RefreshTokenIfNeeded 根据需要刷新Token
@@ -397,9 +572,21 @@ func (s *AccountService) GetTotalCloudCount(userID uint) (int, error) {
 	return s.accountRepo.GetTotalCloudCountByUserID(userID)
 }
 
-// GetActiveAccounts 获取用户的所有激活账号
+// GetActiveAccounts 获取用户的所有激活账号。
 func (s *AccountService) GetActiveAccounts(userID uint) ([]*models.Account, error) {
-	return s.accountRepo.FindActiveAccountsByUserID(userID)
+	return s.GetActiveAccountsContext(context.Background(), userID)
+}
+
+// GetActiveAccountsContext binds the request context when the concrete
+// repository supports it. Test doubles and legacy adapters remain compatible.
+func (s *AccountService) GetActiveAccountsContext(ctx context.Context, userID uint) ([]*models.Account, error) {
+	repo := s.accountRepo
+	if binder, ok := repo.(interface {
+		WithContext(context.Context) *repository.AccountRepository
+	}); ok {
+		repo = binder.WithContext(ctx)
+	}
+	return repo.FindActiveAccountsByUserID(userID)
 }
 
 // GetAllActiveAccounts 获取所有激活账号（供Worker使用）

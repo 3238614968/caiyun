@@ -1,0 +1,14 @@
+date,day_type,name,source
+2026-01-01,holiday,元旦,builtin_statutory_2026
+2026-02-16,holiday,春节除夕,builtin_statutory_2026
+2026-02-17,holiday,春节,builtin_statutory_2026
+2026-02-18,holiday,春节,builtin_statutory_2026
+2026-02-19,holiday,春节,builtin_statutory_2026
+2026-04-05,holiday,清明节,builtin_statutory_2026
+2026-05-01,holiday,劳动节,builtin_statutory_2026
+2026-05-02,holiday,劳动节,builtin_statutory_2026
+2026-06-19,holiday,端午节,builtin_statutory_2026
+2026-09-25,holiday,中秋节,builtin_statutory_2026
+2026-10-01,holiday,国庆节,builtin_statutory_2026
+2026-10-02,holiday,国庆节,builtin_statutory_2026
+2026-10-03,holiday,国庆节,builtin_statutory_2026

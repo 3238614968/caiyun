@@ -10,9 +10,11 @@ import (
 
 // Response 统一响应结构
 type Response struct {
-	Code    int         `json:"code"`
-	Message string      `json:"message"`
-	Data    interface{} `json:"data,omitempty"`
+	Code         int         `json:"code"`
+	BusinessCode string      `json:"business_code,omitempty"`
+	Message      string      `json:"message"`
+	Data         interface{} `json:"data,omitempty"`
+	TraceID      string      `json:"trace_id,omitempty"`
 }
 
 // PageData 分页数据
@@ -23,31 +25,63 @@ type PageData struct {
 	PageSize int         `json:"page_size"`
 }
 
+func traceIDFromContext(c *gin.Context) string {
+	if c == nil {
+		return ""
+	}
+	if traceID := c.Writer.Header().Get("X-Trace-ID"); traceID != "" {
+		return traceID
+	}
+	if traceID := c.Writer.Header().Get("X-Request-ID"); traceID != "" {
+		return traceID
+	}
+	if traceID := c.GetString("request_id"); traceID != "" {
+		return traceID
+	}
+	return ""
+}
+
+func responseBody(c *gin.Context, code int, message string, data interface{}) Response {
+	return Response{
+		Code:    code,
+		Message: message,
+		Data:    data,
+		TraceID: traceIDFromContext(c),
+	}
+}
+
+func responseBodyWithBusinessCode(c *gin.Context, code int, businessCode string, message string, data interface{}) Response {
+	body := responseBody(c, code, message, data)
+	body.BusinessCode = businessCode
+	return body
+}
+
+func jsonResponse(c *gin.Context, httpStatus, code int, message string, data interface{}) {
+	c.JSON(httpStatus, responseBody(c, code, message, data))
+}
+
+func jsonResponseWithBusinessCode(c *gin.Context, httpStatus, code int, businessCode string, message string, data interface{}) {
+	c.JSON(httpStatus, responseBodyWithBusinessCode(c, code, businessCode, message, data))
+}
+
 // Success 成功响应
 func Success(c *gin.Context, data interface{}) {
-	c.JSON(http.StatusOK, Response{
-		Code:    0,
-		Message: "success",
-		Data:    data,
-	})
+	jsonResponse(c, http.StatusOK, 0, "success", data)
 }
 
 // SuccessWithMessage 带消息的成功响应
 func SuccessWithMessage(c *gin.Context, message string, data interface{}) {
-	c.JSON(http.StatusOK, Response{
-		Code:    0,
-		Message: message,
-		Data:    data,
-	})
+	jsonResponse(c, http.StatusOK, 0, message, data)
+}
+
+// Accepted returns a durable asynchronous operation accepted response (202).
+func Accepted(c *gin.Context, data interface{}) {
+	jsonResponse(c, http.StatusAccepted, 0, "accepted", data)
 }
 
 // SuccessCreated 创建成功的响应 (201)
 func SuccessCreated(c *gin.Context, data interface{}) {
-	c.JSON(http.StatusCreated, Response{
-		Code:    0,
-		Message: "创建成功",
-		Data:    data,
-	})
+	jsonResponse(c, http.StatusCreated, 0, "创建成功", data)
 }
 
 // SuccessNoContent 删除成功无内容返回 (204)
@@ -64,149 +98,98 @@ func Error(c *gin.Context, err error) {
 	// 检查是否是 AppError
 	var appErr appErrors.AppError
 	if stderrors.As(err, &appErr) {
-		c.JSON(appErr.Code(), Response{
-			Code:    appErr.Code(),
-			Message: appErr.Message(),
-		})
+		jsonResponse(c, appErr.Code(), appErr.Code(), appErr.Message(), nil)
 		return
 	}
 
 	// 普通 error：客户端只看到通用消息，详细信息写入 gin context 供审计中间件记录。
 	recordInternalError(c, err)
-	c.JSON(http.StatusInternalServerError, Response{
-		Code:    http.StatusInternalServerError,
-		Message: genericInternalMessage,
-	})
+	jsonResponse(c, http.StatusInternalServerError, http.StatusInternalServerError, genericInternalMessage, nil)
 }
 
 // ErrorWithCode 指定错误码的错误响应
 func ErrorWithCode(c *gin.Context, code int, message string) {
-	c.JSON(code, Response{
-		Code:    code,
-		Message: message,
-	})
+	jsonResponse(c, code, code, message, nil)
 }
 
 // ErrorWithData 指定错误码并附带结构化错误上下文。
 func ErrorWithData(c *gin.Context, code int, message string, data interface{}) {
-	c.JSON(code, Response{
-		Code:    code,
-		Message: message,
-		Data:    data,
-	})
+	jsonResponse(c, code, code, message, data)
+}
+
+// ErrorWithBusinessCode 返回 HTTP 状态码与稳定业务错误码分离的错误响应。
+func ErrorWithBusinessCode(c *gin.Context, httpStatus int, businessCode string, message string) {
+	jsonResponseWithBusinessCode(c, httpStatus, httpStatus, businessCode, message, nil)
 }
 
 // BadRequest 400 错误
 func BadRequest(c *gin.Context, message string) {
-	c.JSON(http.StatusBadRequest, Response{
-		Code:    http.StatusBadRequest,
-		Message: message,
-	})
+	jsonResponse(c, http.StatusBadRequest, http.StatusBadRequest, message, nil)
 }
 
 // Unauthorized 401 错误
 func Unauthorized(c *gin.Context, message string) {
-	c.JSON(http.StatusUnauthorized, Response{
-		Code:    http.StatusUnauthorized,
-		Message: message,
-	})
+	jsonResponse(c, http.StatusUnauthorized, http.StatusUnauthorized, message, nil)
 }
 
 // Forbidden 403 错误
 func Forbidden(c *gin.Context, message string) {
-	c.JSON(http.StatusForbidden, Response{
-		Code:    http.StatusForbidden,
-		Message: message,
-	})
+	jsonResponse(c, http.StatusForbidden, http.StatusForbidden, message, nil)
 }
 
 // NotFound 404 错误
 func NotFound(c *gin.Context, message string) {
-	c.JSON(http.StatusNotFound, Response{
-		Code:    http.StatusNotFound,
-		Message: message,
-	})
+	jsonResponse(c, http.StatusNotFound, http.StatusNotFound, message, nil)
 }
 
 // Conflict 409 错误
 func Conflict(c *gin.Context, message string) {
-	c.JSON(http.StatusConflict, Response{
-		Code:    http.StatusConflict,
-		Message: message,
-	})
+	jsonResponse(c, http.StatusConflict, http.StatusConflict, message, nil)
 }
 
 // InternalServer 500 错误
 func InternalServer(c *gin.Context, message string) {
-	c.JSON(http.StatusInternalServerError, Response{
-		Code:    http.StatusInternalServerError,
-		Message: message,
-	})
+	jsonResponse(c, http.StatusInternalServerError, http.StatusInternalServerError, message, nil)
 }
 
 // ServiceUnavailable 503 错误
 func ServiceUnavailable(c *gin.Context, message string) {
-	c.JSON(http.StatusServiceUnavailable, Response{
-		Code:    http.StatusServiceUnavailable,
-		Message: message,
-	})
+	jsonResponse(c, http.StatusServiceUnavailable, http.StatusServiceUnavailable, message, nil)
 }
 
 // Timeout 504 错误
 func Timeout(c *gin.Context, message string) {
-	c.JSON(http.StatusGatewayTimeout, Response{
-		Code:    http.StatusGatewayTimeout,
-		Message: message,
-	})
+	jsonResponse(c, http.StatusGatewayTimeout, http.StatusGatewayTimeout, message, nil)
 }
 
 // Pagination 分页响应
 func Pagination(c *gin.Context, list interface{}, total int64, page, pageSize int) {
-	c.JSON(http.StatusOK, Response{
-		Code:    0,
-		Message: "success",
-		Data: PageData{
-			List:     list,
-			Total:    total,
-			Page:     page,
-			PageSize: pageSize,
-		},
+	jsonResponse(c, http.StatusOK, 0, "success", PageData{
+		List:     list,
+		Total:    total,
+		Page:     page,
+		PageSize: pageSize,
 	})
 }
 
 // List 列表响应（不带分页信息）
 func List(c *gin.Context, list interface{}) {
-	c.JSON(http.StatusOK, Response{
-		Code:    0,
-		Message: "success",
-		Data:    list,
-	})
+	jsonResponse(c, http.StatusOK, 0, "success", list)
 }
 
 // Count 数量响应
 func Count(c *gin.Context, count int64) {
-	c.JSON(http.StatusOK, Response{
-		Code:    0,
-		Message: "success",
-		Data:    gin.H{"count": count},
-	})
+	jsonResponse(c, http.StatusOK, 0, "success", gin.H{"count": count})
 }
 
 // ID 返回资源 ID
 func ID(c *gin.Context, id uint) {
-	c.JSON(http.StatusOK, Response{
-		Code:    0,
-		Message: "success",
-		Data:    gin.H{"id": id},
-	})
+	jsonResponse(c, http.StatusOK, 0, "success", gin.H{"id": id})
 }
 
 // Message 只返回消息
 func Message(c *gin.Context, message string) {
-	c.JSON(http.StatusOK, Response{
-		Code:    0,
-		Message: message,
-	})
+	jsonResponse(c, http.StatusOK, 0, message, nil)
 }
 
 // WrapData 包装数据
@@ -214,11 +197,7 @@ func WrapData(c *gin.Context, data interface{}, message string) {
 	if message == "" {
 		message = "success"
 	}
-	c.JSON(http.StatusOK, Response{
-		Code:    0,
-		Message: message,
-		Data:    data,
-	})
+	jsonResponse(c, http.StatusOK, 0, message, data)
 }
 
 // HandleAppError 处理应用错误并返回响应
@@ -229,19 +208,13 @@ func HandleAppError(c *gin.Context, err error) {
 
 	var appErr appErrors.AppError
 	if stderrors.As(err, &appErr) {
-		c.JSON(appErr.Code(), Response{
-			Code:    appErr.Code(),
-			Message: appErr.Message(),
-		})
+		jsonResponse(c, appErr.Code(), appErr.Code(), appErr.Message(), nil)
 		return
 	}
 
 	// 非 AppError：客户端只看到通用消息，详细信息记录到 gin context。
 	recordInternalError(c, err)
-	c.JSON(http.StatusInternalServerError, Response{
-		Code:    http.StatusInternalServerError,
-		Message: genericInternalMessage,
-	})
+	jsonResponse(c, http.StatusInternalServerError, http.StatusInternalServerError, genericInternalMessage, nil)
 }
 
 // internalErrorLogKey 用于把内部错误详情写入 gin context，供审计中间件记录到 ErrorMsg。
@@ -266,6 +239,9 @@ func WithDataAndMeta(c *gin.Context, data interface{}, meta map[string]interface
 	}
 	if meta != nil {
 		response["meta"] = meta
+	}
+	if traceID := traceIDFromContext(c); traceID != "" {
+		response["trace_id"] = traceID
 	}
 	c.JSON(http.StatusOK, response)
 }

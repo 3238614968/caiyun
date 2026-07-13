@@ -3,10 +3,17 @@
     <div class="login-card glass-effect">
       <div class="card-header">
         <div class="logo">
-          <el-icon :size="48" color="#fff"><Cloudy /></el-icon>
+          <el-icon
+            :size="48"
+            color="#fff"
+          >
+            <Cloudy />
+          </el-icon>
         </div>
         <h2>欢迎回来</h2>
-        <p class="subtitle">登录移动云盘管理系统</p>
+        <p class="subtitle">
+          登录移动云盘管理系统
+        </p>
       </div>
 
       <el-form
@@ -38,16 +45,21 @@
         </el-form-item>
 
         <div class="forgot-link">
-          <router-link to="/forgot-password" class="gradient-text">忘记密码？</router-link>
+          <router-link
+            to="/forgot-password"
+            class="gradient-text"
+          >
+            忘记密码？
+          </router-link>
         </div>
 
         <el-form-item>
           <el-button
             type="primary"
-            @click="handleLogin"
             :loading="loading"
             class="submit-btn"
             size="large"
+            @click="handleLogin"
           >
             登录
           </el-button>
@@ -55,22 +67,26 @@
 
         <div class="register-link">
           <span>还没有账号？</span>
-          <router-link to="/register" class="gradient-text">立即注册</router-link>
+          <router-link
+            to="/register"
+            class="gradient-text"
+          >
+            立即注册
+          </router-link>
         </div>
       </el-form>
     </div>
 
     <!-- 背景装饰 -->
     <div class="bg-decoration">
-      <div class="circle circle-1"></div>
-      <div class="circle circle-2"></div>
-      <div class="circle circle-3"></div>
+      <div class="circle circle-1" />
+      <div class="circle circle-2" />
+      <div class="circle circle-3" />
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import '@/styles/element/auth'
 import { ref, reactive } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'

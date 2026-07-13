@@ -2,15 +2,25 @@
   <div class="page-header">
     <div class="header-main">
       <div class="header-title-section">
-        <el-icon :size="24" color="#2563eb"><Present /></el-icon>
+        <el-icon
+          :size="24"
+          color="#2563eb"
+        >
+          <Present />
+        </el-icon>
         <div class="header-text">
           <span class="title">兑换中心</span>
           <span class="subtitle">使用云朵兑换心仪商品</span>
         </div>
       </div>
       <div class="header-actions">
-        <el-button v-if="activeTab === 'accounts'" type="primary" :icon="Plus" @click="$emit('addAccount')">
-          添加兑换账号
+        <el-button
+          v-if="activeTab === 'accounts'"
+          type="primary"
+          :icon="Plus"
+          @click="$emit('addAccount')"
+        >
+          添加抢兑规则
         </el-button>
       </div>
     </div>
@@ -22,7 +32,7 @@
         </div>
         <div class="stat-content">
           <span class="stat-num">{{ accountsCount }}</span>
-          <span class="stat-name">兑换账号</span>
+          <span class="stat-name">抢兑规则</span>
         </div>
       </div>
       <div class="stat-item">

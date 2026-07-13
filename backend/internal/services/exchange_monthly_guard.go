@@ -24,6 +24,15 @@ func exchangeMonthlyWindow(now time.Time) (time.Time, time.Time) {
 	return start, start.AddDate(0, 1, 0)
 }
 
+func exchangeMonthlySeriesLockTTL(now time.Time) time.Duration {
+	_, end := exchangeMonthlyWindow(now)
+	ttl := end.Sub(now) + time.Hour
+	if ttl <= 0 {
+		return time.Hour
+	}
+	return ttl
+}
+
 func exchangeMonthlySeriesForProduct(product *models.Product, prizeName string) exchangeMonthlySeries {
 	if product != nil {
 		category := strings.TrimSpace(product.Category)
@@ -218,7 +227,7 @@ func (s *ExchangeService) acquireMonthlySeriesLock(task *models.ExchangeTask, no
 	}
 
 	key := exchangeMonthlySeriesLockKey(task.UserID, task.ExchangeAccountID, series, now)
-	locked, err := s.lockStore.SetNX(key, "1", 35*24*time.Hour)
+	locked, err := s.lockStore.SetNX(key, "1", exchangeMonthlySeriesLockTTL(now))
 	if err != nil {
 		reason := fmt.Sprintf("获取本月同系列抢兑锁失败: %v", err)
 		log.Printf("【抢兑月度保护】任务 %d %s", task.ID, reason)
@@ -258,7 +267,7 @@ func (s *ExchangeScheduler) acquireMonthlySeriesLock(task *models.ExchangeTask, 
 	}
 
 	key := exchangeMonthlySeriesLockKey(task.UserID, task.ExchangeAccountID, series, now)
-	locked, err := s.leaseStore.SetNX(key, "1", 35*24*time.Hour)
+	locked, err := s.leaseStore.SetNX(key, "1", exchangeMonthlySeriesLockTTL(now))
 	if err != nil {
 		reason := fmt.Sprintf("获取本月同系列抢兑锁失败: %v", err)
 		log.Printf("【抢兑月度保护】任务 %d %s", task.ID, reason)

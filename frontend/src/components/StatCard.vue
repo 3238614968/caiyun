@@ -1,15 +1,32 @@
-﻿<template>
-  <el-card shadow="hover" class="stat-card">
+<template>
+  <el-card
+    shadow="hover"
+    class="stat-card"
+  >
     <div class="stat-content">
-      <div class="stat-icon" :style="{ background: gradientColor }">
-        <el-icon :size="30" color="#fff">
+      <div
+        class="stat-icon"
+        :style="{ background: gradientColor }"
+      >
+        <el-icon
+          :size="30"
+          color="#fff"
+        >
           <component :is="icon" />
         </el-icon>
       </div>
       <div class="stat-info">
-        <div class="stat-value">{{ formattedValue }}</div>
-        <div class="stat-label">{{ label }}</div>
-        <div v-if="showDiff && diff !== 0" class="stat-diff" :class="diff > 0 ? 'positive' : 'negative'">
+        <div class="stat-value">
+          {{ formattedValue }}
+        </div>
+        <div class="stat-label">
+          {{ label }}
+        </div>
+        <div
+          v-if="showDiff && diff !== 0"
+          class="stat-diff"
+          :class="diff > 0 ? 'positive' : 'negative'"
+        >
           <el-icon><component :is="diff > 0 ? 'ArrowUp' : 'ArrowDown'" /></el-icon>
           {{ Math.abs(diff) }}
         </div>

@@ -3,10 +3,17 @@
     <div class="reset-card glass-effect">
       <div class="card-header">
         <div class="logo">
-          <el-icon :size="48" color="#fff"><Lock /></el-icon>
+          <el-icon
+            :size="48"
+            color="#fff"
+          >
+            <Lock />
+          </el-icon>
         </div>
         <h2>找回密码</h2>
-        <p class="subtitle">使用用户名和注册邮箱重置登录密码</p>
+        <p class="subtitle">
+          使用用户名和注册邮箱重置登录密码
+        </p>
       </div>
 
       <el-alert
@@ -26,11 +33,21 @@
         @keyup.enter="handleReset"
       >
         <el-form-item prop="username">
-          <el-input v-model="form.username" placeholder="请输入用户名" :prefix-icon="User" clearable />
+          <el-input
+            v-model="form.username"
+            placeholder="请输入用户名"
+            :prefix-icon="User"
+            clearable
+          />
         </el-form-item>
 
         <el-form-item prop="email">
-          <el-input v-model="form.email" placeholder="请输入注册邮箱" :prefix-icon="Message" clearable />
+          <el-input
+            v-model="form.email"
+            placeholder="请输入注册邮箱"
+            :prefix-icon="Message"
+            clearable
+          />
         </el-form-item>
 
         <el-form-item prop="code">
@@ -42,7 +59,11 @@
             clearable
           >
             <template #append>
-              <el-button :loading="sendingCode" :disabled="codeCountdown > 0" @click="handleSendCode">
+              <el-button
+                :loading="sendingCode"
+                :disabled="codeCountdown > 0"
+                @click="handleSendCode"
+              >
                 {{ codeCountdown > 0 ? `${codeCountdown}s后重发` : '发送验证码' }}
               </el-button>
             </template>
@@ -74,10 +95,10 @@
         <el-form-item>
           <el-button
             type="primary"
-            @click="handleReset"
             :loading="loading"
             class="submit-btn"
             size="large"
+            @click="handleReset"
           >
             重置密码
           </el-button>
@@ -85,21 +106,25 @@
 
         <div class="login-link">
           <span>想起密码了？</span>
-          <router-link to="/login" class="gradient-text">返回登录</router-link>
+          <router-link
+            to="/login"
+            class="gradient-text"
+          >
+            返回登录
+          </router-link>
         </div>
       </el-form>
     </div>
 
     <div class="bg-decoration">
-      <div class="circle circle-1"></div>
-      <div class="circle circle-2"></div>
-      <div class="circle circle-3"></div>
+      <div class="circle circle-1" />
+      <div class="circle circle-2" />
+      <div class="circle circle-3" />
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import '@/styles/element/auth'
 import { onUnmounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
