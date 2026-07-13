@@ -13,6 +13,7 @@ type MessageHandler = (msg: WsMessage) => void
 
 export class WebSocketClient {
   private ws: WebSocket | null = null
+  private sse: EventSource | null = null
   private url = ''
   private handlers: Map<string, Set<MessageHandler>> = new Map()
   private reconnectTimer: number | null = null
@@ -27,15 +28,21 @@ export class WebSocketClient {
   private manualClose = false
   private suppressNextReconnect = false
   private globalListenersBound = false
-
+  private autoFallbackToSSE = false
 
   private seenMessageIds = new Set<string>()
   private readonly maxSeenMessageIds = 2048
   public connected: Ref<boolean> = ref(false)
+  public transport: Ref<'ws' | 'sse' | 'none'> = ref('none')
 
   connect() {
     this.manualClose = false
     this.bindGlobalListeners()
+    const transport = this.preferredTransport()
+    if (transport === 'sse' || (transport === 'auto' && this.autoFallbackToSSE)) {
+      this.connectSSE()
+      return
+    }
 
     if (this.ws?.readyState === WebSocket.OPEN || this.ws?.readyState === WebSocket.CONNECTING) {
       return
@@ -69,17 +76,31 @@ export class WebSocketClient {
     if (this.manualClose) {
       return
     }
+    if (this.usesSSE()) {
+      this.sse?.close()
+      this.sse = null
+      this.connectSSE()
+      return
+    }
     console.log('[WS] 网络已恢复，强制刷新 WebSocket 连接')
     this.forceReconnect()
   }
 
   private readonly handleOffline = () => {
     this.connected.value = false
+    this.sse?.close()
+    this.sse = null
     this.closeStaleSocket()
   }
 
   private readonly handleVisibilityChange = () => {
     if (this.manualClose || document.visibilityState !== 'visible') {
+      return
+    }
+    if (this.usesSSE()) {
+      if (!this.sse || !this.connected.value) {
+        this.connectSSE()
+      }
       return
     }
     if (!this.ws || this.ws.readyState === WebSocket.CLOSED) {
@@ -91,6 +112,38 @@ export class WebSocketClient {
       console.log('[WS] 页面恢复可见，检测到连接可能半开，强制重连')
       this.forceReconnect()
     }
+  }
+
+  private preferredTransport(): 'ws' | 'sse' | 'auto' {
+    const configured = String(import.meta.env.VITE_PUSH_TRANSPORT || 'sse').toLowerCase()
+    return configured === 'sse' || configured === 'auto' ? configured : 'ws'
+  }
+
+  private usesSSE() {
+    const transport = this.preferredTransport()
+    return transport === 'sse' || (transport === 'auto' && this.autoFallbackToSSE)
+  }
+
+  private connectSSE() {
+    if (this.manualClose || (this.sse && this.sse.readyState !== EventSource.CLOSED)) return
+    this.clearReconnectTimer()
+    this.stopHeartbeat()
+    const url = import.meta.env.VITE_SSE_URL || '/events'
+    const source = new EventSource(url, { withCredentials: true })
+    this.sse = source
+    source.onopen = () => {
+      this.connected.value = true
+      this.transport.value = 'sse'
+      this.currentDelay = this.reconnectDelay
+    }
+    source.onmessage = (event) => {
+      try {
+        const msg: WsMessage = JSON.parse(event.data)
+        if (msg.message_id && this.seenMessageIds.has(msg.message_id)) return
+        if (this.dispatch(msg) && msg.message_id) this.rememberMessage(msg.message_id)
+      } catch (error) { console.warn('[SSE] 解析消息失败:', error) }
+    }
+    source.onerror = () => { this.connected.value = false }
   }
 
   private doConnect() {
@@ -107,6 +160,8 @@ export class WebSocketClient {
 
       socket.onopen = () => {
         this.connected.value = true
+        this.transport.value = 'ws'
+        this.autoFallbackToSSE = false
         this.currentDelay = this.reconnectDelay
         this.clearReconnectTimer()
         this.startHeartbeat()
@@ -152,6 +207,12 @@ export class WebSocketClient {
           return
         }
         if (!this.manualClose) {
+          if (this.preferredTransport() === 'auto' && !this.autoFallbackToSSE) {
+            this.autoFallbackToSSE = true
+            console.info('[Push] WebSocket 不可用，自动切换到 SSE')
+            this.connectSSE()
+            return
+          }
           this.scheduleReconnect()
         }
       }
@@ -250,6 +311,10 @@ export class WebSocketClient {
   private reconnectNow() {
     this.clearReconnectTimer()
     this.currentDelay = this.reconnectDelay
+    if (this.usesSSE()) {
+      this.connectSSE()
+      return
+    }
     if (this.ws?.readyState === WebSocket.OPEN || this.ws?.readyState === WebSocket.CONNECTING) {
       return
     }
@@ -259,6 +324,12 @@ export class WebSocketClient {
   private forceReconnect() {
     this.clearReconnectTimer()
     this.currentDelay = this.reconnectDelay
+    if (this.usesSSE()) {
+      this.sse?.close()
+      this.sse = null
+      this.connectSSE()
+      return
+    }
     this.closeStaleSocket()
     this.doConnect()
   }
@@ -346,6 +417,9 @@ export class WebSocketClient {
     this.stopHeartbeat()
     this.ws?.close()
     this.ws = null
+    this.sse?.close()
+    this.sse = null
+    this.transport.value = 'none'
     this.connected.value = false
   }
 }

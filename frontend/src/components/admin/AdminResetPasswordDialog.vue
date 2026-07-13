@@ -19,7 +19,7 @@
           v-model="form.password"
           type="password"
           show-password
-          placeholder="至少12位，包含至少三类字符"
+          placeholder="至少6位，需同时包含字母和数字"
         />
       </el-form-item>
     </el-form>

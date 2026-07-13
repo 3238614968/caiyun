@@ -59,6 +59,12 @@ func (r *WSMessageRepository) MarkAsDelivered(messageID uint) error {
 }
 
 // MarkAsDeliveredByMessageID scopes ACK by authenticated user and opaque ID.
+func (r *WSMessageRepository) GetMessagesAfterSequence(userID uint, sequence uint64, limit int) ([]*models.WebSocketMessage, error) {
+	var messages []*models.WebSocketMessage
+	err := r.db.Where("user_id = ? AND sequence > ?", userID, sequence).Where("expires_at IS NULL OR expires_at > ?", time.Now()).Order("sequence ASC, created_at ASC").Limit(limit).Find(&messages).Error
+	return messages, err
+}
+
 func (r *WSMessageRepository) MarkAsDeliveredByMessageID(userID uint, messageID string) (bool, error) {
 	if messageID == "" {
 		return false, nil

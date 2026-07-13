@@ -129,14 +129,25 @@ func (r *UserRepository) Delete(id uint) error {
 
 // List 列出所有用户
 func (r *UserRepository) List(offset, limit int) ([]*models.User, int64, error) {
+	return r.Search("", offset, limit)
+}
+
+// Search lists users by username/email. SQL LIKE metacharacters are escaped so
+// an administrator's input remains a literal keyword rather than a wildcard.
+func (r *UserRepository) Search(keyword string, offset, limit int) ([]*models.User, int64, error) {
 	var users []*models.User
 	var total int64
-
-	if err := r.db.Model(&models.User{}).Count(&total).Error; err != nil {
+	query := r.db.Model(&models.User{})
+	keyword = strings.TrimSpace(keyword)
+	if keyword != "" {
+		escaped := strings.NewReplacer("\\", "\\\\", "%", "\\%", "_", "\\_").Replace(keyword)
+		pattern := "%" + escaped + "%"
+		query = query.Where("username LIKE ? OR email LIKE ?", pattern, pattern)
+	}
+	if err := query.Count(&total).Error; err != nil {
 		return nil, 0, err
 	}
-
-	err := r.db.Offset(offset).Limit(limit).Find(&users).Error
+	err := query.Order("created_at DESC, id DESC").Offset(offset).Limit(limit).Find(&users).Error
 	return users, total, err
 }
 

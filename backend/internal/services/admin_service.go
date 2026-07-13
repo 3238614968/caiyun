@@ -6,6 +6,7 @@ import (
 	"caiyun/internal/security/authcache"
 	"context"
 	"errors"
+	"strings"
 	"time"
 
 	"golang.org/x/crypto/bcrypt"
@@ -67,9 +68,13 @@ type UserListItem struct {
 }
 
 // GetAllUsers 获取所有用户
-func (s *AdminService) GetAllUsers(page, size int) ([]*UserListItem, int64, error) {
+func (s *AdminService) GetAllUsers(page, size int, keywords ...string) ([]*UserListItem, int64, error) {
 	offset := (page - 1) * size
-	users, total, err := s.userRepo.List(offset, size)
+	keyword := ""
+	if len(keywords) > 0 {
+		keyword = strings.TrimSpace(keywords[0])
+	}
+	users, total, err := s.userRepo.Search(keyword, offset, size)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -156,7 +161,7 @@ type UpdateUserRoleRequest struct {
 
 // ResetUserPasswordRequest 管理员重置用户密码请求
 type ResetUserPasswordRequest struct {
-	Password string `json:"password" binding:"required,min=12"`
+	Password string `json:"password" binding:"required,min=6"`
 }
 
 // UpdateUserRole 更新用户角色，并吊销目标用户既有会话。

@@ -306,4 +306,28 @@ func registerWebSocketRoute(r *gin.Engine, deps routeDependencies) {
 
 		wsHub.HandleWebSocket(c.Writer, c.Request, user.ID)
 	})
+
+	r.GET("/events", func(c *gin.Context) {
+		token, err := c.Cookie("auth_token")
+		if err != nil || token == "" {
+			apiresponse.Unauthorized(c, "missing token")
+			return
+		}
+		claims, err := deps.jwtManager.ValidateToken(token)
+		if err != nil {
+			apiresponse.Unauthorized(c, "invalid token")
+			return
+		}
+		user, err := deps.repos.User.WithContext(c.Request.Context()).FindByID(claims.UserID)
+		if err != nil || claims.TokenVersion != user.TokenVersion || claims.SessionID == "" {
+			apiresponse.Unauthorized(c, "session revoked")
+			return
+		}
+		active, err := deps.repos.RefreshSession.IsActive(c.Request.Context(), claims.SessionID, claims.UserID, time.Now())
+		if err != nil || !active {
+			apiresponse.Unauthorized(c, "session revoked")
+			return
+		}
+		wsHub.HandleSSE(c.Writer, c.Request, user.ID)
+	})
 }

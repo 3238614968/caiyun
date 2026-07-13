@@ -155,6 +155,17 @@ const validateConfirmPassword = (_rule: unknown, value: string, callback: (error
   callback()
 }
 
+
+const validatePassword = (_rule: unknown, value: string, callback: (error?: Error) => void) => {
+  if (value.length < 6) {
+    callback(new Error('密码长度不能少于6个字符'))
+  } else if (!/[a-zA-Z]/.test(value) || !/\d/.test(value)) {
+    callback(new Error('密码需同时包含字母和数字'))
+  } else {
+    callback()
+  }
+}
+
 const rules = reactive<FormRules>({
   username: [
     { required: true, message: '请输入用户名', trigger: 'blur' },
@@ -170,7 +181,7 @@ const rules = reactive<FormRules>({
   ],
   newPassword: [
     { required: true, message: '请输入新密码', trigger: 'blur' },
-    { min: 12, message: '密码长度不能少于12个字符', trigger: 'blur' }
+    { validator: validatePassword, trigger: 'blur' }
   ],
   confirmPassword: [
     { required: true, message: '请再次输入新密码', trigger: 'blur' },

@@ -38,7 +38,7 @@ func NewAuthHandler(authService *services.AuthService, jwtManager *jwt.Manager) 
 
 type RegisterRequest struct {
 	Username string `json:"username" binding:"required,min=3,max=50"`
-	Password string `json:"password" binding:"required,min=12"`
+	Password string `json:"password" binding:"required,min=6"`
 	Email    string `json:"email"`
 }
 
@@ -51,7 +51,7 @@ type ResetPasswordRequest struct {
 	Username    string `json:"username" binding:"required,min=3,max=50"`
 	Email       string `json:"email" binding:"required,email"`
 	Code        string `json:"code" binding:"required,len=6"`
-	NewPassword string `json:"new_password" binding:"required,min=12"`
+	NewPassword string `json:"new_password" binding:"required,min=6"`
 }
 
 type SendPasswordResetCodeRequest struct {

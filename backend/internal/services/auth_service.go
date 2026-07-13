@@ -202,7 +202,7 @@ func (s *AuthService) isEmailServiceEnabled() bool {
 // RegisterRequest 注册请求
 type RegisterRequest struct {
 	Username string `json:"username" binding:"required,min=3,max=50"`
-	Password string `json:"password" binding:"required,min=12"`
+	Password string `json:"password" binding:"required,min=6"`
 	Email    string `json:"email" binding:"omitempty,email"`
 }
 
@@ -291,60 +291,22 @@ func (s *AuthService) RegisterContext(ctx context.Context, req *RegisterRequest,
 	return s.issueAuthSession(ctx, user, metadata)
 }
 
-func validatePasswordStrength(username, password string) error {
-	if len([]rune(password)) < 12 {
-		return fmt.Errorf("%w：长度至少 12 个字符", ErrWeakPassword)
+func validatePasswordStrength(_ string, password string) error {
+	if len([]rune(password)) < 6 {
+		return fmt.Errorf("%w：长度至少 6 个字符", ErrWeakPassword)
 	}
-	lowerUsername := strings.ToLower(strings.TrimSpace(username))
-	lowerPassword := strings.ToLower(password)
-	if lowerUsername != "" && strings.Contains(lowerPassword, lowerUsername) {
-		return fmt.Errorf("%w：不能包含用户名", ErrWeakPassword)
-	}
-
-	commonPasswords := map[string]struct{}{
-		"password":    {},
-		"password123": {},
-		"123456":      {},
-		"123456789":   {},
-		"1234567890":  {},
-		"qwerty123":   {},
-		"admin123":    {},
-		"admin123456": {},
-		"letmein":     {},
-		"welcome123":  {},
-		"changeme":    {},
-		"iloveyou":    {},
-		"abc123456":   {},
-		"111111":      {},
-	}
-	if _, ok := commonPasswords[lowerPassword]; ok {
-		return fmt.Errorf("%w：不能使用常见弱口令", ErrWeakPassword)
-	}
-
-	var hasLower, hasUpper, hasDigit, hasSymbol bool
+	var hasLetter, hasDigit bool
 	for _, r := range password {
-		switch {
-		case unicode.IsLower(r):
-			hasLower = true
-		case unicode.IsUpper(r):
-			hasUpper = true
-		case unicode.IsDigit(r):
+		if unicode.IsLetter(r) {
+			hasLetter = true
+		}
+		if unicode.IsDigit(r) {
 			hasDigit = true
-		case unicode.IsPunct(r) || unicode.IsSymbol(r):
-			hasSymbol = true
 		}
 	}
-
-	classes := 0
-	for _, ok := range []bool{hasLower, hasUpper, hasDigit, hasSymbol} {
-		if ok {
-			classes++
-		}
+	if !hasLetter || !hasDigit {
+		return fmt.Errorf("%w：需同时包含字母和数字", ErrWeakPassword)
 	}
-	if classes < 3 {
-		return fmt.Errorf("%w：需包含大小写字母、数字、符号中的至少三类", ErrWeakPassword)
-	}
-
 	return nil
 }
 

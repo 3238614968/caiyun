@@ -37,7 +37,7 @@ func (h *AdminHandler) GetAllUsers(c *gin.Context) {
 		size = 20
 	}
 
-	users, total, err := h.adminService.GetAllUsers(page, size)
+	users, total, err := h.adminService.GetAllUsers(page, size, c.Query("keyword"))
 	if err != nil {
 		respondInternalServer(c)
 		return

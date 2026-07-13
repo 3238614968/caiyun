@@ -1,5 +1,16 @@
 <template>
   <div>
+    <div class="user-search-bar">
+      <el-input
+        v-model="keyword"
+        clearable
+        placeholder="搜索用户名或邮箱"
+        @clear="emitSearch"
+        @keyup.enter="emitSearch"
+      />
+      <el-button type="primary" @click="emitSearch">搜索</el-button>
+    </div>
+
     <div
       v-loading="loading"
       class="responsive-data-shell"
@@ -150,7 +161,10 @@
 </template>
 
 <script setup lang="ts">
+import { ref } from 'vue'
 import type { AdminUser } from '@/api/account'
+
+const keyword = ref('')
 
 defineProps<{
   isMobile: boolean
@@ -162,16 +176,20 @@ defineProps<{
   formatDate: (date?: string) => string
 }>()
 
-defineEmits<{
+const emit = defineEmits<{
   editRole: [row: AdminUser]
   resetPassword: [row: AdminUser]
   deleteUser: [row: AdminUser]
   pageChange: [page: number]
   sizeChange: [size: number]
+  search: [keyword: string]
 }>()
+
+const emitSearch = () => emit('search', keyword.value.trim())
 </script>
 
 <style scoped>
+.user-search-bar { display: flex; gap: 10px; margin-bottom: 14px; max-width: 440px; }
 .responsive-data-shell { min-height: 120px; }
 .mobile-admin-list { display: grid; gap: 12px; }
 .mobile-admin-card { border-radius: 18px; border: 1px solid rgba(226, 232, 240, 0.9); background: rgba(255, 255, 255, 0.94); box-shadow: 0 14px 28px rgba(37, 99, 235, 0.08); }

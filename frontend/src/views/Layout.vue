@@ -224,13 +224,13 @@
           </el-tag>
           <el-button
             size="small"
-            @click="wsClient.connect"
+            @click="wsClient.connect()"
           >
             重连
           </el-button>
           <el-button
             size="small"
-            @click="wsClient.disconnect"
+            @click="wsClient.disconnect()"
           >
             断开
           </el-button>

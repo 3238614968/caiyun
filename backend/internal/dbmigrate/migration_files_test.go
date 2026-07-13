@@ -27,18 +27,19 @@ var expectedMigrationFiles = []string{
 	"014_exchange_task_operation_id.sql",
 	"015_exchange_task_rule_fk.sql",
 	"016_exchange_task_schedule_dedupe.sql",
+	"017_exchange_record_rule_fk.sql",
 }
 
 func TestMigrationSQLDoesNotWriteSchemaVersionAndCopiesMatch(t *testing.T) {
 	embeddedNames := embeddedMigrationFileNames(t)
 	if !reflect.DeepEqual(embeddedNames, expectedMigrationFiles) {
-		t.Fatalf("embedded migration files = %#v, want contiguous 001-015 %#v", embeddedNames, expectedMigrationFiles)
+		t.Fatalf("embedded migration files = %#v, want contiguous 001-017 %#v", embeddedNames, expectedMigrationFiles)
 	}
 
 	externalDir := filepath.Join("..", "..", "migrations")
 	externalNames := externalMigrationFileNames(t, externalDir)
 	if !reflect.DeepEqual(externalNames, expectedMigrationFiles) {
-		t.Fatalf("external migration files = %#v, want contiguous 001-015 %#v", externalNames, expectedMigrationFiles)
+		t.Fatalf("external migration files = %#v, want contiguous 001-017 %#v", externalNames, expectedMigrationFiles)
 	}
 
 	for _, name := range expectedMigrationFiles {
@@ -124,6 +125,9 @@ func TestCriticalMigrationColumnsPresent(t *testing.T) {
 		},
 		"016_exchange_task_schedule_dedupe.sql": {
 			"active_dedupe_key", "scheduled_exchange_time", "uk_exchange_tasks_active_dedupe",
+		},
+		"017_exchange_record_rule_fk.sql": {
+			"exchange_records", "exchange_account_id", "MODIFY COLUMN",
 		},
 	}
 

@@ -135,22 +135,12 @@ const validatePassword = (_rule: unknown, value: string, callback: FormCallback)
     callback(new Error('请输入密码'))
     return
   }
-  if (value.length < 12) {
-    callback(new Error('密码长度不能少于12个字符'))
+  if (value.length < 6) {
+    callback(new Error('密码长度不能少于6个字符'))
     return
   }
-  const classes = [
-    /[a-z]/.test(value),
-    /[A-Z]/.test(value),
-    /\d/.test(value),
-    /[^\w\s]/.test(value)
-  ].filter(Boolean).length
-  if (classes < 3) {
-    callback(new Error('密码需包含大小写字母、数字、符号中的至少三类'))
-    return
-  }
-  if (registerForm.username && value.toLowerCase().includes(registerForm.username.toLowerCase())) {
-    callback(new Error('密码不能包含用户名'))
+  if (!/[a-zA-Z]/.test(value) || !/\d/.test(value)) {
+    callback(new Error('密码需同时包含字母和数字'))
     return
   }
   callback()

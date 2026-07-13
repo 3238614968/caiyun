@@ -47,20 +47,80 @@ class MockWebSocket {
   }
 }
 
+class MockEventSource {
+  static CONNECTING = 0
+  static OPEN = 1
+  static CLOSED = 2
+  static instances: MockEventSource[] = []
+
+  readyState = MockEventSource.CONNECTING
+  onopen: (() => void) | null = null
+  onmessage: ((event: MessageEvent) => void) | null = null
+  onerror: (() => void) | null = null
+  closeCalls = 0
+
+  constructor(public url: string, public options?: EventSourceInit) {
+    MockEventSource.instances.push(this)
+  }
+
+  close() {
+    this.closeCalls++
+    this.readyState = MockEventSource.CLOSED
+  }
+
+  open() {
+    this.readyState = MockEventSource.OPEN
+    this.onopen?.()
+  }
+
+  message(data: unknown) {
+    this.onmessage?.({ data: JSON.stringify(data) } as MessageEvent)
+  }
+}
+
 describe('WebSocketClient', () => {
   let originalWebSocket: typeof WebSocket
+  let originalEventSource: typeof EventSource
 
   beforeEach(() => {
     vi.useFakeTimers()
     MockWebSocket.instances = []
+    MockEventSource.instances = []
+    vi.stubEnv('VITE_PUSH_TRANSPORT', 'ws')
     originalWebSocket = globalThis.WebSocket
+    originalEventSource = globalThis.EventSource
     globalThis.WebSocket = MockWebSocket as unknown as typeof WebSocket
+    globalThis.EventSource = MockEventSource as unknown as typeof EventSource
   })
 
   afterEach(() => {
     globalThis.WebSocket = originalWebSocket
+    globalThis.EventSource = originalEventSource
+    vi.unstubAllEnvs()
     vi.useRealTimers()
     vi.restoreAllMocks()
+  })
+
+  it('uses SSE directly when the deployment explicitly configures it', () => {
+    vi.stubEnv('VITE_PUSH_TRANSPORT', 'sse')
+    vi.stubEnv('VITE_SSE_URL', '/events')
+    const client = new WebSocketClient()
+    const handler = vi.fn()
+    client.on('task_complete', handler)
+
+    client.connect()
+
+    expect(MockWebSocket.instances).toHaveLength(0)
+    const source = MockEventSource.instances[0]
+    expect(source.url).toBe('/events')
+    source.open()
+    source.message({ type: 'task_complete', data: { ok: true }, message_id: 'sse-1', sequence: 8 })
+
+    expect(client.connected.value).toBe(true)
+    expect(client.transport.value).toBe('sse')
+    expect(handler).toHaveBeenCalledTimes(1)
+    client.disconnect()
+    expect(source.closeCalls).toBe(1)
   })
 
   it('sends heartbeat ping while connected', () => {

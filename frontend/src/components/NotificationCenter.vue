@@ -238,12 +238,44 @@ const viewAllNotifications = () => {
   historyVisible.value = true
 }
 
+const appendNotification = (notification: Notification) => {
+  notifications.value.unshift(notification)
+  if (notifications.value.length > 50) {
+    notifications.value = notifications.value.slice(0, 50)
+  }
+}
+
+const handleExchangeNotification = (msg: WsMessage) => {
+  const data = (msg.data || {}) as Record<string, unknown>
+  const message = String(data.message || '抢兑任务状态已更新')
+  const productName = String(data.product_name || data.prize_name || '抢兑任务')
+  const accountName = String(data.account_name || '')
+  const skipped = msg.type === 'exchange_skipped'
+  const completed = msg.type === 'exchange_completed'
+  const success = data.success === true
+  const level: Notification['level'] = completed ? 'info' : skipped ? 'warning' : success ? 'success' : 'error'
+  const title = completed ? '抢兑调度完成' : skipped ? '抢兑任务已跳过' : success ? '抢兑成功' : '抢兑失败'
+  const detail = completed ? message : `${accountName ? `${accountName} · ` : ''}${productName}：${message}`
+
+  appendNotification({
+    id: `exchange_${msg.type}_${msg.message_id || Date.now()}_${data.task_id || ''}`,
+    level,
+    title,
+    message: detail,
+    timestamp: new Date().toISOString(),
+    read: false
+  })
+
+  if (level === 'warning') ElMessage.warning(detail)
+  if (level === 'error') ElMessage.error(detail)
+}
+
 const handleTaskSummary = (msg: WsMessage) => {
   const data = msg.data
   const phone = data.phone ? ` [${data.phone}]` : ''
   const gained = data.total_gained > 0 ? `，获得 ${data.total_gained} 云朵` : ''
 
-  notifications.value.unshift({
+  appendNotification({
     id: `summary_${Date.now()}_${data.account_id}`,
     level: 'info',
     title: `任务汇总${phone}`,
@@ -252,10 +284,6 @@ const handleTaskSummary = (msg: WsMessage) => {
     read: false,
     account_id: data.account_id
   })
-
-  if (notifications.value.length > 50) {
-    notifications.value = notifications.value.slice(0, 50)
-  }
 }
 
 onMounted(() => {
@@ -271,12 +299,17 @@ onMounted(() => {
     console.warn('[通知中心] 读取本地缓存失败', error)
   }
 
-  // 只监听任务汇总通知，不监听单个任务完成通知
   wsClient.on('task_summary', handleTaskSummary)
+  for (const type of ['exchange_result', 'exchange_complete', 'exchange_skipped', 'exchange_completed', 'monthly_exchange_complete']) {
+    wsClient.on(type, handleExchangeNotification)
+  }
 })
 
 onUnmounted(() => {
   wsClient.off('task_summary', handleTaskSummary)
+  for (const type of ['exchange_result', 'exchange_complete', 'exchange_skipped', 'exchange_completed', 'monthly_exchange_complete']) {
+    wsClient.off(type, handleExchangeNotification)
+  }
 })
 
 watch(

@@ -92,6 +92,7 @@
               @delete-user="handleDeleteUser"
               @size-change="handleUserSizeChange"
               @page-change="handleUserPageChange"
+              @search="handleUserSearch"
             />
           </div>
         </el-tab-pane>
@@ -245,6 +246,7 @@ const patchExchangeConfig = (patch: Partial<ExchangeConfig>) => {
 const userLoading = ref(false)
 const userList = ref<AdminUser[]>([])
 const userPagination = reactive({ page: 1, pageSize: 10, total: 0 })
+const userKeyword = ref('')
 
 // Stats
 const statsOverview = ref([
@@ -414,7 +416,7 @@ const executeMonthlyExchange = async () => {
 const loadUserList = async () => {
   userLoading.value = true
   try {
-    const data = await getAllUsers(userPagination.page, userPagination.pageSize)
+    const data = await getAllUsers(userPagination.page, userPagination.pageSize, userKeyword.value)
     userList.value = data.users
     userPagination.total = data.total
   } catch { ElMessage.error('加载用户列表失败') }
@@ -429,6 +431,12 @@ const handleUserSizeChange = (size: number) => {
 
 const handleUserPageChange = (page: number) => {
   userPagination.page = page
+  loadUserList()
+}
+
+const handleUserSearch = (keyword: string) => {
+  userKeyword.value = keyword
+  userPagination.page = 1
   loadUserList()
 }
 
@@ -455,8 +463,8 @@ const handleResetUserPassword = (row: AdminUser) => {
 }
 
 const handlePasswordSubmit = async () => {
-  if (passwordForm.password.length < 12) {
-    ElMessage.warning('新密码长度不能少于12个字符')
+  if (passwordForm.password.length < 6 || !/[a-zA-Z]/.test(passwordForm.password) || !/\d/.test(passwordForm.password)) {
+    ElMessage.warning('新密码至少6位，且需同时包含字母和数字')
     return
   }
   try {

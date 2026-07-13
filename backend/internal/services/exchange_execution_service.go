@@ -161,8 +161,39 @@ func (s *ExchangeService) executeSingleTaskContext(ctx context.Context, task *mo
 		return
 	}
 	if !started {
-		log.Printf("【抢兑任务】任务 %d 已被其他进程执行或状态不可运行，跳过", task.ID)
-		return
+		latest, latestErr := s.exchangeTaskRepo.WithContext(ctx).GetByID(task.ID)
+		if latestErr == nil && latest != nil {
+			// The scheduler normally performs this recovery every minute. Do it here
+			// as well so a manual execution never remains blocked by a stale running
+			// state after a previous process/database failure.
+			if latest.Status == string(models.ExchangeTaskRunning) && time.Since(latest.UpdatedAt) > exchangeTaskRunningTimeoutFromEnv() {
+				released, releaseErr := s.exchangeTaskRepo.WithContext(ctx).ReleaseRunning(task.ID, "任务执行超时，手动执行前已恢复为待执行")
+				if releaseErr != nil {
+					log.Printf("【抢兑任务】恢复超时 running 任务失败: task_id=%d err=%v", task.ID, releaseErr)
+				} else if released {
+					started, err = s.exchangeTaskRepo.WithContext(ctx).TryMarkRunning(task.ID)
+					if err == nil && started {
+						task = latest
+					}
+				}
+			}
+		}
+		if !started {
+			reason := "任务正在执行或当前状态不可执行，请稍后刷新任务结果"
+			if latestErr == nil && latest != nil {
+				if strings.TrimSpace(latest.LastResult) != "" {
+					reason = latest.LastResult
+				} else if latest.Status == string(models.ExchangeTaskRunning) {
+					reason = "任务正在执行，请稍后查看结果"
+				}
+			}
+			log.Printf("【抢兑任务】任务 %d 未取得执行权: %s", task.ID, reason)
+			s.hub.SendToUser(task.UserID, ws.Message{Type: "exchange_skipped", Data: map[string]interface{}{
+				"task_id": task.ID, "account_name": exchangeAccountName(&task.ExchangeAccount),
+				"product_name": task.PrizeName, "success": false, "message": reason,
+			}})
+			return
+		}
 	}
 	finished := false
 	defer func() {

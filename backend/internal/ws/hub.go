@@ -92,6 +92,11 @@ type pendingDelivery struct {
 	expiresAt time.Time
 }
 
+type SSEClient struct {
+	userID uint
+	send   chan Message
+}
+
 type Client struct {
 	hub       *Hub
 	conn      *websocket.Conn
@@ -104,6 +109,7 @@ type Client struct {
 type Hub struct {
 	mu          sync.RWMutex
 	clients     map[uint]map[*Client]bool
+	sseClients  map[uint]map[*SSEClient]bool
 	register    chan *Client
 	unregister  chan *Client
 	stopCh      chan struct{}
@@ -133,7 +139,7 @@ func GetHub() *Hub {
 
 func newHub() *Hub {
 	return &Hub{
-		clients: make(map[uint]map[*Client]bool), register: make(chan *Client, 64),
+		clients: make(map[uint]map[*Client]bool), sseClients: make(map[uint]map[*SSEClient]bool), register: make(chan *Client, 64),
 		unregister: make(chan *Client, 64), stopCh: make(chan struct{}), runDone: make(chan struct{}),
 		offlineSem: make(chan struct{}, 4), seen: make(map[string]time.Time),
 	}
@@ -426,10 +432,29 @@ func (h *Hub) deliverNewEnvelope(msg Message) {
 			clients = append(clients, client)
 		}
 	}
+	sseClients := make([]*SSEClient, 0)
+	if msg.UserID == 0 {
+		for _, conns := range h.sseClients {
+			for client := range conns {
+				sseClients = append(sseClients, client)
+			}
+		}
+	} else {
+		for client := range h.sseClients[msg.UserID] {
+			sseClients = append(sseClients, client)
+		}
+	}
 	h.mu.RUnlock()
 	for _, client := range clients {
 		if !client.enqueue(msg, payload) {
 			h.tryUnregister(client)
+		}
+	}
+	for _, client := range sseClients {
+		select {
+		case client.send <- msg:
+		default:
+			h.unregisterSSE(client)
 		}
 	}
 }

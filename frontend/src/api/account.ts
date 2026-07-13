@@ -183,12 +183,12 @@ export interface UserListResponse {
 }
 
 // 获取所有用户（管理员）
-export function getAllUsers(page: number = 1, size: number = 10): Promise<UserListResponse> {
+export function getAllUsers(page: number = 1, size: number = 10, keyword: string = ''): Promise<UserListResponse> {
   const fallback: UserListResponse = { users: [], total: 0, page, size }
   return request<UserListResponse | ApiResponse<UserListResponse>>({
     url: '/api/admin/users',
     method: 'get',
-    params: { page, size }
+    params: { page, size, ...(keyword.trim() ? { keyword: keyword.trim() } : {}) }
   }).then((res) => unwrapApiData(res, fallback))
 }
 
