@@ -511,9 +511,28 @@ func AuthenticatedRateLimitMiddleware(config *RateLimitConfig) gin.HandlerFunc {
 	return mw.HandlerFunc()
 }
 
-// TimeoutMiddleware 请求超时中间件
+// TimeoutMiddleware applies a request deadline to ordinary HTTP handlers.
 func TimeoutMiddleware(timeout time.Duration) gin.HandlerFunc {
+	return TimeoutMiddlewareExcept(timeout)
+}
+
+// TimeoutMiddlewareExcept excludes long-lived upgrade/stream endpoints from the
+// normal request deadline. SSE and WebSocket handlers own their connection
+// lifetime and must retain the original request context so client disconnects
+// remain observable.
+func TimeoutMiddlewareExcept(timeout time.Duration, exemptPaths ...string) gin.HandlerFunc {
+	exempt := make(map[string]struct{}, len(exemptPaths))
+	for _, path := range exemptPaths {
+		if path != "" {
+			exempt[path] = struct{}{}
+		}
+	}
+
 	return func(c *gin.Context) {
+		if _, ok := exempt[c.Request.URL.Path]; ok {
+			c.Next()
+			return
+		}
 		ctx, cancel := context.WithTimeout(c.Request.Context(), timeout)
 		defer cancel()
 		c.Request = c.Request.WithContext(ctx)

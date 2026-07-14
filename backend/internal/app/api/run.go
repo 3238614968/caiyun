@@ -210,7 +210,9 @@ func Run(ctx context.Context, args []string) error {
 	r.Use(middleware.RequestIDMiddleware())
 	r.Use(middleware.RecoveryWithLogger())
 	requestTimeout := bootstrap.GetDurationEnv("REQUEST_TIMEOUT", 30*time.Second)
-	r.Use(middleware.TimeoutMiddleware(requestTimeout))
+	// SSE/WS are deliberately long-lived; applying REQUEST_TIMEOUT would close
+	// them at a fixed interval and surface as ERR_INCOMPLETE_CHUNKED_ENCODING.
+	r.Use(middleware.TimeoutMiddlewareExcept(requestTimeout, "/events", "/ws"))
 	r.Use(middleware.BodySizeLimitMiddleware(10 << 20)) // 10 MiB
 	r.Use(middleware.HTTPMetricsMiddleware(metricsCollector))
 	r.Use(middleware.CORSMiddleware())
@@ -263,10 +265,13 @@ func Run(ctx context.Context, args []string) error {
 
 	port := bootstrap.GetEnv("PORT", "8080")
 	srv := &http.Server{
-		Addr:         ":" + port,
-		Handler:      r,
-		ReadTimeout:  15 * time.Second,
-		WriteTimeout: 30 * time.Second,
+		Addr:        ":" + port,
+		Handler:     r,
+		ReadTimeout: 15 * time.Second,
+		// WriteTimeout is intentionally disabled: http.Server has no per-route
+		// write deadline, and a finite value terminates active SSE/WS streams.
+		// Ordinary handlers remain bounded by REQUEST_TIMEOUT above.
+		WriteTimeout: 0,
 		IdleTimeout:  60 * time.Second,
 	}
 

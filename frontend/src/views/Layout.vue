@@ -1,5 +1,8 @@
 <template>
-  <el-container class="layout-container">
+  <el-container
+    class="layout-container"
+    :class="{ 'compact-layout': compactLayout, 'reduce-motion': reduceMotion }"
+  >
     <!-- 侧边栏 -->
     <el-aside
       :width="asideWidth"
@@ -175,75 +178,186 @@
 
   <el-dialog
     v-model="profileVisible"
-    title="个人中心"
-    width="520px"
+    :width="isMobileViewport ? 'calc(100% - 30px)' : '640px'"
+    class="profile-dialog"
+    destroy-on-close
   >
-    <el-descriptions
-      :column="1"
-      border
-    >
-      <el-descriptions-item label="用户名">
-        {{ authStore.user?.username || '-' }}
-      </el-descriptions-item>
-      <el-descriptions-item label="角色">
-        {{ authStore.user?.role || '-' }}
-      </el-descriptions-item>
-      <el-descriptions-item label="用户 ID">
-        {{ (authStore.user as any)?.id ?? '-' }}
-      </el-descriptions-item>
-      <el-descriptions-item label="WebSocket 状态">
-        <el-tag :type="wsClient.connected.value ? 'success' : 'danger'">
-          {{ wsClient.connected.value ? '已连接' : '未连接' }}
-        </el-tag>
-      </el-descriptions-item>
-    </el-descriptions>
-    <template #footer>
-      <el-button @click="profileVisible = false">
-        关闭
-      </el-button>
+    <template #header>
+      <div class="dialog-heading">
+        <div class="dialog-heading-icon profile-heading-icon">
+          <el-icon><UserFilled /></el-icon>
+        </div>
+        <div><strong>个人中心</strong><span>账户资料与实时服务状态</span></div>
+      </div>
     </template>
+
+    <section class="profile-hero">
+      <el-avatar
+        :size="64"
+        class="profile-avatar"
+      >
+        {{ userInitials }}
+      </el-avatar>
+      <div class="profile-main-copy">
+        <div class="profile-name-row">
+          <h2>{{ authStore.user?.username || '未命名用户' }}</h2>
+          <el-tag
+            size="small"
+            effect="light"
+            type="primary"
+          >
+            {{ roleLabel }}
+          </el-tag>
+        </div>
+        <p>{{ profileEmail }}</p>
+        <div
+          class="connection-chip"
+          :class="{ online: wsClient.connected.value }"
+        >
+          <el-icon><CircleCheckFilled /></el-icon>{{ realtimeStatusLabel }}
+        </div>
+      </div>
+    </section>
+
+    <section class="profile-stat-grid">
+      <div class="profile-stat-item">
+        <span>用户 ID</span><strong>#{{ (authStore.user as any)?.id ?? '-' }}</strong>
+      </div>
+      <div class="profile-stat-item">
+        <span>推送通道</span><strong>{{ realtimeTransportLabel }}</strong>
+      </div>
+      <div class="profile-stat-item">
+        <span>账户角色</span><strong>{{ roleLabel }}</strong>
+      </div>
+    </section>
+
+    <section class="profile-detail-card">
+      <div class="section-title-row">
+        <div><span class="section-kicker">ACCOUNT</span><h3>账户资料</h3></div>
+        <el-tag
+          :type="wsClient.connected.value ? 'success' : 'info'"
+          effect="light"
+        >
+          {{ wsClient.connected.value ? '实时服务正常' : '等待连接' }}
+        </el-tag>
+      </div>
+      <div class="profile-detail-list">
+        <div><span>用户名</span><b>{{ authStore.user?.username || '-' }}</b></div>
+        <div><span>邮箱</span><b>{{ profileEmail }}</b></div>
+        <div><span>实时推送</span><b>{{ realtimeDescription }}</b></div>
+      </div>
+    </section>
+
+    <div class="profile-quick-actions">
+      <el-button
+        plain
+        @click="navigateFromDialog('/accounts')"
+      >
+        管理云盘账号<el-icon class="button-arrow">
+          <ArrowRight />
+        </el-icon>
+      </el-button>
+      <el-button
+        plain
+        @click="navigateFromDialog('/logs')"
+      >
+        查看运行日志<el-icon class="button-arrow">
+          <ArrowRight />
+        </el-icon>
+      </el-button>
+    </div>
   </el-dialog>
 
   <el-dialog
     v-model="settingsVisible"
-    title="系统设置"
-    width="560px"
+    :width="isMobileViewport ? 'calc(100% - 30px)' : '640px'"
+    class="settings-dialog"
+    destroy-on-close
   >
-    <el-form label-width="120px">
-      <el-form-item label="侧边栏折叠">
-        <el-switch
-          v-model="isCollapse"
-          active-text="折叠"
-          inactive-text="展开"
-        />
-      </el-form-item>
-      <el-form-item label="WebSocket">
-        <div style="display: flex; gap: 8px; align-items: center;">
-          <el-tag :type="wsClient.connected.value ? 'success' : 'info'">
-            {{ wsClient.connected.value ? '已连接' : '未连接' }}
-          </el-tag>
-          <el-button
-            size="small"
-            @click="wsClient.connect()"
-          >
-            重连
-          </el-button>
-          <el-button
-            size="small"
-            @click="wsClient.disconnect()"
-          >
-            断开
-          </el-button>
+    <template #header>
+      <div class="dialog-heading">
+        <div class="dialog-heading-icon settings-heading-icon">
+          <el-icon><Setting /></el-icon>
         </div>
-      </el-form-item>
-    </el-form>
-    <template #footer>
-      <el-button @click="settingsVisible = false">
-        关闭
-      </el-button>
+        <div><strong>系统设置</strong><span>界面偏好与实时连接控制</span></div>
+      </div>
     </template>
-  </el-dialog>
 
+    <div class="settings-summary">
+      <div><span>当前设备布局</span><strong>{{ isMobileViewport ? '移动端适配模式' : compactLayout ? '紧凑布局' : '标准布局' }}</strong></div>
+      <el-tag
+        :type="wsClient.connected.value ? 'success' : 'info'"
+        effect="light"
+      >
+        {{ realtimeStatusLabel }}
+      </el-tag>
+    </div>
+
+    <section class="settings-section">
+      <div class="settings-section-title">
+        <div class="settings-section-icon">
+          <el-icon><Monitor /></el-icon>
+        </div>
+        <div><h3>界面与布局</h3><p>这些偏好仅保存在当前浏览器。</p></div>
+      </div>
+      <div class="setting-row">
+        <div><strong>侧边栏折叠</strong><span>为内容区域保留更多空间</span></div><el-switch
+          v-model="isCollapse"
+          :disabled="isMobileViewport"
+        />
+      </div>
+      <div class="setting-row">
+        <div><strong>紧凑布局</strong><span>缩小内容区边距，适合信息密集查看</span></div><el-switch v-model="compactLayout" />
+      </div>
+      <div class="setting-row">
+        <div><strong>减少动态效果</strong><span>关闭页面切换和悬停动画</span></div><el-switch v-model="reduceMotion" />
+      </div>
+    </section>
+
+    <section class="settings-section realtime-section">
+      <div class="settings-section-title">
+        <div class="settings-section-icon realtime-icon">
+          <el-icon><Connection /></el-icon>
+        </div>
+        <div><h3>实时推送</h3><p>{{ realtimeDescription }}</p></div>
+      </div>
+      <div class="realtime-status-row">
+        <div
+          class="realtime-indicator"
+          :class="{ online: wsClient.connected.value }"
+        />
+        <div><strong>{{ realtimeTransportLabel }}</strong><span>{{ wsClient.connected.value ? '连接已建立，可接收任务结果通知' : '暂未建立连接，可手动重新连接' }}</span></div>
+      </div>
+      <div class="settings-actions">
+        <el-button
+          type="primary"
+          plain
+          @click="reconnectPush"
+        >
+          <el-icon><Refresh /></el-icon>重新连接
+        </el-button>
+        <el-button
+          :disabled="!wsClient.connected.value"
+          @click="wsClient.disconnect()"
+        >
+          断开连接
+        </el-button>
+      </div>
+    </section>
+
+    <div class="settings-footer-actions">
+      <el-button
+        text
+        type="primary"
+        @click="restoreUiPreferences"
+      >
+        恢复默认设置
+      </el-button>
+      <el-button @click="settingsVisible = false">
+        完成
+      </el-button>
+    </div>
+  </el-dialog>
   <!-- 公告弹窗 -->
   <AnnouncementPopup
     v-model="popupVisible"
@@ -253,7 +367,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
@@ -266,7 +380,13 @@ import {
   Expand,
   FullScreen,
   ArrowDown,
-  SwitchButton
+  SwitchButton,
+  UserFilled,
+  CircleCheckFilled,
+  Monitor,
+  Connection,
+  Refresh,
+  ArrowRight
 } from '@element-plus/icons-vue'
 import { useAuthStore } from '@/store/auth'
 import Breadcrumb from '@/components/Breadcrumb.vue'
@@ -283,8 +403,29 @@ const settingsVisible = ref(false)
 const popupVisible = ref(false)
 const popupAnnouncement = ref<Announcement | null>(null)
 
-// 侧边栏折叠状态
-const isCollapse = ref(false)
+const UI_PREFERENCES_STORAGE_KEY = 'caiyun_ui_preferences'
+
+type UIPreferences = {
+  isCollapse?: boolean
+  compactLayout?: boolean
+  reduceMotion?: boolean
+}
+
+const loadUIPreferences = (): UIPreferences => {
+  if (typeof window === 'undefined') return {}
+  try {
+    const value = JSON.parse(localStorage.getItem(UI_PREFERENCES_STORAGE_KEY) || '{}')
+    return value && typeof value === 'object' ? value as UIPreferences : {}
+  } catch {
+    return {}
+  }
+}
+
+const initialUIPreferences = loadUIPreferences()
+// 侧边栏折叠状态与界面偏好均保存在当前浏览器。
+const isCollapse = ref(Boolean(initialUIPreferences.isCollapse))
+const compactLayout = ref(Boolean(initialUIPreferences.compactLayout))
+const reduceMotion = ref(Boolean(initialUIPreferences.reduceMotion))
 const viewportWidth = ref(typeof window !== 'undefined' ? window.innerWidth : 1440)
 
 // 当前激活的菜单
@@ -308,10 +449,56 @@ const userInitials = computed(() => {
   return username.charAt(0).toUpperCase()
 })
 
+const profileEmail = computed(() => authStore.user?.email || '暂未绑定邮箱')
+const roleLabel = computed(() => isAdmin.value ? '管理员' : '普通用户')
+const realtimeStatusLabel = computed(() => wsClient.connected.value ? '实时服务已连接' : '实时服务未连接')
+const realtimeTransportLabel = computed(() => {
+  switch (wsClient.transport.value) {
+    case 'sse': return 'SSE 推送'
+    case 'ws': return 'WebSocket'
+    default: return '等待连接'
+  }
+})
+const realtimeDescription = computed(() => {
+  if (wsClient.transport.value === 'sse') return '通过 SSE 接收任务状态与兑换结果，适合 CDN 网络环境。'
+  if (wsClient.transport.value === 'ws') return '通过 WebSocket 接收实时任务状态与兑换结果。'
+  return '实时服务尚未建立连接，可在系统设置中手动重新连接。'
+})
+
+const persistUiPreferences = () => {
+  if (typeof window === 'undefined') return
+  localStorage.setItem(UI_PREFERENCES_STORAGE_KEY, JSON.stringify({
+    isCollapse: isCollapse.value,
+    compactLayout: compactLayout.value,
+    reduceMotion: reduceMotion.value
+  }))
+}
+
+watch([isCollapse, compactLayout, reduceMotion], persistUiPreferences)
+
+const restoreUiPreferences = () => {
+  isCollapse.value = false
+  compactLayout.value = false
+  reduceMotion.value = false
+  persistUiPreferences()
+  ElMessage.success('已恢复默认界面设置')
+}
+
+const reconnectPush = () => {
+  wsClient.disconnect()
+  window.setTimeout(() => wsClient.connect(), 0)
+  ElMessage.info('正在重新建立实时连接')
+}
+
+const navigateFromDialog = (path: string) => {
+  profileVisible.value = false
+  settingsVisible.value = false
+  void router.push(path)
+}
+
 const syncViewport = () => {
   viewportWidth.value = window.innerWidth
 }
-
 // 切换侧边栏折叠
 const toggleCollapse = () => {
   if (isTabletViewport.value || isMobileViewport.value) return
@@ -716,6 +903,111 @@ onUnmounted(() => {
   background: transparent;
 }
 
+/* 个人中心与系统设置 */
+:deep(.profile-dialog),
+:deep(.settings-dialog) {
+  border-radius: 22px;
+  overflow: hidden;
+  box-shadow: 0 24px 70px rgba(30, 64, 175, 0.24);
+}
+
+:deep(.profile-dialog .el-dialog__header),
+:deep(.settings-dialog .el-dialog__header) {
+  margin: 0;
+  padding: 24px 28px 16px;
+  border-bottom: 1px solid #edf2f7;
+}
+
+:deep(.profile-dialog .el-dialog__body),
+:deep(.settings-dialog .el-dialog__body) {
+  padding: 22px 28px 26px;
+}
+
+.dialog-heading,
+.settings-section-title,
+.section-title-row,
+.profile-name-row,
+.settings-summary,
+.realtime-status-row,
+.setting-row,
+.profile-quick-actions,
+.settings-footer-actions {
+  display: flex;
+  align-items: center;
+}
+
+.dialog-heading { gap: 12px; }
+.dialog-heading-icon,
+.settings-section-icon {
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  color: #fff;
+  background: linear-gradient(135deg, #3b82f6, #06b6d4);
+  box-shadow: 0 8px 18px rgba(37, 99, 235, 0.2);
+}
+.dialog-heading-icon { width: 38px; height: 38px; border-radius: 12px; font-size: 19px; }
+.settings-heading-icon { background: linear-gradient(135deg, #6366f1, #8b5cf6); }
+.dialog-heading strong { display: block; color: #1e293b; font-size: 19px; line-height: 1.2; }
+.dialog-heading span { display: block; margin-top: 4px; color: #94a3b8; font-size: 12px; }
+
+.profile-hero {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+  padding: 18px;
+  border: 1px solid #dbeafe;
+  border-radius: 18px;
+  background: linear-gradient(135deg, #eff6ff, #f0fdfa);
+}
+.profile-avatar { flex: 0 0 auto; color: #fff; font-size: 24px; font-weight: 700; background: linear-gradient(135deg, #2563eb, #06b6d4); box-shadow: 0 10px 20px rgba(37, 99, 235, 0.25); }
+.profile-main-copy { min-width: 0; flex: 1; }
+.profile-name-row { gap: 8px; min-width: 0; }
+.profile-name-row h2 { overflow: hidden; margin: 0; color: #1e3a8a; font-size: 20px; text-overflow: ellipsis; white-space: nowrap; }
+.profile-main-copy p { overflow: hidden; margin: 5px 0 9px; color: #64748b; font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
+.connection-chip { display: inline-flex; gap: 6px; align-items: center; color: #64748b; font-size: 12px; }
+.connection-chip .el-icon { color: #94a3b8; }
+.connection-chip.online { color: #059669; }
+.connection-chip.online .el-icon { color: #10b981; }
+
+.profile-stat-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin: 16px 0; }
+.profile-stat-item { min-width: 0; padding: 13px; border: 1px solid #edf2f7; border-radius: 14px; background: #fff; }
+.profile-stat-item span, .settings-summary span, .profile-detail-list span { display: block; color: #94a3b8; font-size: 12px; }
+.profile-stat-item strong { display: block; overflow: hidden; margin-top: 6px; color: #334155; font-size: 14px; text-overflow: ellipsis; white-space: nowrap; }
+.profile-detail-card, .settings-section { border: 1px solid #e8eef7; border-radius: 16px; background: #fff; }
+.profile-detail-card { padding: 16px; }
+.section-title-row { justify-content: space-between; gap: 12px; }
+.section-kicker { color: #60a5fa; font-size: 10px; font-weight: 700; letter-spacing: .12em; }
+.section-title-row h3, .settings-section-title h3 { margin: 3px 0 0; color: #334155; font-size: 15px; }
+.profile-detail-list { margin-top: 13px; border-top: 1px solid #f1f5f9; }
+.profile-detail-list > div { display: flex; justify-content: space-between; gap: 20px; padding: 10px 0; border-bottom: 1px solid #f1f5f9; }
+.profile-detail-list > div:last-child { border-bottom: 0; padding-bottom: 0; }
+.profile-detail-list b { max-width: 68%; color: #475569; font-size: 13px; font-weight: 500; text-align: right; }
+.profile-quick-actions { gap: 10px; margin-top: 16px; }
+.profile-quick-actions .el-button { flex: 1; justify-content: space-between; }
+.button-arrow { margin-left: 8px; }
+
+.settings-summary { justify-content: space-between; gap: 14px; padding: 14px 16px; border-radius: 14px; background: #f8fafc; }
+.settings-summary strong { display: block; margin-top: 4px; color: #334155; font-size: 14px; }
+.settings-section { padding: 17px; margin-top: 14px; }
+.settings-section-title { gap: 11px; }
+.settings-section-icon { width: 34px; height: 34px; border-radius: 10px; font-size: 16px; }
+.realtime-icon { background: linear-gradient(135deg, #0ea5e9, #14b8a6); }
+.settings-section-title p { margin: 4px 0 0; color: #94a3b8; font-size: 12px; line-height: 1.45; }
+.setting-row { justify-content: space-between; gap: 16px; padding: 14px 0; border-bottom: 1px solid #f1f5f9; }
+.setting-row:last-child { padding-bottom: 0; border-bottom: 0; }
+.setting-row strong, .realtime-status-row strong { display: block; color: #475569; font-size: 14px; }
+.setting-row span, .realtime-status-row span { display: block; margin-top: 4px; color: #94a3b8; font-size: 12px; }
+.realtime-status-row { gap: 10px; margin: 16px 0 14px; padding: 12px; border-radius: 12px; background: #f8fafc; }
+.realtime-indicator { width: 9px; height: 9px; border-radius: 50%; background: #cbd5e1; box-shadow: 0 0 0 4px #e2e8f0; }
+.realtime-indicator.online { background: #10b981; box-shadow: 0 0 0 4px #d1fae5; }
+.settings-actions { gap: 8px; }
+.settings-actions .el-icon { margin-right: 4px; }
+.settings-footer-actions { justify-content: space-between; margin-top: 18px; }
+
+.compact-layout .main-content { padding: 14px; }
+.compact-layout .header { height: 62px; }
+.reduce-motion *, .reduce-motion *::before, .reduce-motion *::after { transition-duration: .01ms !important; animation-duration: .01ms !important; }
 @media (max-width: 1280px) {
   .header {
     padding: 0 16px;
@@ -795,7 +1087,33 @@ onUnmounted(() => {
   }
 }
 
-@media (max-width: 768px) {
+@media (max-width: 768px) {  :deep(.profile-dialog),
+  :deep(.settings-dialog) {
+    margin-top: 7vh !important;
+    max-height: 84dvh;
+  }
+
+  :deep(.profile-dialog .el-dialog__header),
+  :deep(.settings-dialog .el-dialog__header) {
+    padding: 18px 18px 13px;
+  }
+
+  :deep(.profile-dialog .el-dialog__body),
+  :deep(.settings-dialog .el-dialog__body) {
+    max-height: calc(84dvh - 75px);
+    padding: 16px 18px 20px;
+    overflow-y: auto;
+  }
+
+  .dialog-heading strong { font-size: 17px; }
+  .profile-hero { padding: 14px; }
+  .profile-stat-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .profile-stat-item:last-child { grid-column: span 2; }
+  .profile-quick-actions { flex-direction: column; align-items: stretch; }
+  .profile-quick-actions .el-button { flex: initial; }
+  .setting-row { align-items: flex-start; }
+  .setting-row > div { padding-right: 4px; }
+  .settings-footer-actions { margin-top: 14px; }
   .layout-container {
     height: 100dvh;
     flex-direction: column;
