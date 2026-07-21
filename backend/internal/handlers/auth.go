@@ -375,7 +375,7 @@ func requestSessionMetadata(c *gin.Context) services.SessionMetadata {
 	if deviceID != "" {
 		value = deviceID + " | " + userAgent
 	}
-	return services.SessionMetadata{DeviceInfo: value}
+	return services.SessionMetadata{DeviceInfo: value, ClientIP: c.ClientIP()}
 }
 
 func isSecureRequest(c *gin.Context) bool {

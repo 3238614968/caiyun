@@ -4,12 +4,15 @@ import (
 	"caiyun/internal/models"
 	"caiyun/internal/services"
 	apiresponse "caiyun/pkg/response"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
 
 	"github.com/gin-gonic/gin"
 )
+
+const maxExchangeTaskBatchItems = 100
 
 func uniqueUintValues(ids []uint) []uint {
 	seen := make(map[uint]struct{}, len(ids))
@@ -93,6 +96,10 @@ func (h *ExchangeHandler) CreateExchangeTask(c *gin.Context) {
 		respondError(c, http.StatusBadRequest, err.Error())
 		return
 	}
+	if err := validateExchangeTaskBatchSize(req); err != nil {
+		respondError(c, http.StatusBadRequest, err.Error())
+		return
+	}
 
 	// 设置默认值
 	taskType, err := normalizeExchangeTaskType(req.TaskType)
@@ -165,6 +172,28 @@ func (h *ExchangeHandler) CreateExchangeTask(c *gin.Context) {
 		"errors":  result.Errors,
 		"results": result.Results,
 	})
+}
+
+func validateExchangeTaskBatchSize(req CreateExchangeTaskRequest) error {
+	ruleCount := len(req.ExchangeRuleIDs) + len(req.ExchangeAccountIDs)
+	if req.ExchangeRuleID > 0 {
+		ruleCount++
+	}
+	if req.ExchangeAccountID > 0 {
+		ruleCount++
+	}
+	if ruleCount > maxExchangeTaskBatchItems {
+		return fmt.Errorf("批量抢兑规则数量不能超过 %d", maxExchangeTaskBatchItems)
+	}
+
+	accountCount := len(req.AccountIDs)
+	if req.AccountID > 0 {
+		accountCount++
+	}
+	if accountCount > maxExchangeTaskBatchItems {
+		return fmt.Errorf("批量云盘账号数量不能超过 %d", maxExchangeTaskBatchItems)
+	}
+	return nil
 }
 
 // GetExchangeTasksResponse 获取抢兑任务列表响应

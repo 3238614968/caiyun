@@ -78,6 +78,7 @@ declare module 'vue' {
     ElTabs: typeof import('element-plus/es')['ElTabs']
     ElTag: typeof import('element-plus/es')['ElTag']
     ElTimePicker: typeof import('element-plus/es')['ElTimePicker']
+    ElTooltip: typeof import('element-plus/es')['ElTooltip']
     ExchangeAccountDialog: typeof import('./components/exchange/ExchangeAccountDialog.vue')['default']
     ExchangeAccountList: typeof import('./components/exchange/ExchangeAccountList.vue')['default']
     ExchangeHeader: typeof import('./components/exchange/ExchangeHeader.vue')['default']

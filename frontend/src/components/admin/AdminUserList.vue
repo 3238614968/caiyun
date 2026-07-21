@@ -8,7 +8,12 @@
         @clear="emitSearch"
         @keyup.enter="emitSearch"
       />
-      <el-button type="primary" @click="emitSearch">搜索</el-button>
+      <el-button
+        type="primary"
+        @click="emitSearch"
+      >
+        搜索
+      </el-button>
     </div>
 
     <div

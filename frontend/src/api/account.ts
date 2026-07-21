@@ -140,9 +140,9 @@ export interface SmsStatusResponse {
   }
 }
 
-export function getSmsStatus(phone: string): Promise<SmsStatusResponse> {
+export function getSmsStatus(taskId: string): Promise<SmsStatusResponse> {
   return request({
-    url: `/api/accounts/sms/status/${phone}`,
+    url: `/api/accounts/sms/status/${encodeURIComponent(taskId)}`,
     method: 'get'
   })
 }
@@ -193,12 +193,12 @@ export function getAllUsers(page: number = 1, size: number = 10, keyword: string
 }
 
 // 获取所有账号（管理员）
-export function getAllAccounts(page: number = 1, pageSize: number = 10): Promise<AccountListResponse> {
+export function getAllAccounts(page: number = 1, pageSize: number = 10, phone: string = ''): Promise<AccountListResponse> {
   const fallback: AccountListResponse = { accounts: [], total: 0, page, page_size: pageSize }
   return request<AccountListResponse | ApiResponse<AccountListResponse>>({
     url: '/api/admin/accounts',
     method: 'get',
-    params: { page, page_size: pageSize }
+    params: { page, page_size: pageSize, ...(phone.trim() ? { phone: phone.trim() } : {}) }
   }).then((res) => unwrapApiData(res, fallback))
 }
 

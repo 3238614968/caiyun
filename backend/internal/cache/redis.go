@@ -179,6 +179,19 @@ func (r *RedisCache) Get(key string, dest interface{}) error {
 	return json.Unmarshal(data, dest)
 }
 
+// ServerTime returns the Redis server clock. It is used during startup to
+// detect host/container clock drift, which would otherwise invalidate JWTs
+// and time-based exchange schedules inconsistently.
+func (r *RedisCache) ServerTime() (time.Time, error) {
+	ctx, cancel := r.operationContext()
+	defer cancel()
+	serverTime, err := r.client.Time(ctx).Result()
+	if err != nil {
+		return time.Time{}, err
+	}
+	return serverTime, nil
+}
+
 func (r *RedisCache) Del(keys ...string) error {
 	ctx, cancel := r.operationContext()
 	defer cancel()
@@ -1068,4 +1081,21 @@ return {current, ttl}
 	ttl, _ := vals[1].(int64)
 
 	return count <= int64(limit), count, time.Duration(ttl) * time.Second, nil
+}
+
+// IncrementWithTTL atomically increments a counter and applies the supplied
+// expiry only when the key is first created. This avoids lost login-failure
+// updates under concurrent requests.
+func (r *RedisCache) IncrementWithTTL(key string, window time.Duration) (int, error) {
+	ctx, cancel := r.operationContext()
+	defer cancel()
+	script := redis.NewScript(`
+local count = redis.call("INCR", KEYS[1])
+if count == 1 then
+  redis.call("EXPIRE", KEYS[1], ARGV[1])
+end
+return count
+`)
+	value, err := script.Run(ctx, r.client, []string{key}, int64(window/time.Second)).Int()
+	return value, err
 }

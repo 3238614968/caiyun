@@ -15,6 +15,10 @@ import (
 )
 
 func (h *AccountHandler) SendSmsCode(c *gin.Context) {
+	userID, ok := getUserID(c)
+	if !ok {
+		return
+	}
 	var req SendSmsCodeRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		respondError(c, http.StatusBadRequest, "请输入手机号")
@@ -29,7 +33,7 @@ func (h *AccountHandler) SendSmsCode(c *gin.Context) {
 	}
 
 	// 检查发送频率限制（优先使用 Redis 分布式限流，回退到内存限流）
-	allowed, waitTime := h.checkSMSRateLimit(req.Phone)
+	allowed, waitTime := h.checkSMSRateLimit(userID, req.Phone)
 	if !allowed {
 		log.Printf("[SendSmsCode] 触发频率限制 phone=%s wait=%s", utils.MaskPhone(req.Phone), waitTime)
 		respondError(c, http.StatusTooManyRequests, fmt.Sprintf("操作过于频繁，请等待%s后再试", waitTime))
@@ -40,13 +44,15 @@ func (h *AccountHandler) SendSmsCode(c *gin.Context) {
 	taskID, err := sms.SendCodeContext(c.Request.Context(), req.Phone)
 	if err != nil {
 		log.Printf("[SendSmsCode] 发送验证码失败 phone=%s: %v", utils.MaskPhone(req.Phone), err)
-		h.resetSMSRateLimit(req.Phone)
+		h.resetSMSRateLimit(userID, req.Phone)
 		// 提供更友好的错误提示
 		errMsg := err.Error()
 		if strings.Contains(errMsg, "请求失败") || strings.Contains(errMsg, "连接") {
 			errMsg = "短信服务暂时不可用，请稍后重试或联系管理员"
 		} else if strings.Contains(errMsg, "频率") {
 			errMsg = "发送过于频繁，请稍后再试"
+		} else {
+			errMsg = "短信服务暂时不可用，请稍后重试或联系管理员"
 		}
 		respondError(c, http.StatusInternalServerError, errMsg)
 		return
@@ -55,8 +61,14 @@ func (h *AccountHandler) SendSmsCode(c *gin.Context) {
 	// 如果taskID为空，说明SMS服务没有返回会话ID
 	if taskID == "" {
 		log.Printf("[SendSmsCode] SMS服务未返回task_id phone=%s", utils.MaskPhone(req.Phone))
-		h.resetSMSRateLimit(req.Phone)
+		h.resetSMSRateLimit(userID, req.Phone)
 		respondError(c, http.StatusInternalServerError, "短信服务异常：未获取到验证码会话ID，请稍后重试或联系管理员")
+		return
+	}
+	if err := h.saveSMSSession(userID, taskID, req.Phone); err != nil {
+		log.Printf("[SendSmsCode] 保存验证码会话失败 user_id=%d phone=%s: %v", userID, utils.MaskPhone(req.Phone), err)
+		h.resetSMSRateLimit(userID, req.Phone)
+		respondError(c, http.StatusInternalServerError, "短信服务异常：验证码会话保存失败，请稍后重试")
 		return
 	}
 
@@ -71,10 +83,10 @@ func (h *AccountHandler) SendSmsCode(c *gin.Context) {
 // @Tags 账号管理
 // @Accept json
 // @Produce json
-// @Param phone path string true "手机号"
+// @Param task_id path string true "验证码会话ID"
 // @Success 200 {object} map[string]interface{}
 // @Failure 400 {object} ErrorResponse
-// @Router /api/accounts/sms/status/{phone} [get]
+// @Router /api/accounts/sms/status/{task_id} [get]
 
 // GetSmsStatus 查询验证码发送状态
 // @Summary 查询验证码发送状态
@@ -86,13 +98,21 @@ func (h *AccountHandler) SendSmsCode(c *gin.Context) {
 // @Failure 400 {object} ErrorResponse
 // @Router /api/accounts/sms/status/{phone} [get]
 func (h *AccountHandler) GetSmsStatus(c *gin.Context) {
-	phone := strings.TrimSpace(c.Param("phone"))
-
-	// 验证手机号格式
-	if !phoneRe.MatchString(phone) {
-		respondError(c, http.StatusBadRequest, "手机号格式不正确")
+	userID, ok := getUserID(c)
+	if !ok {
 		return
 	}
+	taskID := strings.TrimSpace(c.Param("task_id"))
+	if taskID == "" || len(taskID) > 128 {
+		respondError(c, http.StatusBadRequest, "验证码会话ID不正确")
+		return
+	}
+	session, err := h.loadSMSSession(userID, taskID)
+	if err != nil {
+		respondError(c, http.StatusNotFound, "验证码会话不存在或已过期，请重新发送验证码")
+		return
+	}
+	phone := session.Phone
 
 	// 调用SMS API查询状态
 	statusInfo, err := sms.GetCodeStatusContext(c.Request.Context(), phone)
@@ -100,12 +120,12 @@ func (h *AccountHandler) GetSmsStatus(c *gin.Context) {
 		log.Printf("[GetSmsStatus] 查询状态失败 phone=%s: %v", utils.MaskPhone(phone), err)
 		errMsg, retryable := normalizeSMSStatusError(err.Error())
 		if retryable {
-			h.resetSMSRateLimit(phone)
+			h.resetSMSRateLimit(userID, phone)
 		}
 		apiresponse.Success(c, map[string]interface{}{
 			"phone":     phone,
 			"status":    "failed",
-			"task_id":   "",
+			"task_id":   taskID,
 			"retryable": retryable,
 			"message":   errMsg,
 		})
@@ -125,12 +145,12 @@ func (h *AccountHandler) GetSmsStatus(c *gin.Context) {
 		statusMessage = "验证码发送成功，请输入验证码"
 	}
 	if retryable {
-		h.resetSMSRateLimit(phone)
+		h.resetSMSRateLimit(userID, phone)
 	}
 
 	apiresponse.Success(c, map[string]interface{}{
 		"phone":     phone,
-		"task_id":   statusInfo.TaskID,
+		"task_id":   taskID,
 		"status":    statusInfo.Status,
 		"retryable": retryable,
 		"message":   statusMessage,
@@ -168,10 +188,20 @@ func (h *AccountHandler) SmsLogin(c *gin.Context) {
 		return
 	}
 	req.Phone = strings.TrimSpace(req.Phone)
+	req.TaskID = strings.TrimSpace(req.TaskID)
 
 	// 验证手机号格式
 	if !phoneRe.MatchString(req.Phone) {
 		respondError(c, http.StatusBadRequest, "手机号格式不正确")
+		return
+	}
+	if req.TaskID == "" || len(req.TaskID) > 128 {
+		respondError(c, http.StatusBadRequest, "验证码会话ID不正确，请先发送验证码")
+		return
+	}
+	session, err := h.loadSMSSession(userID, req.TaskID)
+	if err != nil || session.Phone != req.Phone {
+		respondError(c, http.StatusBadRequest, "验证码会话与手机号不匹配，请重新发送验证码")
 		return
 	}
 
@@ -186,13 +216,13 @@ func (h *AccountHandler) SmsLogin(c *gin.Context) {
 		} else if strings.Contains(errMsg, "验证码错误") || strings.Contains(errMsg, "不正确") {
 			errMsg = "验证码错误，请检查后重试"
 		} else if strings.Contains(errMsg, "过期") || strings.Contains(errMsg, "失效") {
-			h.resetSMSRateLimit(req.Phone)
+			h.resetSMSRateLimit(userID, req.Phone)
 			errMsg = "验证码已过期，请重新获取"
 		} else if strings.Contains(errMsg, "未找到") || strings.Contains(errMsg, "不存在") {
-			h.resetSMSRateLimit(req.Phone)
+			h.resetSMSRateLimit(userID, req.Phone)
 			errMsg = "验证码会话不存在，请重新发送验证码"
 		} else {
-			errMsg = "验证失败: " + errMsg
+			errMsg = "验证码验证失败，请稍后重试"
 		}
 		respondError(c, http.StatusBadRequest, errMsg)
 		return
@@ -218,6 +248,7 @@ func (h *AccountHandler) SmsLogin(c *gin.Context) {
 		respondInternalServer(c)
 		return
 	}
+	_ = h.deleteSMSSession(userID, req.TaskID)
 
 	apiresponse.Success(c, account)
 }

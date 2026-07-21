@@ -337,6 +337,24 @@ const handleTaskConfigToggle = async (row: TaskConfig, enabled: boolean) => {
   }
 }
 
+const loadAllAdminAccounts = async () => {
+  const pageSize = 100
+  const merged: Account[] = []
+  let page = 1
+  let total = 0
+
+  do {
+    const response = await getAllAccounts(page, pageSize)
+    const items = response.accounts || []
+    merged.push(...items)
+    total = Number(response.total || merged.length)
+    page += 1
+    if (items.length === 0) break
+  } while (merged.length < total)
+
+  return merged
+}
+
 // Load exchange config
 const loadExchangeConfig = async () => {
   try {
@@ -350,8 +368,7 @@ const loadExchangeConfig = async () => {
     exchangeConfig.immediate_exchange_enabled = data.immediate_exchange_enabled || false
     
     // 加载所有账号用于商品更新
-    const accountsData = await getAllAccounts(1, 1000)
-    allAccounts.value = accountsData.accounts || []
+    allAccounts.value = await loadAllAdminAccounts()
 
     const hasSelectedAvailableAccount = availableProductSourceAccounts.value.some(
       account => account.id === selectedAccountId.value

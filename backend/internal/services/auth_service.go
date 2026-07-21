@@ -18,26 +18,29 @@ import (
 	"net"
 	"net/smtp"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 
+	"github.com/go-redis/redis/v8"
 	"github.com/google/uuid"
 	"golang.org/x/crypto/bcrypt"
 )
 
 var (
 	// 注意：ErrUserNotFound 已在 admin_service.go 中定义
-	ErrInvalidCredentials   = errors.New("用户名或密码错误")
-	ErrUserExists           = errors.New("用户已存在")
-	ErrEmailExists          = errors.New("邮箱已被注册")
-	ErrWeakPassword         = errors.New("密码强度不足")
-	ErrInvalidRecoveryInfo  = errors.New("用户名或邮箱不匹配")
-	ErrEmailServiceDisabled = errors.New("邮箱服务未配置")
-	ErrResetCodeTooFrequent = errors.New("验证码发送过于频繁")
-	ErrInvalidResetCode     = errors.New("验证码错误或已过期")
-	ErrAccountLocked        = errors.New("登录失败次数过多，请稍后再试")
-	ErrInvalidRefreshToken  = errors.New("刷新凭证无效或已过期")
-	ErrRefreshTokenReuse    = errors.New("检测到刷新凭证重放，会话已撤销")
+	ErrInvalidCredentials         = errors.New("用户名或密码错误")
+	ErrUserExists                 = errors.New("用户已存在")
+	ErrEmailExists                = errors.New("邮箱已被注册")
+	ErrWeakPassword               = errors.New("密码强度不足")
+	ErrInvalidRecoveryInfo        = errors.New("用户名或邮箱不匹配")
+	ErrEmailServiceDisabled       = errors.New("邮箱服务未配置")
+	ErrResetCodeTooFrequent       = errors.New("验证码发送过于频繁")
+	ErrInvalidResetCode           = errors.New("验证码错误或已过期")
+	ErrAccountLocked              = errors.New("登录失败次数过多，请稍后再试")
+	ErrLoginProtectionUnavailable = errors.New("登录保护服务暂不可用")
+	ErrInvalidRefreshToken        = errors.New("刷新凭证无效或已过期")
+	ErrRefreshTokenReuse          = errors.New("检测到刷新凭证重放，会话已撤销")
 )
 
 const (
@@ -72,6 +75,11 @@ type passwordResetCache interface {
 	Del(keys ...string) error
 }
 
+type passwordResetLockCache interface {
+	SetNX(key string, value interface{}, expiration time.Duration) (bool, error)
+	DelIfValue(key, value string) (bool, error)
+}
+
 type authUserRepository interface {
 	Create(user *models.User) error
 	FindByID(id uint) (*models.User, error)
@@ -86,6 +94,10 @@ type loginLockStore interface {
 	GetLoginFailure(keyHash string) (int, time.Time, error)
 	RecordLoginFailure(keyHash string, maxAttempts int, window, lockTTL time.Duration) error
 	ClearLoginFailure(keyHash string) error
+}
+
+type atomicLoginFailureCache interface {
+	IncrementWithTTL(key string, window time.Duration) (int, error)
 }
 
 type refreshSessionRepository interface {
@@ -122,6 +134,7 @@ type AuthService struct {
 	loginLockStore loginLockStore
 	sessionRepo    refreshSessionRepository
 	refreshExpiry  time.Duration
+	resetCodeMu    sync.Mutex
 }
 
 func NewAuthService(
@@ -225,6 +238,7 @@ type AuthResponse struct {
 // authentication factor.
 type SessionMetadata struct {
 	DeviceInfo string
+	ClientIP   string
 }
 
 // Register 用户注册（保留兼容；HTTP 调用应使用 RegisterContext）。
@@ -318,8 +332,12 @@ func (s *AuthService) Login(req *LoginRequest) (*AuthResponse, error) {
 // LoginContext authenticates credentials and creates a rotating refresh session.
 func (s *AuthService) LoginContext(ctx context.Context, req *LoginRequest, metadata SessionMetadata) (*AuthResponse, error) {
 	// 登录失败锁定：优先检查 Redis 计数；Redis 不可用时降级到数据库表 login_fail_locks。
-	usernameKey := loginLockKey(req.Username)
-	if locked, _ := s.getLoginFailCount(usernameKey); locked >= loginLockMaxAttempts {
+	usernameKey := loginLockKey(req.Username, metadata.ClientIP)
+	locked, err := s.getLoginFailCount(usernameKey)
+	if err != nil {
+		return nil, ErrLoginProtectionUnavailable
+	}
+	if locked >= loginLockMaxAttempts {
 		return nil, ErrAccountLocked
 	}
 
@@ -327,24 +345,35 @@ func (s *AuthService) LoginContext(ctx context.Context, req *LoginRequest, metad
 	user, err := s.userRepo.FindByUsername(req.Username)
 	if err != nil {
 		// 不暴露用户是否存在：仍递增失败计数，防止通过响应差异枚举账号。
-		s.recordLoginFailure(usernameKey)
+		if recordErr := s.recordLoginFailure(usernameKey); recordErr != nil {
+			return nil, ErrLoginProtectionUnavailable
+		}
 		return nil, ErrInvalidCredentials
 	}
 
 	// 验证密码
 	if err := bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(req.Password)); err != nil {
-		s.recordLoginFailure(usernameKey)
+		if recordErr := s.recordLoginFailure(usernameKey); recordErr != nil {
+			return nil, ErrLoginProtectionUnavailable
+		}
 		return nil, ErrInvalidCredentials
 	}
 
 	// 登录成功：清除失败计数。
-	s.clearLoginFailure(usernameKey)
+	if clearErr := s.clearLoginFailure(usernameKey); clearErr != nil {
+		return nil, ErrLoginProtectionUnavailable
+	}
 
 	return s.issueAuthSession(ctx, user, metadata)
 }
 
-func loginLockKey(username string) string {
-	return "caiyun:login_fail:" + strings.ToLower(strings.TrimSpace(username))
+func loginLockKey(username, clientIP string) string {
+	username = strings.ToLower(strings.TrimSpace(username))
+	clientIP = strings.TrimSpace(clientIP)
+	if clientIP == "" {
+		clientIP = "unknown"
+	}
+	return "caiyun:login_fail:" + username + ":" + clientIP
 }
 
 func loginLockStoreKey(key string) string {
@@ -355,12 +384,16 @@ func loginLockStoreKey(key string) string {
 // getLoginFailCount 返回当前用户名的连续登录失败次数。
 // cache 未配置时返回 0，兼容本地调试。
 func (s *AuthService) getLoginFailCount(key string) (int, error) {
+	var cacheErr error
 	if s.loginLockCache != nil {
 		var count int
-		if err := s.loginLockCache.Get(key, &count); err == nil {
+		err := s.loginLockCache.Get(key, &count)
+		if err == nil {
 			return count, nil
 		}
-		// Redis key 不存在或 Redis 异常时继续尝试数据库降级。
+		if !isLoginLockCacheMiss(err) {
+			cacheErr = err
+		}
 	}
 	if s.loginLockStore != nil {
 		count, lockedUntil, err := s.loginLockStore.GetLoginFailure(loginLockStoreKey(key))
@@ -372,35 +405,76 @@ func (s *AuthService) getLoginFailCount(key string) (int, error) {
 		}
 		return count, nil
 	}
+	if cacheErr != nil {
+		return 0, cacheErr
+	}
 	return 0, nil
 }
 
-func (s *AuthService) recordLoginFailure(key string) {
-	if s.loginLockCache != nil {
-		count, _ := s.getLoginFailCount(key)
-		count++
-		// 锁定窗口内累加；窗口过后 key 自动过期归零。
-		ttl := loginFailWindow
-		if count >= loginLockMaxAttempts {
-			ttl = loginLockTTL
-		}
-		if err := s.loginLockCache.Set(key, count, ttl); err == nil {
-			return
-		}
-		// Redis 写入失败时降级到数据库。
+func isLoginLockCacheMiss(err error) bool {
+	if err == nil {
+		return false
 	}
-	if s.loginLockStore != nil {
-		_ = s.loginLockStore.RecordLoginFailure(loginLockStoreKey(key), loginLockMaxAttempts, loginFailWindow, loginLockTTL)
+	if errors.Is(err, redis.Nil) {
+		return true
 	}
+	message := strings.ToLower(strings.TrimSpace(err.Error()))
+	return strings.Contains(message, "not found") ||
+		strings.Contains(message, "不存在") ||
+		strings.Contains(message, "未找到")
 }
 
-func (s *AuthService) clearLoginFailure(key string) {
+func (s *AuthService) recordLoginFailure(key string) error {
+	if s.loginLockCache == nil && s.loginLockStore == nil {
+		return nil
+	}
+
+	var failures []error
 	if s.loginLockCache != nil {
-		_ = s.loginLockCache.Del(key)
+		if atomicStore, ok := s.loginLockCache.(atomicLoginFailureCache); ok {
+			if _, err := atomicStore.IncrementWithTTL(key, loginFailWindow); err == nil {
+				return nil
+			} else {
+				failures = append(failures, err)
+			}
+		} else {
+			// Legacy cache implementations are retained for tests and offline
+			// callers; production Redis uses the atomic path above.
+			var count int
+			if err := s.loginLockCache.Get(key, &count); err != nil && !isLoginLockCacheMiss(err) {
+				failures = append(failures, err)
+			}
+			count++
+			if err := s.loginLockCache.Set(key, count, loginFailWindow); err == nil {
+				return nil
+			} else {
+				failures = append(failures, err)
+			}
+		}
 	}
 	if s.loginLockStore != nil {
-		_ = s.loginLockStore.ClearLoginFailure(loginLockStoreKey(key))
+		if err := s.loginLockStore.RecordLoginFailure(loginLockStoreKey(key), loginLockMaxAttempts, loginFailWindow, loginLockTTL); err == nil {
+			return nil
+		} else {
+			failures = append(failures, err)
+		}
 	}
+	return errors.Join(failures...)
+}
+
+func (s *AuthService) clearLoginFailure(key string) error {
+	var failures []error
+	if s.loginLockCache != nil {
+		if err := s.loginLockCache.Del(key); err != nil {
+			failures = append(failures, err)
+		}
+	}
+	if s.loginLockStore != nil {
+		if err := s.loginLockStore.ClearLoginFailure(loginLockStoreKey(key)); err != nil {
+			failures = append(failures, err)
+		}
+	}
+	return errors.Join(failures...)
 }
 
 // RefreshToken preserves the legacy service API for non-HTTP callers that do
@@ -705,6 +779,13 @@ func (s *AuthService) ResetPasswordWithCode(username, email, code, newPassword s
 	if err != nil {
 		return ErrInvalidRecoveryInfo
 	}
+	key := passwordResetKey(user.Username, user.Email)
+	release, err := s.acquirePasswordResetLock(key)
+	if err != nil {
+		return err
+	}
+	defer release()
+
 	if err := s.verifyPasswordResetCode(user.Username, user.Email, code); err != nil {
 		return err
 	}
@@ -726,6 +807,35 @@ func (s *AuthService) ResetPasswordWithCode(username, email, code, newPassword s
 		_ = s.resetCodeCache.Del(passwordResetKey(user.Username, user.Email))
 	}
 	return nil
+}
+
+const passwordResetLockTTL = 2 * time.Minute
+
+func passwordResetLockKey(key string) string {
+	sum := sha256.Sum256([]byte(key))
+	return "caiyun:password_reset_lock:" + hex.EncodeToString(sum[:])
+}
+
+func (s *AuthService) acquirePasswordResetLock(key string) (func(), error) {
+	s.resetCodeMu.Lock()
+
+	lockCache, ok := s.resetCodeCache.(passwordResetLockCache)
+	if !ok {
+		return func() { s.resetCodeMu.Unlock() }, nil
+	}
+
+	lockKey := passwordResetLockKey(key)
+	lockValue := uuid.NewString()
+	acquired, err := lockCache.SetNX(lockKey, lockValue, passwordResetLockTTL)
+	if err != nil || !acquired {
+		s.resetCodeMu.Unlock()
+		return nil, ErrInvalidResetCode
+	}
+
+	return func() {
+		_, _ = lockCache.DelIfValue(lockKey, lockValue)
+		s.resetCodeMu.Unlock()
+	}, nil
 }
 
 func (s *AuthService) findPasswordResetUser(username, email string) (*models.User, error) {

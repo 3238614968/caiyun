@@ -19,16 +19,16 @@ export const formatExchangeResult = (message?: string, status?: string): Exchang
     return { label: status === 'success' ? '成功' : '-', type: status === 'success' ? 'success' : 'info' }
   }
 
-  if (status === 'success' || raw.includes('兑换成功') || raw.includes('成功')) {
-    return { label: '兑换成功', type: 'success' }
+  if (raw.includes('未登录') || raw.includes('登录失效') || raw.includes('重新登录') || raw.includes('JWT') || raw.includes('Token') || raw.includes('账号失效') || raw.includes('账号已失效') || raw.includes('认证为空')) {
+    return { label: '账号登录失效', type: 'danger' }
   }
 
   if (raw.includes('重复兑奖') || raw.includes('重复兑换') || raw.includes('已兑换') || raw.includes('今日已兑换') || raw.includes('本月已兑换')) {
     return { label: '已兑换过', type: 'warning' }
   }
 
-  if (raw.includes('未登录') || raw.includes('登录') || raw.includes('JWT') || raw.includes('Token') || raw.includes('账号已失效') || raw.includes('认证为空')) {
-    return { label: '账号登录失效', type: 'danger' }
+  if (raw.includes('正在抢兑') || raw.includes('已锁定') || raw.includes('跳过本次') || raw.includes('跳过执行')) {
+    return { label: '本次已跳过', type: 'warning' }
   }
 
   if (raw.includes('无库存') || raw.includes('库存不足') || raw.includes('已兑完') || raw.includes('已耗尽') || raw.includes('单日已耗尽')) {
@@ -55,8 +55,12 @@ export const formatExchangeResult = (message?: string, status?: string): Exchang
     return { label: '网络异常', type: 'danger' }
   }
 
-  if (raw.includes('错误') || raw.includes('失败')) {
+  if (raw.includes('错误') || raw.includes('失败') || lower.includes('failed') || lower.includes('error')) {
     return { label: '兑换失败', type: 'danger' }
+  }
+
+  if (status === 'success' || raw.includes('兑换成功') || raw.includes('抢兑成功') || raw.includes('执行成功')) {
+    return { label: '兑换成功', type: 'success' }
   }
 
   const brief = raw.split('|')[0]?.trim() || raw

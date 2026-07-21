@@ -13,6 +13,14 @@ export function getExchangeRules(): Promise<GetExchangeRulesResponse> {
 
 export const getExchangeAccounts = getExchangeRules
 
+export function getAdminExchangeRules(): Promise<GetExchangeRulesResponse> {
+  const fallback: GetExchangeRulesResponse = { rules: [], accounts: [], total: 0 }
+  return request<GetExchangeRulesResponse | ApiResponse<GetExchangeRulesResponse>>({
+    url: '/api/admin/exchange/rules',
+    method: 'get'
+  }).then((res) => normalizeExchangeRulesResponse(unwrapApiData(res, fallback)))
+}
+
 export function addExchangeRule(data: AddExchangeRuleRequest): Promise<AddExchangeRuleResponse> {
   const fallback: AddExchangeRuleResponse = { rule: {} as ExchangeRule, account: {} as ExchangeRule }
   return request<AddExchangeRuleResponse | ApiResponse<AddExchangeRuleResponse>>({

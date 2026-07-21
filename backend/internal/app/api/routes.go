@@ -146,7 +146,7 @@ func registerAccountRoutes(parent *gin.RouterGroup, accountHandler *handlers.Acc
 		accounts.GET("", accountHandler.ListAccounts)
 		accounts.POST("", accountHandler.CreateAccount)
 		accounts.POST("/sms/send", accountHandler.SendSmsCode)
-		accounts.GET("/sms/status/:phone", accountHandler.GetSmsStatus)
+		accounts.GET("/sms/status/:task_id", accountHandler.GetSmsStatus)
 		accounts.POST("/sms/verify", accountHandler.SmsLogin)
 		accounts.GET("/:id", accountHandler.GetAccount)
 		accounts.PUT("/:id", accountHandler.UpdateAccount)

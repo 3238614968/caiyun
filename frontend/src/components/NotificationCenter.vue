@@ -166,6 +166,7 @@ import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { Bell, CircleCheck, Warning, InfoFilled, Close } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { wsClient, type WsMessage } from '../api/websocket'
+import { useAuthStore } from '../store/auth'
 
 interface Notification {
   id: string
@@ -180,7 +181,16 @@ interface Notification {
 
 const notifications = ref<Notification[]>([])
 const historyVisible = ref(false)
-const STORAGE_KEY = 'caiyun_notifications'
+const authStore = useAuthStore()
+const storageKey = computed(() => `caiyun_notifications:${authStore.user?.id ?? 'anonymous'}`)
+
+const maskPhoneNumbers = (value: string) => value.replace(/1[3-9]\d{9}/g, (phone) => `${phone.slice(0, 3)}****${phone.slice(-4)}`)
+
+const sanitizeNotification = (notification: Notification): Notification => ({
+  ...notification,
+  title: maskPhoneNumbers(notification.title),
+  message: maskPhoneNumbers(notification.message)
+})
 
 // 未读数量
 const unreadCount = computed(() => {
@@ -239,7 +249,7 @@ const viewAllNotifications = () => {
 }
 
 const appendNotification = (notification: Notification) => {
-  notifications.value.unshift(notification)
+  notifications.value.unshift(sanitizeNotification(notification))
   if (notifications.value.length > 50) {
     notifications.value = notifications.value.slice(0, 50)
   }
@@ -256,23 +266,24 @@ const handleExchangeNotification = (msg: WsMessage) => {
   const level: Notification['level'] = completed ? 'info' : skipped ? 'warning' : success ? 'success' : 'error'
   const title = completed ? '抢兑调度完成' : skipped ? '抢兑任务已跳过' : success ? '抢兑成功' : '抢兑失败'
   const detail = completed ? message : `${accountName ? `${accountName} · ` : ''}${productName}：${message}`
+  const safeDetail = maskPhoneNumbers(detail)
 
   appendNotification({
     id: `exchange_${msg.type}_${msg.message_id || Date.now()}_${data.task_id || ''}`,
     level,
     title,
-    message: detail,
+    message: safeDetail,
     timestamp: new Date().toISOString(),
     read: false
   })
 
-  if (level === 'warning') ElMessage.warning(detail)
-  if (level === 'error') ElMessage.error(detail)
+  if (level === 'warning') ElMessage.warning(safeDetail)
+  if (level === 'error') ElMessage.error(safeDetail)
 }
 
 const handleTaskSummary = (msg: WsMessage) => {
   const data = msg.data
-  const phone = data.phone ? ` [${data.phone}]` : ''
+  const phone = data.phone ? ` [${maskPhoneNumbers(String(data.phone))}]` : ''
   const gained = data.total_gained > 0 ? `，获得 ${data.total_gained} 云朵` : ''
 
   appendNotification({
@@ -286,18 +297,24 @@ const handleTaskSummary = (msg: WsMessage) => {
   })
 }
 
-onMounted(() => {
+const loadNotifications = () => {
   try {
-    const cached = localStorage.getItem(STORAGE_KEY)
+    const cached = localStorage.getItem(storageKey.value)
     if (cached) {
       const parsed = JSON.parse(cached)
       if (Array.isArray(parsed)) {
-        notifications.value = parsed.slice(0, 200)
+        notifications.value = parsed.slice(0, 200).map(sanitizeNotification)
+        return
       }
     }
+    notifications.value = []
   } catch (error) {
     console.warn('[通知中心] 读取本地缓存失败', error)
   }
+}
+
+onMounted(() => {
+  loadNotifications()
 
   wsClient.on('task_summary', handleTaskSummary)
   for (const type of ['exchange_result', 'exchange_complete', 'exchange_skipped', 'exchange_completed', 'monthly_exchange_complete']) {
@@ -316,7 +333,7 @@ watch(
   notifications,
   (value) => {
     try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(value.slice(0, 200)))
+      localStorage.setItem(storageKey.value, JSON.stringify(value.slice(0, 200).map(sanitizeNotification)))
     } catch (error) {
       console.warn('[通知中心] 保存本地缓存失败', error)
     }
@@ -324,13 +341,19 @@ watch(
   { deep: true }
 )
 
+watch(storageKey, () => {
+  loadNotifications()
+})
+
 // 暴露方法供外部调用
 defineExpose({
   addNotification: (notification: Omit<Notification, 'id' | 'read'>) => {
     notifications.value.unshift({
-      ...notification,
-      id: Date.now().toString(),
-      read: false
+      ...sanitizeNotification({
+        ...notification,
+        id: Date.now().toString(),
+        read: false
+      }),
     })
     if (notifications.value.length > 50) {
       notifications.value = notifications.value.slice(0, 50)

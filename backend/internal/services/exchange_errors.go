@@ -17,6 +17,9 @@ var (
 	ErrExchangeTaskConflict        = errors.New("exchange task conflict")
 	ErrExchangeTaskAlreadyExists   = errors.New("exchange task already exists")
 	ErrExchangeMonthlyLimitReached = errors.New("exchange monthly limit reached")
+	ErrExchangeExecutionFailed     = errors.New("exchange execution failed")
+	ErrExchangeBatchPartialFailure = errors.New("exchange batch partially failed")
+	ErrExchangeBatchFailed         = errors.New("exchange batch failed")
 )
 
 // exchangeErrorPublicMessage is used in per-item batch results. It must never
@@ -47,6 +50,12 @@ func exchangeErrorPublicMessage(err error) string {
 		return "本月已兑换同系列商品，已触发月度保护"
 	case errors.Is(err, ErrExchangeTaskConflict):
 		return "抢兑任务冲突，请刷新后重试"
+	case errors.Is(err, ErrExchangeExecutionFailed):
+		return "抢兑失败，请查看执行结果"
+	case errors.Is(err, ErrExchangeBatchPartialFailure):
+		return "批量抢兑部分成功，请查看各任务执行结果"
+	case errors.Is(err, ErrExchangeBatchFailed):
+		return "批量抢兑失败，请查看各任务执行结果"
 	default:
 		return "创建失败，请稍后重试"
 	}

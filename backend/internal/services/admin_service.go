@@ -94,9 +94,9 @@ func (s *AdminService) GetAllUsers(page, size int, keywords ...string) ([]*UserL
 }
 
 // GetAllAccounts 获取所有账号
-func (s *AdminService) GetAllAccounts(page, pageSize int) ([]*models.Account, int64, error) {
+func (s *AdminService) GetAllAccounts(page, pageSize int, phones ...string) ([]*models.Account, int64, error) {
 	offset := (page - 1) * pageSize
-	return s.accountRepo.List(offset, pageSize)
+	return s.accountRepo.List(offset, pageSize, phones...)
 }
 
 // SearchAllAccountsRequest 搜索所有账号请求

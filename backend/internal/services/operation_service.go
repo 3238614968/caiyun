@@ -163,31 +163,38 @@ func (s *OperationService) TryStart(ctx context.Context, id string, leaseTimeout
 		leaseTimeout = queue.DefaultVisibilityDelay
 	}
 	now := s.now().UTC()
-	claimed, err := s.repo.WithContext(ctx).TryMarkRunning(strings.TrimSpace(id), now.Add(-leaseTimeout), now)
+	claimed, executionToken, err := s.repo.WithContext(ctx).TryMarkRunning(strings.TrimSpace(id), now.Add(-leaseTimeout), now)
 	if err != nil {
 		return nil, false, err
 	}
 	operation, err := s.Get(ctx, id)
+	if err == nil && claimed && operation.ExecutionToken != executionToken {
+		return nil, false, repository.ErrOperationExecutionLost
+	}
 	return operation, claimed, err
 }
 
-func (s *OperationService) MarkRetryQueued(ctx context.Context, id string, cause error) error {
-	return s.repo.WithContext(ctx).MarkQueued(strings.TrimSpace(id), operationErrorSummary(cause), s.now().UTC())
+func (s *OperationService) MarkRetryQueued(ctx context.Context, id, executionToken string, cause error) error {
+	return s.repo.WithContext(ctx).MarkQueued(strings.TrimSpace(id), strings.TrimSpace(executionToken), operationErrorSummary(cause), s.now().UTC())
 }
 
-func (s *OperationService) MarkSucceeded(ctx context.Context, id string) error {
-	return s.repo.WithContext(ctx).MarkSucceeded(strings.TrimSpace(id), s.now().UTC())
+func (s *OperationService) MarkSucceeded(ctx context.Context, id, executionToken string) error {
+	return s.repo.WithContext(ctx).MarkSucceeded(strings.TrimSpace(id), strings.TrimSpace(executionToken), s.now().UTC())
 }
 
-func (s *OperationService) MarkFailed(ctx context.Context, id string, cause error) error {
-	return s.repo.WithContext(ctx).MarkFailed(strings.TrimSpace(id), operationErrorSummary(cause), s.now().UTC())
+func (s *OperationService) MarkFailed(ctx context.Context, id, executionToken string, cause error) error {
+	return s.repo.WithContext(ctx).MarkFailed(strings.TrimSpace(id), strings.TrimSpace(executionToken), operationErrorSummary(cause), s.now().UTC())
 }
 
-func (s *OperationService) SetResourceID(ctx context.Context, id string, resourceID uint) error {
+func (s *OperationService) RenewLease(ctx context.Context, id, executionToken string) (bool, error) {
+	return s.repo.WithContext(ctx).RenewRunning(strings.TrimSpace(id), strings.TrimSpace(executionToken), s.now().UTC())
+}
+
+func (s *OperationService) SetResourceID(ctx context.Context, id, executionToken string, resourceID uint) error {
 	if resourceID == 0 {
 		return errors.New("resource id is required")
 	}
-	return s.repo.WithContext(ctx).SetResourceID(strings.TrimSpace(id), resourceID)
+	return s.repo.WithContext(ctx).SetResourceID(strings.TrimSpace(id), strings.TrimSpace(executionToken), resourceID)
 }
 
 // RedispatchQueued is the transactional-outbox reconciler. It makes database

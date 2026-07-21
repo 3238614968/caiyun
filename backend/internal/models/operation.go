@@ -30,6 +30,7 @@ type Operation struct {
 	UserID         uint            `gorm:"not null;index;uniqueIndex:uq_operations_user_idempotency" json:"-"`
 	OperationType  string          `gorm:"column:operation_type;size:64;not null;index" json:"type"`
 	Status         OperationStatus `gorm:"size:16;not null;index" json:"status"`
+	ExecutionToken string          `gorm:"size:36;not null;default:''" json:"-"`
 	AccountID      uint            `gorm:"not null;default:0;index" json:"account_id,omitempty"`
 	ResourceID     uint            `gorm:"not null;default:0;index" json:"resource_id,omitempty"`
 	Payload        string          `gorm:"type:longtext;not null" json:"-"`

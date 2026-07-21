@@ -58,14 +58,14 @@ func (h *AdminHandler) GetAllAccounts(c *gin.Context) {
 	if page < 1 {
 		page = 1
 	}
-	// 小于1时默认10，超过100时展示前20
+	// 管理员列表允许每页最多100条；更多数据由前端继续翻页加载。
 	if pageSize < 1 {
 		pageSize = 10
 	} else if pageSize > 100 {
-		pageSize = 20
+		pageSize = 100
 	}
 
-	accounts, total, err := h.adminService.GetAllAccounts(page, pageSize)
+	accounts, total, err := h.adminService.GetAllAccounts(page, pageSize, c.Query("phone"))
 	if err != nil {
 		respondInternalServer(c)
 		return

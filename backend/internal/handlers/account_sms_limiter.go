@@ -1,13 +1,24 @@
 package handlers
 
 import (
+	"errors"
 	"fmt"
 	"log"
+	"os"
 	"regexp"
 	"strings"
 	"sync"
 	"time"
 )
+
+type smsSession struct {
+	UserID    uint      `json:"user_id"`
+	TaskID    string    `json:"task_id"`
+	Phone     string    `json:"phone"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+const smsSessionTTL = 10 * time.Minute
 
 // phoneRe 手机号正则（中国大陆 11 位手机号），包级变量避免每次请求重新编译。
 var phoneRe = regexp.MustCompile(`^1[3-9]\d{9}$`)
@@ -134,13 +145,16 @@ func formatWaitTime(d time.Duration) string {
 }
 
 // checkSMSRateLimit 检查 SMS 发送频率，优先使用 Redis 分布式限流，回退到内存。
-func (h *AccountHandler) checkSMSRateLimit(phone string) (allowed bool, waitTime string) {
+func (h *AccountHandler) checkSMSRateLimit(userID uint, phone string) (allowed bool, waitTime string) {
+	key := fmt.Sprintf("sms_rate:%d:%s", userID, phone)
 	if h.redisCache != nil {
-		key := fmt.Sprintf("sms_rate:%s", phone)
 		ok, _, ttl, err := h.redisCache.RateLimitCheck(key, 1, 5*time.Minute)
 		if err != nil {
-			log.Printf("[checkSMSRateLimit] Redis 限流失败，回退内存: %v", err)
-			ok2, msg := h.smsRateLimiter.Allow(phone)
+			log.Printf("[checkSMSRateLimit] Redis 限流失败: %v", err)
+			if smsRateLimitFailClosed() {
+				return false, "稍后重试"
+			}
+			ok2, msg := h.smsRateLimiter.Allow(fmt.Sprintf("%d:%s", userID, phone))
 			return ok2, msg
 		}
 		if ok {
@@ -148,18 +162,60 @@ func (h *AccountHandler) checkSMSRateLimit(phone string) (allowed bool, waitTime
 		}
 		return false, formatWaitTime(ttl)
 	}
-	return h.smsRateLimiter.Allow(phone)
+	if smsRateLimitFailClosed() {
+		log.Printf("[checkSMSRateLimit] 生产环境未配置 Redis 限流")
+		return false, "稍后重试"
+	}
+	return h.smsRateLimiter.Allow(fmt.Sprintf("%d:%s", userID, phone))
+}
+
+func smsRateLimitFailClosed() bool {
+	return strings.EqualFold(strings.TrimSpace(os.Getenv("APP_ENV")), "production")
 }
 
 // resetSMSRateLimit 重置 SMS 限流记录（Redis + 内存双清）。
-func (h *AccountHandler) resetSMSRateLimit(phone string) {
-	h.smsRateLimiter.Reset(phone)
+func (h *AccountHandler) resetSMSRateLimit(userID uint, phone string) {
+	h.smsRateLimiter.Reset(fmt.Sprintf("%d:%s", userID, phone))
 	if h.redisCache != nil {
-		key := fmt.Sprintf("sms_rate:%s", phone)
+		key := fmt.Sprintf("sms_rate:%d:%s", userID, phone)
 		if err := h.redisCache.Del(key); err != nil {
 			log.Printf("[resetSMSRateLimit] 清除 Redis 限流失败: %v", err)
 		}
 	}
+}
+
+func smsSessionKey(userID uint, taskID string) string {
+	return fmt.Sprintf("sms_session:%d:%s", userID, taskID)
+}
+
+func (h *AccountHandler) saveSMSSession(userID uint, taskID, phone string) error {
+	if h.redisCache == nil {
+		return errors.New("短信会话存储未配置")
+	}
+	return h.redisCache.Set(smsSessionKey(userID, taskID), smsSession{
+		UserID: userID, TaskID: taskID, Phone: phone, CreatedAt: time.Now(),
+	}, smsSessionTTL)
+}
+
+func (h *AccountHandler) loadSMSSession(userID uint, taskID string) (*smsSession, error) {
+	if h.redisCache == nil {
+		return nil, errors.New("短信会话存储未配置")
+	}
+	var session smsSession
+	if err := h.redisCache.Get(smsSessionKey(userID, taskID), &session); err != nil {
+		return nil, err
+	}
+	if session.UserID != userID || session.TaskID != taskID || !phoneRe.MatchString(session.Phone) {
+		return nil, errors.New("短信会话归属校验失败")
+	}
+	return &session, nil
+}
+
+func (h *AccountHandler) deleteSMSSession(userID uint, taskID string) error {
+	if h.redisCache == nil {
+		return errors.New("短信会话存储未配置")
+	}
+	return h.redisCache.Del(smsSessionKey(userID, taskID))
 }
 
 func normalizeSMSStatusError(errMsg string) (message string, retryable bool) {
@@ -174,10 +230,7 @@ func normalizeSMSStatusError(errMsg string) (message string, retryable bool) {
 	case strings.Contains(errMsg, "请求失败"), strings.Contains(errMsg, "连接"), strings.Contains(errMsg, "超时"):
 		return "短信服务暂时不可用，请重新发送验证码", true
 	default:
-		if errMsg == "" {
-			return "验证码识别失败，请重新发送验证码", true
-		}
-		return errMsg, true
+		return "验证码识别失败，请重新发送验证码", true
 	}
 }
 

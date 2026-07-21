@@ -53,6 +53,15 @@
           width="150"
         />
         <el-table-column
+          v-if="isAdmin"
+          label="所属用户"
+          min-width="120"
+        >
+          <template #default="{ row }">
+            {{ row.user?.username || `用户 #${row.user_id}` }}
+          </template>
+        </el-table-column>
+        <el-table-column
           prop="cloud_count"
           label="云朵数"
           width="100"
@@ -97,6 +106,7 @@
               <el-button
                 type="primary"
                 link
+                :disabled="!canManageAccount(row)"
                 @click="handleEdit(row)"
               >
                 编辑
@@ -104,6 +114,7 @@
               <el-button
                 type="warning"
                 link
+                :disabled="!canManageAccount(row)"
                 :loading="row.executing"
                 @click="handleTriggerTask(row)"
               >
@@ -310,17 +321,21 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted, onUnmounted } from 'vue'
+import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import type { FormInstance, FormRules } from 'element-plus'
 import AccountDetailDialog from '@/components/account/AccountDetailDialog.vue'
 import { operationQueuedMessage } from '@/api/operation'
+import { useAuthStore } from '@/store/auth'
 import {
   getAccounts,
+  getAllAccounts,
   createAccount,
   updateAccount,
   deleteAccount,
+  deleteAdminAccount,
   setAccountStatus,
+  updateAccountStatus,
   triggerAccountTask,
   sendSmsCode,
   smsLogin,
@@ -338,6 +353,8 @@ const formRef = ref<FormInstance>()
 const smsFormRef = ref<FormInstance>()
 const loginMode = ref('ck')
 const isEditMode = ref(false)
+const authStore = useAuthStore()
+const isAdmin = computed(() => authStore.user?.role === 'admin')
 
 // 短信登录相关状态
 const smsSending = ref(false)
@@ -426,6 +443,8 @@ const rules = reactive<FormRules>({
   ]
 })
 
+const canManageAccount = (account: Account) => !isAdmin.value || account.user_id === authStore.user?.id
+
 const sortAccountsByAvailability = (list: Account[]) => {
   const getTime = (value?: string) => {
     const time = value ? new Date(value).getTime() : 0
@@ -447,7 +466,9 @@ const sortAccountsByAvailability = (list: Account[]) => {
 const loadAccounts = async () => {
   loading.value = true
   try {
-    const data = await getAccounts(pagination.page, pagination.pageSize, searchForm.phone)
+    const data = isAdmin.value
+      ? await getAllAccounts(pagination.page, pagination.pageSize, searchForm.phone)
+      : await getAccounts(pagination.page, pagination.pageSize, searchForm.phone)
     accountList.value = sortAccountsByAvailability(data.accounts.map(acc => ({
       ...acc,
       user: { username: acc.user?.username || '' }
@@ -522,7 +543,11 @@ const handleEdit = (row: Account) => {
 // 状态变化
 const handleStatusChange = async (row: Account) => {
   try {
-    await setAccountStatus(row.id, row.is_active)
+    if (isAdmin.value) {
+      await updateAccountStatus(row.id, row.is_active)
+    } else {
+      await setAccountStatus(row.id, row.is_active)
+    }
     accountList.value = sortAccountsByAvailability(accountList.value)
     ElMessage.success('状态更新成功')
   } catch (error) {
@@ -557,7 +582,11 @@ const handleDelete = async (row: Account) => {
       type: 'warning'
     })
 
-    await deleteAccount(row.id)
+    if (isAdmin.value) {
+      await deleteAdminAccount(row.id)
+    } else {
+      await deleteAccount(row.id)
+    }
     ElMessage.success('删除成功')
     loadAccounts()
   } catch (error: any) {

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"time"
@@ -134,6 +135,7 @@ func (w *Worker) startBackground(run func()) {
 	w.wg.Add(1)
 	go func() {
 		defer w.wg.Done()
+		defer w.recoverBackgroundPanic()
 		run()
 	}()
 }
@@ -212,9 +214,33 @@ func (w *Worker) queueListener() {
 			go func(msg *queue.TaskMessage) {
 				defer w.wg.Done()
 				defer func() { <-sem }()
+				defer w.recoverQueueTaskPanic(msg)
 				w.processQueueTask(msg)
 			}(message)
 		}
+	}
+}
+
+func (w *Worker) recoverQueueTaskPanic(message *queue.TaskMessage) {
+	if recovered := recover(); recovered != nil {
+		operationID := ""
+		accountID := uint(0)
+		taskType := ""
+		if message != nil {
+			operationID = message.OperationID
+			accountID = message.AccountID
+			taskType = message.TaskType
+		}
+		err := fmt.Errorf("worker task panic: %v", recovered)
+		log.Printf("Worker 任务 panic，已进入失败处理: operation_id=%s account_id=%d task_type=%s err=%v\n%s",
+			operationID, accountID, taskType, err, debug.Stack())
+		w.handleQueueTaskFailure(message, err)
+	}
+}
+
+func (w *Worker) recoverBackgroundPanic() {
+	if recovered := recover(); recovered != nil {
+		log.Printf("Worker 后台组件 panic，组件已退出: %v\n%s", recovered, debug.Stack())
 	}
 }
 
@@ -363,6 +389,9 @@ func isTerminalOperationError(err error) bool {
 	return errors.Is(err, services.ErrExchangeTaskConflict) ||
 		errors.Is(err, services.ErrExchangeTaskAlreadyExists) ||
 		errors.Is(err, services.ErrExchangeMonthlyLimitReached) ||
+		errors.Is(err, services.ErrExchangeExecutionFailed) ||
+		errors.Is(err, services.ErrExchangeBatchPartialFailure) ||
+		errors.Is(err, services.ErrExchangeBatchFailed) ||
 		errors.Is(err, services.ErrExchangeInvalidInput) ||
 		errors.Is(err, services.ErrExchangeCloudAccountMissing) ||
 		errors.Is(err, services.ErrExchangeRuleNotFound) ||
@@ -443,14 +472,32 @@ func (w *Worker) executeOperation(operation *models.Operation) error {
 			return errors.New("invalid exchange task batch payload")
 		}
 		results := w.exchangeService.BatchExecuteExchangeTasksContext(w.ctx, payload.TaskIDs, operation.UserID)
+		succeeded := 0
 		failed := 0
+		failures := make([]string, 0, len(results))
 		for _, result := range results {
-			if !result.Success {
-				failed++
+			if result.Success {
+				succeeded++
+				continue
+			}
+			failed++
+			message := strings.TrimSpace(result.Message)
+			if message == "" {
+				message = "抢兑失败，请查看执行结果"
+			}
+			if len(failures) < 8 {
+				failures = append(failures, fmt.Sprintf("任务%d：%s", result.TaskID, message))
 			}
 		}
 		if failed > 0 {
-			return fmt.Errorf("%d of %d exchange tasks were rejected", failed, len(results))
+			summary := fmt.Sprintf("批量抢兑结果：成功 %d，失败 %d，共 %d", succeeded, failed, len(results))
+			if len(failures) > 0 {
+				summary += "；失败项：" + strings.Join(failures, "；")
+			}
+			if succeeded > 0 {
+				return fmt.Errorf("%w: %s", services.ErrExchangeBatchPartialFailure, summary)
+			}
+			return fmt.Errorf("%w: %s", services.ErrExchangeBatchFailed, summary)
 		}
 		return nil
 

@@ -114,6 +114,11 @@ func InitCore() (*Core, error) {
 		_ = closeGormDB(db)
 		return nil, fmt.Errorf("Redis 连接失败: 缓存实例为空")
 	}
+	if err := validateDependencyClocks(db, redisCache); err != nil {
+		_ = redisCache.Close()
+		_ = closeGormDB(db)
+		return nil, err
+	}
 
 	repos := Repositories{
 		User:            repository.NewUserRepository(db),
@@ -154,6 +159,42 @@ func InitCore() (*Core, error) {
 		TaskStore:  cache.NewRedisStorage(redisCache, constants.RedisNamespaceTask),
 		Repository: repos,
 	}, nil
+}
+
+func validateDependencyClocks(db *gorm.DB, redisCache *cache.RedisCache) error {
+	maxSkew := GetDurationEnv("CLOCK_SKEW_MAX", 30*time.Second)
+	if maxSkew <= 0 {
+		maxSkew = 30 * time.Second
+	}
+	now := time.Now().UTC()
+
+	var dbNow time.Time
+	if err := db.Raw("SELECT UTC_TIMESTAMP(6)").Scan(&dbNow).Error; err != nil {
+		return fmt.Errorf("数据库时钟校验失败: %w", err)
+	}
+	dbNow = dbNow.UTC()
+	if skew := absoluteDuration(now.Sub(dbNow)); skew > maxSkew {
+		return fmt.Errorf("数据库时钟偏差过大: app=%s db=%s skew=%s max=%s，请先同步主机/MySQL时钟",
+			now.Format(time.RFC3339Nano), dbNow.Format(time.RFC3339Nano), skew, maxSkew)
+	}
+
+	redisNow, err := redisCache.ServerTime()
+	if err != nil {
+		return fmt.Errorf("Redis 时钟校验失败: %w", err)
+	}
+	redisNow = redisNow.UTC()
+	if skew := absoluteDuration(now.Sub(redisNow)); skew > maxSkew {
+		return fmt.Errorf("Redis 时钟偏差过大: app=%s redis=%s skew=%s max=%s，请先同步主机/Redis时钟",
+			now.Format(time.RFC3339Nano), redisNow.Format(time.RFC3339Nano), skew, maxSkew)
+	}
+	return nil
+}
+
+func absoluteDuration(value time.Duration) time.Duration {
+	if value < 0 {
+		return -value
+	}
+	return value
 }
 
 func closeGormDB(db *gorm.DB) error {

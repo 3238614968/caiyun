@@ -27,6 +27,7 @@ x-backend-environment: &backend-environment
   WS_ACK_TIMEOUT: ${WS_ACK_TIMEOUT:-5s}
   WS_MAX_RETRIES: ${WS_MAX_RETRIES:-3}
   TZ: Asia/Shanghai
+  CLOCK_SKEW_MAX: ${CLOCK_SKEW_MAX:-30s}
 
 services:
   mysql:
@@ -46,7 +47,7 @@ services:
       - ./backend/scripts/init_caiyun_database.sql:/docker-entrypoint-initdb.d/001_init_caiyun_database.sql:ro
     networks: [caiyun-network]
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-u", "root", "-p${MYSQL_ROOT_PASSWORD}"]
+      test: ["CMD-SHELL", "MYSQL_PWD=\"$${MYSQL_ROOT_PASSWORD}\" mysqladmin ping -h 127.0.0.1 -u root"]
       interval: 10s
       timeout: 5s
       retries: 10
@@ -61,6 +62,8 @@ services:
     image: redis:7.0
     container_name: caiyun-redis
     restart: unless-stopped
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD is required}
     command: ["redis-server", "--appendonly", "yes", "--requirepass", "${REDIS_PASSWORD:?REDIS_PASSWORD is required}"]
     ports:
       - "127.0.0.1:6379:6379"
@@ -68,7 +71,7 @@ services:
       - redis-data:/data
     networks: [caiyun-network]
     healthcheck:
-      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      test: ["CMD-SHELL", "REDISCLI_AUTH=\"$${REDIS_PASSWORD}\" redis-cli ping"]
       interval: 10s
       timeout: 5s
       retries: 5

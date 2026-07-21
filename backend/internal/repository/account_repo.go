@@ -3,6 +3,7 @@ package repository
 import (
 	"caiyun/internal/models"
 	"context"
+	"strings"
 
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -11,6 +12,24 @@ import (
 type AccountRepository struct {
 	db *gorm.DB
 }
+
+// accountListColumns 是账号列表/统计接口需要的非敏感字段集合。
+// 管理端只读页面不需要解密 auth/token/jwt_token，显式列出字段可以避免
+// 历史凭证损坏时触发 AfterFind 解密错误，导致整个列表或仪表盘返回 500。
+const accountListColumns = `
+accounts.id,
+accounts.user_id,
+accounts.phone,
+accounts.platform,
+accounts.expire_at,
+accounts.cloud_count,
+accounts.remark,
+accounts.is_active,
+accounts.jwt_error_count,
+accounts.created_at,
+accounts.updated_at,
+accounts.deleted_at
+`
 
 func NewAccountRepository(db *gorm.DB) *AccountRepository {
 	return &AccountRepository{db: db}
@@ -61,7 +80,7 @@ func (r *AccountRepository) GetAllActive() ([]*models.Account, error) {
 // SearchAll 搜索所有账号（管理员用）
 func (r *AccountRepository) SearchAll(keyword string, limit int) ([]*models.Account, error) {
 	var accounts []*models.Account
-	query := r.db.Model(&models.Account{})
+	query := r.db.Model(&models.Account{}).Select(accountListColumns)
 
 	if keyword != "" {
 		query = query.Where("phone LIKE ? OR remark LIKE ?", "%"+keyword+"%", "%"+keyword+"%")
@@ -96,6 +115,7 @@ func (r *AccountRepository) TopByCloudCount(limit int) ([]*models.Account, error
 		limit = 20
 	}
 	err := r.db.Model(&models.Account{}).
+		Select(accountListColumns).
 		Preload("User").
 		Order("cloud_count DESC").
 		Limit(limit).
@@ -130,13 +150,18 @@ func (r *AccountRepository) Delete(id uint) error {
 	return r.db.Delete(&models.Account{}, id).Error
 }
 
-// List 列出所有账号（管理员用）
-func (r *AccountRepository) List(offset, limit int) ([]*models.Account, int64, error) {
+// List 列出所有账号（管理员用），可选按手机号模糊筛选。
+func (r *AccountRepository) List(offset, limit int, phones ...string) ([]*models.Account, int64, error) {
 	var accounts []*models.Account
 	var total int64
 
 	// 只查询未删除的账号
-	query := r.db.Model(&models.Account{}).Where("deleted_at IS NULL")
+	query := r.db.Model(&models.Account{}).
+		Select(accountListColumns).
+		Where("accounts.deleted_at IS NULL")
+	if len(phones) > 0 && strings.TrimSpace(phones[0]) != "" {
+		query = query.Where("phone LIKE ?", "%"+strings.TrimSpace(phones[0])+"%")
+	}
 
 	if err := query.Count(&total).Error; err != nil {
 		return nil, 0, err

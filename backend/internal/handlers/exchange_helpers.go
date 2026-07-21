@@ -12,6 +12,8 @@ import (
 	"github.com/robfig/cron/v3"
 )
 
+const maxExchangeScheduleListItems = 100
+
 func normalizeExchangeTime(value, fallback string) (string, error) {
 	value = strings.TrimSpace(value)
 	if value == "" {
@@ -119,6 +121,9 @@ func normalizeTimeList(value any) (string, error) {
 	if len(items) == 0 {
 		return "", nil
 	}
+	if len(items) > maxExchangeScheduleListItems {
+		return "", fmt.Errorf("数量不能超过 %d 项", maxExchangeScheduleListItems)
+	}
 	normalized := make([]string, 0, len(items))
 	for _, item := range items {
 		timeValue, err := normalizeExchangeTime(item, "")
@@ -134,6 +139,9 @@ func normalizeDateList(value any) (string, error) {
 	items := normalizeLooseStringList(value)
 	if len(items) == 0 {
 		return "", nil
+	}
+	if len(items) > maxExchangeScheduleListItems {
+		return "", fmt.Errorf("数量不能超过 %d 项", maxExchangeScheduleListItems)
 	}
 	normalized := make([]string, 0, len(items))
 	for _, item := range items {

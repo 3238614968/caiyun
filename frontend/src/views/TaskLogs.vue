@@ -79,7 +79,11 @@
             prop="account.phone"
             label="手机号"
             width="150"
-          />
+          >
+            <template #default="{ row }">
+              {{ maskPhone(row.account?.phone) }}
+            </template>
+          </el-table-column>
           <el-table-column
             prop="task_type"
             label="任务类型"
@@ -95,8 +99,8 @@
             width="100"
           >
             <template #default="{ row }">
-              <el-tag :type="getStatusType(row.status)">
-                {{ getStatusName(row.status) }}
+              <el-tag :type="getStatusType(getDisplayStatus(row))">
+                {{ getStatusName(getDisplayStatus(row)) }}
               </el-tag>
             </template>
           </el-table-column>
@@ -118,8 +122,17 @@
             min-width="340"
           >
             <template #default="{ row }">
-              <div class="log-message-preview">
-                {{ formatLogMessageForPreview(row) }}
+              <div class="log-result-preview">
+                <el-tag
+                  v-if="isExchangeLog(row)"
+                  :type="getExchangeResultDisplay(row).type"
+                  size="small"
+                >
+                  {{ getExchangeResultDisplay(row).label }}
+                </el-tag>
+                <div class="log-message-preview">
+                  {{ formatLogMessageForPreview(row) }}
+                </div>
               </div>
             </template>
           </el-table-column>
@@ -169,14 +182,14 @@
               <div class="mobile-log-head">
                 <div>
                   <div class="mobile-log-title">
-                    {{ row.account?.phone || '-' }}
+                    {{ maskPhone(row.account?.phone) }}
                   </div>
                   <div class="mobile-log-meta">
                     {{ getTaskTypeName(row.task_type) }}
                   </div>
                 </div>
-                <el-tag :type="getStatusType(row.status)">
-                  {{ getStatusName(row.status) }}
+                <el-tag :type="getStatusType(getDisplayStatus(row))">
+                  {{ getStatusName(getDisplayStatus(row)) }}
                 </el-tag>
               </div>
               <div class="mobile-log-grid">
@@ -229,35 +242,89 @@
     <el-dialog
       v-model="detailVisible"
       title="日志详情"
-      width="600px"
+      width="min(760px, calc(100vw - 24px))"
+      class="task-log-detail-dialog"
     >
-      <el-descriptions
-        :column="1"
-        border
-      >
-        <el-descriptions-item label="手机号">
-          {{ currentLog.account?.phone }}
-        </el-descriptions-item>
-        <el-descriptions-item label="任务类型">
-          {{ getTaskTypeName(currentLog.task_type) }}
-        </el-descriptions-item>
-        <el-descriptions-item label="状态">
-          <el-tag :type="getStatusType(currentLog.status)">
-            {{ getStatusName(currentLog.status) }}
-          </el-tag>
-        </el-descriptions-item>
-        <el-descriptions-item label="获得云朵">
-          {{ currentLog.cloud_gained > 0 ? `+${currentLog.cloud_gained}` : '-' }}
-        </el-descriptions-item>
-        <el-descriptions-item label="执行时间">
-          {{ formatDate(currentLog.created_at) }}
-        </el-descriptions-item>
-        <el-descriptions-item label="执行结果">
-          <div class="log-detail-message">
+      <div class="log-detail-layout">
+        <el-descriptions
+          :column="1"
+          border
+          class="log-detail-summary"
+        >
+          <el-descriptions-item label="手机号">
+            {{ maskPhone(currentLog.account?.phone) }}
+          </el-descriptions-item>
+          <el-descriptions-item label="任务类型">
+            {{ getTaskTypeName(currentLog.task_type) }}
+          </el-descriptions-item>
+          <el-descriptions-item label="状态">
+            <el-tag :type="getStatusType(getDisplayStatus(currentLog))">
+              {{ getStatusName(getDisplayStatus(currentLog)) }}
+            </el-tag>
+          </el-descriptions-item>
+          <el-descriptions-item label="获得云朵">
+            {{ currentLog.cloud_gained > 0 ? `+${currentLog.cloud_gained}` : '-' }}
+          </el-descriptions-item>
+          <el-descriptions-item label="执行耗时">
+            {{ formatExecutionTime(currentLog.execution_time) }}
+          </el-descriptions-item>
+          <el-descriptions-item label="执行时间">
+            {{ formatDate(currentLog.created_at) }}
+          </el-descriptions-item>
+        </el-descriptions>
+
+        <section
+          class="execution-result-card"
+          :class="`is-${getDisplayStatus(currentLog)}`"
+        >
+          <div class="execution-result-header">
+            <div>
+              <div class="execution-result-eyebrow">
+                执行结果
+              </div>
+              <div class="execution-result-title">
+                {{ isExchangeLog(currentLog) ? getExchangeResultDisplay(currentLog).label : getStatusName(getDisplayStatus(currentLog)) }}
+              </div>
+            </div>
+            <el-tag
+              :type="isExchangeLog(currentLog) ? getExchangeResultDisplay(currentLog).type : getStatusType(getDisplayStatus(currentLog))"
+              effect="dark"
+            >
+              {{ getStatusName(getDisplayStatus(currentLog)) }}
+            </el-tag>
+          </div>
+
+          <div
+            v-if="isExchangeLog(currentLog)"
+            class="exchange-result-fields"
+          >
+            <div
+              v-if="getExchangeLogFields(currentLog).product"
+              class="result-field"
+            >
+              <span class="result-field-label">商品</span>
+              <span class="result-field-value">{{ getExchangeLogFields(currentLog).product }}</span>
+            </div>
+            <div
+              v-if="getExchangeLogFields(currentLog).account"
+              class="result-field"
+            >
+              <span class="result-field-label">兑换账号</span>
+              <span class="result-field-value">{{ getExchangeLogFields(currentLog).account }}</span>
+            </div>
+            <div class="result-field result-field-message">
+              <span class="result-field-label">结果说明</span>
+              <span class="result-field-value">{{ getExchangeLogFields(currentLog).result }}</span>
+            </div>
+          </div>
+          <div
+            v-else
+            class="log-detail-message"
+          >
             {{ formatLogMessageForDetail(currentLog) }}
           </div>
-        </el-descriptions-item>
-      </el-descriptions>
+        </section>
+      </div>
     </el-dialog>
   </div>
 </template>
@@ -267,6 +334,7 @@ import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { getTaskLogs, type TaskLog } from '../api/task'
 import { getTaskTypeName, taskTypeOptions } from '../utils/task-types'
+import { formatExchangeResult } from '@/utils/exchange-result'
 
 const loading = ref(false)
 const detailVisible = ref(false)
@@ -374,6 +442,14 @@ const formatDate = (date: string) => {
 const hiddenLogDetailPrefixes = ['http_status=', 'code=', 'result_code=', 'result=', 'desc=', 'sub_msg=', 'trace_id=', 'body=']
 const exchangeTaskTypes = new Set(['exchange'])
 
+const maskPhone = (value?: string) => {
+  const phone = String(value || '').trim()
+  if (!phone) return '-'
+  return phone.replace(/1[3-9]\d{9}/g, matched => `${matched.slice(0, 3)}****${matched.slice(-4)}`)
+}
+
+const maskPhoneNumbers = (value: string) => value.replace(/1[3-9]\d{9}/g, matched => `${matched.slice(0, 3)}****${matched.slice(-4)}`)
+
 type LabeledLogSegment = {
   key: string
   value: string
@@ -438,6 +514,18 @@ const isExchangeLog = (log?: Partial<TaskLog>) => {
   return exchangeTaskTypes.has(`${log?.task_type ?? ''}`.trim())
 }
 
+const getExchangeResultDisplay = (log?: Partial<TaskLog>) => {
+  return formatExchangeResult(log?.message, log?.status)
+}
+
+const getDisplayStatus = (log?: Partial<TaskLog>) => {
+  if (!isExchangeLog(log)) return `${log?.status || ''}`
+  const resultType = getExchangeResultDisplay(log).type
+  if (resultType === 'danger' || resultType === 'warning') return 'failed'
+  if (resultType === 'success') return 'success'
+  return `${log?.status || ''}`
+}
+
 const normalizeExchangeResultText = (value: string, status?: string, detail = false) => {
   let text = normalizeLogText(value)
   if (!text) {
@@ -486,6 +574,23 @@ const normalizeExchangeResultText = (value: string, status?: string, detail = fa
   }
 
   return detail ? text : shortenText(text, 16)
+}
+
+const getExchangeLogFields = (log?: Partial<TaskLog>) => {
+  const segments = parseLabeledLogSegments(log?.message)
+  const resultSource = getLabeledLogValue(segments, '结果') || pickPrimaryLogSegment(segments.map(segment => segment.raw))
+  return {
+    product: maskPhoneNumbers(getLabeledLogValue(segments, '商品')),
+    account: maskPhoneNumbers(getLabeledLogValue(segments, '兑换账号')),
+    result: maskPhoneNumbers(normalizeExchangeResultText(resultSource, getDisplayStatus(log), true))
+  }
+}
+
+const formatExecutionTime = (value?: number) => {
+  const milliseconds = Number(value || 0)
+  if (milliseconds <= 0) return '-'
+  if (milliseconds < 1000) return `${milliseconds} ms`
+  return `${(milliseconds / 1000).toFixed(milliseconds >= 10000 ? 1 : 2)} 秒`
 }
 
 const formatExchangeLogMessage = (log?: Partial<TaskLog>, detail = false) => {
@@ -575,11 +680,11 @@ const formatLogMessage = (log?: Partial<TaskLog>, detail = false) => {
 }
 
 const formatLogMessageForPreview = (log?: Partial<TaskLog>) => {
-  return formatLogMessage(log, false)
+  return maskPhoneNumbers(formatLogMessage(log, false))
 }
 
 const formatLogMessageForDetail = (log?: Partial<TaskLog>) => {
-  return formatLogMessage(log, true)
+  return maskPhoneNumbers(formatLogMessage(log, true))
 }
 
 onMounted(() => {
@@ -656,7 +761,10 @@ onUnmounted(() => {
 .mobile-log-value.multiline { line-height: 1.6; }
 .mobile-log-actions { margin-top: 14px; display: flex; }
 .mobile-log-actions :deep(.el-button) { width: 100%; margin: 0; }
+.log-result-preview { display: flex; align-items: flex-start; gap: 9px; min-width: 0; }
+.log-result-preview :deep(.el-tag) { flex: 0 0 auto; margin-top: 2px; }
 .log-message-preview {
+  min-width: 0;
   white-space: pre-line;
   line-height: 1.7;
   color: #334155;
@@ -674,7 +782,32 @@ onUnmounted(() => {
   word-break: break-word;
 }
 
+.log-detail-layout { display: grid; gap: 16px; }
+.log-detail-summary :deep(.el-descriptions__label) { width: 112px; white-space: nowrap; color: #475569; font-weight: 700; }
+.log-detail-summary :deep(.el-descriptions__content) { color: #1e293b; word-break: break-word; }
+.execution-result-card { position: relative; overflow: hidden; padding: 18px; border: 1px solid #dbeafe; border-radius: 16px; background: linear-gradient(145deg, #f8fafc, #eff6ff); }
+.execution-result-card::before { content: ''; position: absolute; inset: 0 auto 0 0; width: 4px; background: #60a5fa; }
+.execution-result-card.is-success::before { background: #22c55e; }
+.execution-result-card.is-failed::before { background: #ef4444; }
+.execution-result-card.is-pending::before { background: #f59e0b; }
+.execution-result-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; margin-bottom: 16px; }
+.execution-result-eyebrow { color: #64748b; font-size: 12px; font-weight: 700; letter-spacing: .08em; }
+.execution-result-title { margin-top: 4px; color: #0f172a; font-size: 19px; font-weight: 800; }
+.exchange-result-fields { display: grid; gap: 10px; }
+.result-field { display: grid; grid-template-columns: 88px minmax(0, 1fr); gap: 12px; align-items: start; }
+.result-field-label { color: #64748b; font-size: 13px; font-weight: 700; white-space: nowrap; }
+.result-field-value { color: #334155; font-size: 14px; line-height: 1.65; word-break: break-word; overflow-wrap: anywhere; }
+.result-field-message { padding-top: 10px; border-top: 1px dashed #cbd5e1; }
+:global(.task-log-detail-dialog) { max-width: calc(100vw - 24px); }
+
 @media (max-width: 768px) {
+  .task-logs-container { padding: 10px; }
   .logs-shell :deep(.el-table) { display: none; }
+  .log-detail-summary :deep(.el-descriptions__label) { width: 88px; }
+  .result-field { grid-template-columns: 1fr; gap: 4px; }
+  .execution-result-card { padding: 15px; }
+}
+@media (max-width: 480px) {
+  .execution-result-header { align-items: stretch; flex-direction: column; }
 }
 </style>

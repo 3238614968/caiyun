@@ -24,6 +24,22 @@ func TestCreateExchangeTaskRequestNormalizedExchangeRuleIDs(t *testing.T) {
 	}
 }
 
+func TestValidateExchangeTaskBatchSize(t *testing.T) {
+	tooManyRules := make([]uint, maxExchangeTaskBatchItems+1)
+	if err := validateExchangeTaskBatchSize(CreateExchangeTaskRequest{
+		ExchangeRuleIDs: tooManyRules,
+	}); err == nil {
+		t.Fatal("validateExchangeTaskBatchSize() error = nil, want batch size validation error")
+	}
+
+	tooManyAccounts := make([]uint, maxExchangeTaskBatchItems+1)
+	if err := validateExchangeTaskBatchSize(CreateExchangeTaskRequest{
+		AccountIDs: tooManyAccounts,
+	}); err == nil {
+		t.Fatal("validateExchangeTaskBatchSize() error = nil, want account batch size validation error")
+	}
+}
+
 func TestImmediateExchangeRequestNormalizedExchangeRuleID(t *testing.T) {
 	t.Run("prefer new exchange_rule_id", func(t *testing.T) {
 		req := ImmediateExchangeRequest{ExchangeRuleID: 8, ExchangeAccountID: 2}

@@ -363,9 +363,34 @@ func (s *AccountService) DeleteAccountContext(ctx context.Context, userID, accou
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	accountRepo := s.accountRepositoryWithContext(ctx)
+	if s.unitOfWork != nil {
+		return s.unitOfWork.WithinTransaction(ctx, func(repos repository.TransactionRepositories) error {
+			account, err := repos.Account.FindByID(accountID)
+			if err != nil || account.UserID != userID {
+				return ErrAccountNotFound
+			}
 
-	// 获取账号
+			cleanup := []func(uint) error{
+				repos.Operation.DeleteByAccountID,
+				repos.ExchangeRecord.DeleteByAccountID,
+				repos.ExchangeTask.DeleteByAccountID,
+				repos.ExchangeAccount.DeleteByAccountID,
+				repos.TaskLog.DeleteByAccountID,
+				repos.CloudStats.DeleteByAccountID,
+				repos.Account.AnonymizeAndDeleteByID,
+			}
+			for _, erase := range cleanup {
+				if err := erase(accountID); err != nil {
+					return err
+				}
+			}
+			return nil
+		})
+	}
+
+	// 保留面向测试替身和离线工具的兼容路径；生产仓库由构造函数自动
+	// 绑定 UnitOfWork，走上面的完整清理事务。
+	accountRepo := s.accountRepositoryWithContext(ctx)
 	account, err := accountRepo.FindByID(accountID)
 	if err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
@@ -373,12 +398,9 @@ func (s *AccountService) DeleteAccountContext(ctx context.Context, userID, accou
 		}
 		return ErrAccountNotFound
 	}
-
-	// 检查权限
 	if account.UserID != userID {
 		return ErrAccountNotFound
 	}
-
 	return accountRepo.Delete(accountID)
 }
 

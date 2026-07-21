@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -83,6 +84,155 @@ func TestAuthServiceLoginLockFallsBackToStore(t *testing.T) {
 	_, err := service.Login(&LoginRequest{Username: "ghost", Password: "bad-password"})
 	if !errors.Is(err, ErrAccountLocked) {
 		t.Fatalf("Login() after lock error = %v, want ErrAccountLocked", err)
+	}
+}
+
+type unavailableLoginProtectionRepo struct {
+	*fakeAuthUserRepo
+}
+
+func (r *unavailableLoginProtectionRepo) GetLoginFailure(string) (int, time.Time, error) {
+	return 0, time.Time{}, errors.New("login protection store unavailable")
+}
+
+func TestAuthServiceLoginFailsClosedWhenProtectionStoreUnavailable(t *testing.T) {
+	repo := &unavailableLoginProtectionRepo{fakeAuthUserRepo: newFakeAuthUserRepo()}
+	service := NewAuthServiceWithPasswordResetCache(
+		repo,
+		jwt.NewManager("0123456789abcdef0123456789abcdef"),
+		time.Hour,
+		PasswordResetConfig{},
+		nil,
+	)
+
+	_, err := service.Login(&LoginRequest{Username: "alice", Password: "bad-password"})
+	if !errors.Is(err, ErrLoginProtectionUnavailable) {
+		t.Fatalf("Login() error = %v, want ErrLoginProtectionUnavailable", err)
+	}
+}
+
+type fakePasswordResetCache struct {
+	mu     sync.Mutex
+	values map[string]interface{}
+}
+
+func newFakePasswordResetCache() *fakePasswordResetCache {
+	return &fakePasswordResetCache{values: make(map[string]interface{})}
+}
+
+func (c *fakePasswordResetCache) Set(key string, value interface{}, _ time.Duration) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.values[key] = value
+	return nil
+}
+
+func (c *fakePasswordResetCache) Get(key string, dest interface{}) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	value, ok := c.values[key]
+	if !ok {
+		return errors.New("not found")
+	}
+	switch source := value.(type) {
+	case *passwordResetCodeRecord:
+		target, ok := dest.(*passwordResetCodeRecord)
+		if !ok {
+			return errors.New("invalid destination")
+		}
+		*target = *source
+	case string:
+		target, ok := dest.(*string)
+		if !ok {
+			return errors.New("invalid destination")
+		}
+		*target = source
+	default:
+		return errors.New("unsupported value")
+	}
+	return nil
+}
+
+func (c *fakePasswordResetCache) Del(keys ...string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, key := range keys {
+		delete(c.values, key)
+	}
+	return nil
+}
+
+func (c *fakePasswordResetCache) SetNX(key string, value interface{}, _ time.Duration) (bool, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if _, exists := c.values[key]; exists {
+		return false, nil
+	}
+	c.values[key] = value
+	return true, nil
+}
+
+func (c *fakePasswordResetCache) DelIfValue(key, value string) (bool, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	current, ok := c.values[key].(string)
+	if !ok || current != value {
+		return false, nil
+	}
+	delete(c.values, key)
+	return true, nil
+}
+
+func TestAuthServiceResetPasswordCodeIsOneTime(t *testing.T) {
+	repo := &sessionAuthUserRepo{
+		user: &models.User{
+			ID:       1,
+			Username: "alice",
+			Email:    "alice@example.com",
+		},
+	}
+	cache := newFakePasswordResetCache()
+	codeHash, err := bcrypt.GenerateFromPassword([]byte("123456"), bcrypt.MinCost)
+	if err != nil {
+		t.Fatalf("GenerateFromPassword() error = %v", err)
+	}
+	cache.values[passwordResetKey("alice", "alice@example.com")] = &passwordResetCodeRecord{
+		CodeHash:  string(codeHash),
+		ExpiresAt: time.Now().Add(time.Minute),
+		SentAt:    time.Now(),
+	}
+	service := NewAuthServiceWithPasswordResetCache(
+		repo,
+		jwt.NewManager("0123456789abcdef0123456789abcdef"),
+		time.Hour,
+		PasswordResetConfig{MaxAttempts: 5},
+		cache,
+	)
+
+	results := make(chan error, 2)
+	var wg sync.WaitGroup
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			results <- service.ResetPasswordWithCode("alice", "alice@example.com", "123456", "NewPassword-9")
+		}()
+	}
+	wg.Wait()
+	close(results)
+
+	var successCount int
+	for resetErr := range results {
+		if resetErr == nil {
+			successCount++
+			continue
+		}
+		if !errors.Is(resetErr, ErrInvalidResetCode) {
+			t.Fatalf("ResetPasswordWithCode() error = %v, want ErrInvalidResetCode for the second use", resetErr)
+		}
+	}
+	if successCount != 1 {
+		t.Fatalf("ResetPasswordWithCode() success count = %d, want 1", successCount)
 	}
 }
 

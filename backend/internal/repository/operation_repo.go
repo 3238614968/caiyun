@@ -7,8 +7,11 @@ import (
 
 	"caiyun/internal/models"
 
+	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
+
+var ErrOperationExecutionLost = errors.New("operation execution ownership lost")
 
 // OperationRepository persists asynchronous commands and owns all lifecycle
 // compare-and-swap transitions used to make at-least-once queue delivery safe.
@@ -69,60 +72,78 @@ func (r *OperationRepository) GetByIDForUser(id string, userID uint) (*models.Op
 }
 
 // TryMarkRunning claims a queued command or a running command whose Worker
-// lease has expired. RowsAffected is the sole ownership decision.
-func (r *OperationRepository) TryMarkRunning(id string, staleBefore, now time.Time) (bool, error) {
+// lease has expired. The returned fencing token must accompany every later
+// lifecycle write from that Worker.
+func (r *OperationRepository) TryMarkRunning(id string, staleBefore, now time.Time) (bool, string, error) {
+	executionToken := uuid.NewString()
 	result := r.db.Model(&models.Operation{}).
 		Where("id = ? AND (status = ? OR (status = ? AND updated_at < ?))",
 			id, models.OperationQueued, models.OperationRunning, staleBefore).
 		Updates(map[string]interface{}{
-			"status":        models.OperationRunning,
-			"started_at":    now,
-			"completed_at":  nil,
-			"error_summary": "",
-			"attempt_count": gorm.Expr("attempt_count + 1"),
-			"updated_at":    now,
-		})
-	return result.RowsAffected == 1, result.Error
-}
-
-func (r *OperationRepository) MarkQueued(id, errorSummary string, now time.Time) error {
-	return r.db.Model(&models.Operation{}).
-		Where("id = ? AND status = ?", id, models.OperationRunning).
-		Updates(map[string]interface{}{
-			"status":        models.OperationQueued,
-			"queued_at":     now,
-			"error_summary": errorSummary,
-			"updated_at":    now,
-		}).Error
-}
-
-func (r *OperationRepository) MarkSucceeded(id string, now time.Time) error {
-	result := r.db.Model(&models.Operation{}).
-		Where("id = ? AND status = ?", id, models.OperationRunning).
-		Updates(map[string]interface{}{
-			"status":        models.OperationSucceeded,
-			"completed_at":  now,
-			"error_summary": "",
-			"updated_at":    now,
+			"status":          models.OperationRunning,
+			"execution_token": executionToken,
+			"started_at":      now,
+			"completed_at":    nil,
+			"error_summary":   "",
+			"attempt_count":   gorm.Expr("attempt_count + 1"),
+			"updated_at":      now,
 		})
 	if result.Error != nil {
-		return result.Error
+		return false, "", result.Error
 	}
 	if result.RowsAffected != 1 {
-		return errors.New("operation is no longer running")
+		return false, "", nil
 	}
-	return nil
+	return true, executionToken, nil
 }
 
-func (r *OperationRepository) MarkFailed(id, errorSummary string, now time.Time) error {
-	return r.db.Model(&models.Operation{}).
-		Where("id = ? AND status IN ?", id, []models.OperationStatus{models.OperationQueued, models.OperationRunning}).
+func (r *OperationRepository) MarkQueued(id, executionToken, errorSummary string, now time.Time) error {
+	result := r.db.Model(&models.Operation{}).
+		Where("id = ? AND status = ? AND execution_token = ?", id, models.OperationRunning, executionToken).
 		Updates(map[string]interface{}{
-			"status":        models.OperationFailed,
-			"completed_at":  now,
-			"error_summary": errorSummary,
-			"updated_at":    now,
-		}).Error
+			"status":          models.OperationQueued,
+			"execution_token": "",
+			"queued_at":       now,
+			"error_summary":   errorSummary,
+			"updated_at":      now,
+		})
+	return operationOwnershipResult(result)
+}
+
+func (r *OperationRepository) MarkSucceeded(id, executionToken string, now time.Time) error {
+	result := r.db.Model(&models.Operation{}).
+		Where("id = ? AND status = ? AND execution_token = ?", id, models.OperationRunning, executionToken).
+		Updates(map[string]interface{}{
+			"status":          models.OperationSucceeded,
+			"execution_token": "",
+			"completed_at":    now,
+			"error_summary":   "",
+			"updated_at":      now,
+		})
+	return operationOwnershipResult(result)
+}
+
+func (r *OperationRepository) MarkFailed(id, executionToken, errorSummary string, now time.Time) error {
+	result := r.db.Model(&models.Operation{}).
+		Where("id = ? AND status = ? AND execution_token = ?", id, models.OperationRunning, executionToken).
+		Updates(map[string]interface{}{
+			"status":          models.OperationFailed,
+			"execution_token": "",
+			"completed_at":    now,
+			"error_summary":   errorSummary,
+			"updated_at":      now,
+		})
+	return operationOwnershipResult(result)
+}
+
+func (r *OperationRepository) RenewRunning(id, executionToken string, now time.Time) (bool, error) {
+	result := r.db.Model(&models.Operation{}).
+		Where("id = ? AND status = ? AND execution_token = ?", id, models.OperationRunning, executionToken).
+		Update("updated_at", now)
+	if result.Error != nil {
+		return false, result.Error
+	}
+	return result.RowsAffected == 1, nil
 }
 
 func (r *OperationRepository) Cancel(id string, userID uint, now time.Time) (bool, error) {
@@ -136,10 +157,12 @@ func (r *OperationRepository) Cancel(id string, userID uint, now time.Time) (boo
 	return result.RowsAffected == 1, result.Error
 }
 
-func (r *OperationRepository) SetResourceID(id string, resourceID uint) error {
-	return r.db.Model(&models.Operation{}).
-		Where("id = ? AND resource_id = 0", id).
-		Update("resource_id", resourceID).Error
+func (r *OperationRepository) SetResourceID(id, executionToken string, resourceID uint) error {
+	result := r.db.Model(&models.Operation{}).
+		Where("id = ? AND status = ? AND execution_token = ? AND resource_id = 0",
+			id, models.OperationRunning, executionToken).
+		Update("resource_id", resourceID)
+	return operationOwnershipResult(result)
 }
 
 func (r *OperationRepository) ListQueuedBefore(before time.Time, limit int) ([]*models.Operation, error) {
@@ -150,4 +173,14 @@ func (r *OperationRepository) ListQueuedBefore(before time.Time, limit int) ([]*
 	err := r.db.Where("status = ? AND updated_at <= ?", models.OperationQueued, before).
 		Order("updated_at ASC").Limit(limit).Find(&operations).Error
 	return operations, err
+}
+
+func operationOwnershipResult(result *gorm.DB) error {
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected != 1 {
+		return ErrOperationExecutionLost
+	}
+	return nil
 }

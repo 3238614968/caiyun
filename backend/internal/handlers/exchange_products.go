@@ -23,9 +23,13 @@ func (h *ExchangeHandler) SearchProducts(c *gin.Context) {
 	keyword := c.Query("keyword")
 	limitStr := c.DefaultQuery("limit", "20")
 
-	limit, _ := strconv.Atoi(limitStr)
-	if limit <= 0 {
-		limit = 20
+	limit, err := strconv.Atoi(limitStr)
+	if err != nil || limit < 1 {
+		respondError(c, http.StatusBadRequest, "limit 参数必须为正整数")
+		return
+	}
+	if limit > 100 {
+		limit = 100
 	}
 
 	products, err := h.exchangeService.SearchProductsContext(c.Request.Context(), keyword, limit)

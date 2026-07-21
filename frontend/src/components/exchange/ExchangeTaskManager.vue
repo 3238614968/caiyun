@@ -81,6 +81,8 @@
     <ExchangeTaskList
       :is-mobile="isMobile"
       :tasks="tasks"
+      :is-admin="isAdmin"
+      :current-user-id="currentUserId"
       @execute="$emit('execute', $event)"
       @delete="$emit('delete', $event)"
     />
@@ -97,6 +99,8 @@ const filters = defineModel<ExchangeTaskFilterState>('filters', { required: true
 defineProps<{
   isMobile: boolean
   tasks: ExchangeTask[]
+  isAdmin?: boolean
+  currentUserId?: number
 }>()
 
 defineEmits<{
@@ -118,11 +122,15 @@ const resetFilters = () => {
 </script>
 
 <style scoped>
-.task-manager { display:flex; flex-direction:column; gap:14px; }
-.task-filter-panel { display:grid; grid-template-columns: minmax(220px, 1.2fr) repeat(4, minmax(120px, .7fr)); gap:10px; padding:10px 12px; border-radius:14px; background:rgba(255,255,255,.72); border:1px solid rgba(226,232,240,.86); }
+.task-manager { min-width:0; display:flex; flex-direction:column; gap:14px; }
+.task-filter-panel { min-width:0; display:grid; grid-template-columns:minmax(220px, 1.4fr) repeat(4, minmax(150px, 1fr)); gap:10px; padding:10px 12px; border-radius:14px; background:rgba(255,255,255,.72); border:1px solid rgba(226,232,240,.86); }
+.task-filter-panel > * { width:100%; min-width:0; }
 .task-toolbar { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:10px 12px; border-radius:14px; background:rgba(239,246,255,.68); border:1px solid rgba(191,219,254,.76); }
 .task-toolbar-tip { color:#64748b; font-size:13px; }
 .task-toolbar-actions { display:flex; align-items:center; gap:10px; }
+@media (max-width: 1280px) {
+  .task-filter-panel { grid-template-columns:repeat(2, minmax(0, 1fr)); }
+}
 @media (max-width: 900px) {
   .task-filter-panel { grid-template-columns:1fr; }
 }

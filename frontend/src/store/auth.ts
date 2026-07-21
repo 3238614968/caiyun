@@ -13,6 +13,7 @@ export const useAuthStore = defineStore('auth', () => {
   const isAuthenticated = computed(() => !!user.value)
 
   function clearAuthState(options: { sessionChecked?: boolean } = {}) {
+    const previousUserID = user.value?.id
     token.value = ''
     user.value = null
     if (typeof options.sessionChecked === 'boolean') {
@@ -20,6 +21,10 @@ export const useAuthStore = defineStore('auth', () => {
     }
     // 兼容历史版本：启动或退出时清理旧 localStorage 用户缓存。
     localStorage.removeItem('user')
+    localStorage.removeItem('caiyun_notifications')
+    if (previousUserID) {
+      localStorage.removeItem(`caiyun_notifications:${previousUserID}`)
+    }
   }
 
   async function login(username: string, password: string) {

@@ -82,6 +82,7 @@ type ExchangeTask struct {
 	SkipReason            string     `gorm:"size:255;default:''" json:"skip_reason,omitempty"`                                  // 最近一次调度跳过原因
 	AttemptedCount        int        `gorm:"default:0" json:"attempted_count"`                                                  // 已抢兑次数
 	Status                string     `gorm:"size:20;default:'pending'" json:"status"`                                           // 任务状态
+	ExecutionToken        string     `gorm:"size:36;not null;default:''" json:"-"`                                              // 当前执行租约令牌，防止陈旧 Worker 回写
 	LastAttemptAt         *time.Time `json:"last_attempt_at,omitempty"`                                                         // 最后抢兑时间
 	LastResult            string     `gorm:"type:text" json:"last_result"`                                                      // 最后抢兑结果
 	NextRunAt             *time.Time `gorm:"-" json:"next_run_at,omitempty"`                                                    // 下一次预计触发时间（只读预览）

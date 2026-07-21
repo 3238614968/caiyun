@@ -59,6 +59,8 @@
             v-model:filters="taskFilters"
             :is-mobile="isMobile"
             :tasks="filteredTasks"
+            :is-admin="isAdmin"
+            :current-user-id="authStore.user?.id || 0"
             @add="showCreateTaskDialog()"
             @execute="executeTask"
             @delete="deleteTask"
@@ -134,10 +136,12 @@ import {
   searchProducts,
   getProductCategories,
   getExchangeRules,
+  getAdminExchangeRules,
   addExchangeRule,
   updateExchangeRule,
   deleteExchangeRule,
   getExchangeTasks,
+  getAdminExchangeTasks,
   deleteExchangeTask,
   executeExchangeTask,
   getExchangeConfigPublic,
@@ -300,7 +304,7 @@ const loadCategories = async () => {
 
 const loadAccounts = async () => {
   try {
-    const res = await getExchangeRules()
+    const res = isAdmin.value ? await getAdminExchangeRules() : await getExchangeRules()
     accounts.value = res.rules || res.accounts || []
   } catch (error: any) {
     ElMessage.error('加载抢兑规则失败：' + error.message)
@@ -309,7 +313,7 @@ const loadAccounts = async () => {
 
 const loadTasks = async () => {
   try {
-    const res = await getExchangeTasks()
+    const res = isAdmin.value ? await getAdminExchangeTasks() : await getExchangeTasks()
     tasks.value = res.tasks || []
   } catch (error: any) {
     ElMessage.error('加载任务失败：' + error.message)

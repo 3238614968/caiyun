@@ -171,6 +171,30 @@ func TestExecuteExchangeOnceSuccessWithMockServer(t *testing.T) {
 	}
 }
 
+func TestExecuteExchangeOnceRejectsNestedBusinessFailure(t *testing.T) {
+	tests := []string{
+		`{"msg":"success","result":{"code":401,"message":"账号已失效，请重新登录"}}`,
+		`{"msg":"success","result":"账号已失效，请重新登录"}`,
+	}
+	for _, body := range tests {
+		server := newMockExchangeTLSServer(t, http.StatusOK, body)
+		t.Setenv("CAIYUN_SMS_API_BASE_URL", server.URL)
+		t.Setenv("CAIYUN_SMS_INSECURE_SKIP_VERIFY", "true")
+
+		result := executeExchangeOnce("prize-1", &exchangeAuthContext{jwtToken: "jwt-token"}, newMockExchangeSession(t, server))
+		server.Close()
+		if result.success {
+			t.Fatalf("executeExchangeOnce() success = true, want false, result=%+v", result)
+		}
+		if !strings.Contains(result.message, "账号已失效") {
+			t.Fatalf("executeExchangeOnce() message = %q, want account invalid detail", result.message)
+		}
+		if !result.stop {
+			t.Fatalf("executeExchangeOnce() stop = false, want true for invalid account")
+		}
+	}
+}
+
 func TestExecuteExchangeOncePropagatesSlideErrors(t *testing.T) {
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {

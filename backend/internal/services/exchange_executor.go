@@ -204,8 +204,17 @@ func executeExchangeOnceContext(ctx context.Context, prizeID string, authCtx *ex
 	if msg == "" {
 		return exchangeAttemptResult{success: false, message: fmt.Sprintf("响应格式错误 | http_status=%d | body=%s", statusCode, summarizeExchangeBody(body)), execTime: execTime}
 	}
-	if msg != "success" {
+	if !strings.EqualFold(strings.TrimSpace(msg), "success") {
 		message := buildExchangeFailureMessage(statusCode, response, body)
+		return exchangeAttemptResult{success: false, message: message, execTime: execTime, stop: isExchangeTerminalMessage(message)}
+	}
+	if businessFailure := exchangeResponseBusinessFailure(response); businessFailure != "" {
+		normalizedResponse := make(map[string]interface{}, len(response)+1)
+		for key, value := range response {
+			normalizedResponse[key] = value
+		}
+		normalizedResponse["msg"] = businessFailure
+		message := buildExchangeFailureMessage(statusCode, normalizedResponse, body)
 		return exchangeAttemptResult{success: false, message: message, execTime: execTime, stop: isExchangeTerminalMessage(message)}
 	}
 
@@ -584,11 +593,75 @@ func isExchangeTerminalMessage(message string) bool {
 		"本月已兑换",
 		"已下架",
 		"账号未登录",
+		"账号失效",
+		"账号已失效",
+		"登录失效",
+		"重新登录",
+		"认证为空",
+		"JWT token 为空",
 		"Token 无效",
 		"账号被封禁",
 	}
 	for _, pattern := range terminalPatterns {
 		if strings.Contains(message, pattern) {
+			return true
+		}
+	}
+	return false
+}
+
+func exchangeResponseBusinessFailure(response map[string]interface{}) string {
+	if len(response) == 0 {
+		return ""
+	}
+
+	if candidate := firstResponseValue(response, "desc", "resultMsg", "subMsg", "sub_msg", "error", "errorMsg"); isExchangeFailureText(candidate) {
+		return candidate
+	}
+
+	if result, ok := response["result"].(map[string]interface{}); ok {
+		candidate := firstResponseValue(result, "msg", "message", "desc", "resultMsg", "subMsg", "sub_msg", "error", "errorMsg")
+		if isExchangeFailureText(candidate) {
+			return candidate
+		}
+		if code := firstResponseValue(result, "code", "resultCode", "result_code"); !isExchangeSuccessCode(code) {
+			if candidate != "" && !strings.EqualFold(candidate, "success") {
+				return candidate
+			}
+			return "兑换失败（业务码 " + code + "）"
+		}
+	} else if resultText := stringifyExchangeValue(response["result"]); isExchangeFailureText(resultText) {
+		return resultText
+	}
+
+	if code := firstResponseValue(response, "code", "resultCode", "result_code"); !isExchangeSuccessCode(code) {
+		return "兑换失败（业务码 " + code + "）"
+	}
+	return ""
+}
+
+func isExchangeSuccessCode(code string) bool {
+	switch strings.ToLower(strings.TrimSpace(code)) {
+	case "", "0", "0000", "000000", "200", "success", "ok", "true":
+		return true
+	default:
+		return false
+	}
+}
+
+func isExchangeFailureText(message string) bool {
+	text := strings.ToLower(strings.TrimSpace(message))
+	if text == "" || text == "success" || text == "ok" {
+		return false
+	}
+	patterns := []string{
+		"失败", "错误", "异常", "失效", "未登录", "重新登录", "认证为空",
+		"token 无效", "jwt token 为空", "不足", "已兑完", "已耗尽", "已兑换",
+		"已领取", "不在线", "已下架", "未开始", "频繁", "繁忙", "限流", "风控",
+		"failed", "error", "invalid", "expired", "unauthorized",
+	}
+	for _, pattern := range patterns {
+		if strings.Contains(text, pattern) {
 			return true
 		}
 	}

@@ -292,8 +292,17 @@ func (h *AccountHandler) SetAccountStatus(c *gin.Context) {
 		return
 	}
 
-	// 获取状态
-	isActive := c.Query("is_active") == "true"
+	// 获取状态，拒绝缺失或无法解析的值，避免默认把拼写错误当成停用。
+	rawStatus := c.Query("is_active")
+	if rawStatus == "" {
+		respondError(c, http.StatusBadRequest, "is_active 参数不能为空")
+		return
+	}
+	isActive, err := strconv.ParseBool(rawStatus)
+	if err != nil {
+		respondError(c, http.StatusBadRequest, "is_active 参数必须为 true 或 false")
+		return
+	}
 
 	if err := h.accountService.SetAccountStatusContext(c.Request.Context(), userID, uint(accountID), isActive); err != nil {
 		if err == services.ErrAccountNotFound {

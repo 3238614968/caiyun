@@ -8,8 +8,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
+
+var ErrExchangeTaskExecutionLost = errors.New("exchange task execution ownership lost")
 
 // ExchangeTaskRepository 抢兑任务数据访问层
 type ExchangeTaskRepository struct {
@@ -310,31 +313,41 @@ func (r *ExchangeTaskRepository) UpdateSkipReason(id uint, reason string) error 
 		}).Error
 }
 
-// TryMarkRunning 以条件更新方式抢占任务执行权。
-// 多 Worker/多副本同时拿到同一任务时，只有一个实例能从 pending 更新为 running。
-func (r *ExchangeTaskRepository) TryMarkRunning(id uint) (bool, error) {
+// TryMarkRunning 以条件更新方式抢占任务执行权，并返回本次执行的 fencing token。
+// 后续状态写入必须携带该 token，避免超时回收后的陈旧 Worker 覆盖新执行结果。
+func (r *ExchangeTaskRepository) TryMarkRunning(id uint) (bool, string, error) {
+	executionToken := uuid.NewString()
 	result := r.db.Model(&models.ExchangeTask{}).
 		Where("id = ? AND status = ?", id, string(models.ExchangeTaskPending)).
 		Updates(map[string]interface{}{
-			"status":     string(models.ExchangeTaskRunning),
-			"updated_at": time.Now(),
+			"status":          string(models.ExchangeTaskRunning),
+			"execution_token": executionToken,
+			"updated_at":      time.Now(),
 		})
 	if result.Error != nil {
-		return false, result.Error
+		return false, "", result.Error
 	}
-	return result.RowsAffected > 0, nil
+	if result.RowsAffected == 0 {
+		return false, "", nil
+	}
+	return true, executionToken, nil
 }
 
 // ReleaseRunning returns a task claimed by the current execution to pending.
-// The conditional update prevents cancellation cleanup from overwriting a
-// terminal state concurrently persisted by another execution path.
-func (r *ExchangeTaskRepository) ReleaseRunning(id uint, reason string) (bool, error) {
+// The fencing token prevents cancellation cleanup from overwriting a newer
+// execution that reclaimed the same task.
+func (r *ExchangeTaskRepository) ReleaseRunning(id uint, executionToken, reason string) (bool, error) {
+	executionToken = strings.TrimSpace(executionToken)
+	if executionToken == "" {
+		return false, ErrExchangeTaskExecutionLost
+	}
 	result := r.db.Model(&models.ExchangeTask{}).
-		Where("id = ? AND status = ?", id, string(models.ExchangeTaskRunning)).
+		Where("id = ? AND status = ? AND execution_token = ?", id, string(models.ExchangeTaskRunning), executionToken).
 		Updates(map[string]interface{}{
-			"status":      string(models.ExchangeTaskPending),
-			"last_result": strings.TrimSpace(reason),
-			"updated_at":  time.Now(),
+			"status":          string(models.ExchangeTaskPending),
+			"execution_token": "",
+			"last_result":     strings.TrimSpace(reason),
+			"updated_at":      time.Now(),
 		})
 	if result.Error != nil {
 		return false, result.Error
@@ -353,14 +366,71 @@ func (r *ExchangeTaskRepository) RecoverStaleRunning(timeout time.Duration) (int
 	result := r.db.Model(&models.ExchangeTask{}).
 		Where("status = ? AND updated_at < ?", string(models.ExchangeTaskRunning), cutoff).
 		Updates(map[string]interface{}{
-			"status":      string(models.ExchangeTaskPending),
-			"last_result": message,
-			"updated_at":  time.Now(),
+			"status":          string(models.ExchangeTaskPending),
+			"execution_token": "",
+			"last_result":     message,
+			"updated_at":      time.Now(),
 		})
 	if result.Error != nil {
 		return 0, result.Error
 	}
 	return result.RowsAffected, nil
+}
+
+// RecoverStaleRunningTask conditionally recovers one stale running task.
+// The updated_at predicate prevents a fresh heartbeat from being overwritten.
+func (r *ExchangeTaskRepository) RecoverStaleRunningTask(id uint, staleBefore time.Time, reason string) (bool, error) {
+	result := r.db.Model(&models.ExchangeTask{}).
+		Where("id = ? AND status = ? AND updated_at < ?", id, string(models.ExchangeTaskRunning), staleBefore).
+		Updates(map[string]interface{}{
+			"status":          string(models.ExchangeTaskPending),
+			"execution_token": "",
+			"last_result":     strings.TrimSpace(reason),
+			"updated_at":      time.Now(),
+		})
+	if result.Error != nil {
+		return false, result.Error
+	}
+	return result.RowsAffected > 0, nil
+}
+
+// RenewRunning refreshes a running task lease owned by executionToken.
+func (r *ExchangeTaskRepository) RenewRunning(id uint, executionToken string, now time.Time) (bool, error) {
+	executionToken = strings.TrimSpace(executionToken)
+	if executionToken == "" {
+		return false, ErrExchangeTaskExecutionLost
+	}
+	result := r.db.Model(&models.ExchangeTask{}).
+		Where("id = ? AND status = ? AND execution_token = ?", id, string(models.ExchangeTaskRunning), executionToken).
+		Update("updated_at", now)
+	if result.Error != nil {
+		return false, result.Error
+	}
+	return result.RowsAffected > 0, nil
+}
+
+// TransitionRunning finishes or releases the execution only when the caller
+// still owns the current fencing token.
+func (r *ExchangeTaskRepository) TransitionRunning(id uint, executionToken, status, resultMessage string) error {
+	executionToken = strings.TrimSpace(executionToken)
+	if executionToken == "" {
+		return ErrExchangeTaskExecutionLost
+	}
+	result := r.db.Model(&models.ExchangeTask{}).
+		Where("id = ? AND status = ? AND execution_token = ?", id, string(models.ExchangeTaskRunning), executionToken).
+		Updates(map[string]interface{}{
+			"status":          status,
+			"execution_token": "",
+			"last_result":     strings.TrimSpace(resultMessage),
+			"updated_at":      time.Now(),
+		})
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected != 1 {
+		return ErrExchangeTaskExecutionLost
+	}
+	return nil
 }
 
 // UpdateAttempt 更新任务抢兑尝试
@@ -380,6 +450,49 @@ func (r *ExchangeTaskRepository) UpdateAttempt(id uint, success bool, result str
 	return r.db.Model(&models.ExchangeTask{}).
 		Where("id = ?", id).
 		Updates(updates).Error
+}
+
+// UpdateAttemptOwned records an attempt only for the current execution owner.
+func (r *ExchangeTaskRepository) UpdateAttemptOwned(id uint, executionToken string, success bool, result string) error {
+	executionToken = strings.TrimSpace(executionToken)
+	if executionToken == "" {
+		return ErrExchangeTaskExecutionLost
+	}
+	updates := map[string]interface{}{
+		"attempted_count": gorm.Expr("attempted_count + 1"),
+		"last_result":     result,
+		"last_attempt_at": time.Now(),
+	}
+	if success {
+		updates["success_count"] = gorm.Expr("success_count + 1")
+	} else {
+		updates["fail_count"] = gorm.Expr("fail_count + 1")
+	}
+
+	write := r.db.Model(&models.ExchangeTask{}).
+		Where("id = ? AND status = ? AND execution_token = ?", id, string(models.ExchangeTaskRunning), executionToken).
+		Updates(updates)
+	if write.Error != nil {
+		return write.Error
+	}
+	if write.RowsAffected != 1 {
+		return ErrExchangeTaskExecutionLost
+	}
+	return nil
+}
+
+// UpdatePendingLastResult annotates a task only while it is still pending.
+func (r *ExchangeTaskRepository) UpdatePendingLastResult(id uint, result string) (bool, error) {
+	write := r.db.Model(&models.ExchangeTask{}).
+		Where("id = ? AND status = ?", id, string(models.ExchangeTaskPending)).
+		Updates(map[string]interface{}{
+			"last_result": strings.TrimSpace(result),
+			"updated_at":  time.Now(),
+		})
+	if write.Error != nil {
+		return false, write.Error
+	}
+	return write.RowsAffected == 1, nil
 }
 
 // ActiveTaskExists checks for an active task and preserves database errors.

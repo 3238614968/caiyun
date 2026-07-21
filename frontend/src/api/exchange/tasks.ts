@@ -25,6 +25,18 @@ export function getExchangeTasks(params?: GetExchangeTasksParams): Promise<GetEx
   })
 }
 
+export function getAdminExchangeTasks(params?: GetExchangeTasksParams): Promise<GetExchangeTasksResponse> {
+  const fallback: GetExchangeTasksResponse = { tasks: [], total: 0 }
+  return request<GetExchangeTasksResponse | ApiResponse<GetExchangeTasksResponse>>({
+    url: '/api/admin/exchange/tasks',
+    method: 'get',
+    params
+  }).then((res) => {
+    const payload = unwrapApiData(res, fallback)
+    return { ...payload, tasks: (payload.tasks || []).map(normalizeExchangeTask) }
+  })
+}
+
 export function updateExchangeTask(id: number, data: UpdateExchangeTaskRequest): Promise<SuccessResponse> {
   return request<SuccessResponse>({
     url: `/api/exchange/tasks/${id}`,

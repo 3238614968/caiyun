@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"encoding/xml"
 	"fmt"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -110,11 +112,13 @@ func GenerateAuth(token, phone, platform string) string {
 // RefreshToken 刷新 Token，返回新的 token 字符串
 func (a *Auth) RefreshToken(token, phone string) (string, error) {
 	// 构建 XML 请求体
-	xmlBody := fmt.Sprintf(
-		`<?xml version="1.0" encoding="utf-8"?><root><token>%s</token><account>%s</account><clienttype>656</clienttype></root>`,
-		token,
-		phone,
-	)
+	var xmlBuilder strings.Builder
+	xmlBuilder.WriteString(`<?xml version="1.0" encoding="utf-8"?><root><token>`)
+	_ = xml.EscapeText(&xmlBuilder, []byte(token))
+	xmlBuilder.WriteString(`</token><account>`)
+	_ = xml.EscapeText(&xmlBuilder, []byte(phone))
+	xmlBuilder.WriteString(`</account><clienttype>656</clienttype></root>`)
+	xmlBody := xmlBuilder.String()
 
 	// 设置请求头
 	headers := map[string]string{
@@ -150,7 +154,7 @@ func (a *Auth) RefreshToken(token, phone string) (string, error) {
 	// 从 XML 响应中提取 token
 	newToken := utils.ExtractXMLTag(responseBody, "token")
 	if newToken == "" {
-		return "", fmt.Errorf("从响应中提取 token 失败，响应内容: %s", responseBody)
+		return "", fmt.Errorf("从响应中提取 token 失败")
 	}
 
 	return newToken, nil
@@ -169,9 +173,15 @@ type SpecTokenResp struct {
 // QuerySpecToken 获取 SpecToken
 func (a *Auth) QuerySpecToken(phone string) (*SpecTokenResp, error) {
 	// 构建 SpecToken 请求 URL
-	url := fmt.Sprintf("https://caiyun.feixin.10086.cn/portal/auth/querySpecToken.action?phone=%s", phone)
+	queryURL, err := url.Parse("https://caiyun.feixin.10086.cn/portal/auth/querySpecToken.action")
+	if err != nil {
+		return nil, fmt.Errorf("构建 SpecToken 请求失败: %w", err)
+	}
+	query := queryURL.Query()
+	query.Set("phone", phone)
+	queryURL.RawQuery = query.Encode()
 
-	resp, err := a.client.Get(url, nil)
+	resp, err := a.client.Get(queryURL.String(), nil)
 	if err != nil {
 		return nil, fmt.Errorf("获取 SpecToken 请求失败: %w", err)
 	}
@@ -202,13 +212,17 @@ type LoginMailResp struct {
 // LoginMail 邮箱登录
 func (a *Auth) LoginMail(ssoToken string) (*LoginMailResp, error) {
 	// 构建 XML 请求体
-	xmlBody := fmt.Sprintf(`<?xml version="1.0" encoding="utf-8"?>
+	var xmlBuilder strings.Builder
+	xmlBuilder.WriteString(`<?xml version="1.0" encoding="utf-8"?>
       <object>
        <string name="clientId">10804</string> 
        <string name="version">9</string>
        <string name="loginType">7</string> 
-       <string name="token">%s</string> 
-      </object>`, ssoToken)
+       <string name="token">`)
+	_ = xml.EscapeText(&xmlBuilder, []byte(ssoToken))
+	xmlBuilder.WriteString(`</string>
+      </object>`)
+	xmlBody := xmlBuilder.String()
 
 	headers := map[string]string{
 		"Content-Type": "application/xml",
@@ -251,7 +265,7 @@ func (a *Auth) LoginMail(ssoToken string) (*LoginMailResp, error) {
 	// 降级为 XML 解析
 	result.Code = utils.ExtractXMLTag(body, "code")
 	if result.Code == "" {
-		return nil, fmt.Errorf("解析响应失败，未找到 code 字段: %s", body)
+		return nil, fmt.Errorf("解析响应失败，未找到 code 字段")
 	}
 
 	result.Summary = utils.ExtractXMLTag(body, "summary")
