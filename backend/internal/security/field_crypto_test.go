@@ -1,10 +1,28 @@
 package security
 
 import (
+	"crypto/aes"
+	"crypto/cipher"
+	"encoding/base64"
 	"os"
 	"strings"
 	"testing"
 )
+
+func legacyNoAADCiphertext(t *testing.T, plaintext string) string {
+	t.Helper()
+	block, err := aes.NewCipher([]byte("0123456789abcdef0123456789abcdef"))
+	if err != nil {
+		t.Fatalf("aes.NewCipher() error = %v", err)
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		t.Fatalf("cipher.NewGCM() error = %v", err)
+	}
+	nonce := make([]byte, gcm.NonceSize())
+	payload := append(nonce, gcm.Seal(nil, nonce, []byte(plaintext), nil)...)
+	return "enc:v1:" + base64.RawStdEncoding.EncodeToString(payload)
+}
 
 func TestEncryptDecryptString(t *testing.T) {
 	t.Setenv("APP_ENV", "development")
@@ -234,6 +252,31 @@ func TestProductionDecryptRejectsPlaintextButMigrationCanReadIt(t *testing.T) {
 	plain, err := DecryptStringAllowPlaintext("legacy-plaintext")
 	if err != nil || plain != "legacy-plaintext" {
 		t.Fatalf("DecryptStringAllowPlaintext() = %q, %v", plain, err)
+	}
+}
+
+func TestDecryptStringRequiresExplicitCutoverFlagForLegacyNoAAD(t *testing.T) {
+	t.Setenv("APP_ENV", "production")
+	t.Setenv("DATA_ENCRYPTION_KEY", "")
+	t.Setenv("DATA_ENCRYPTION_KEYS", "v1=0123456789abcdef0123456789abcdef")
+	t.Setenv("DATA_ENCRYPTION_CURRENT_VERSION", "v1")
+	t.Setenv("FIELD_CRYPTO_ALLOW_LEGACY_NO_AAD", "false")
+	legacy := legacyNoAADCiphertext(t, "legacy-secret")
+	ResetFieldCryptoForTests()
+
+	if _, err := DecryptString(legacy); err == nil || !strings.Contains(err.Error(), "FIELD_CRYPTO_ALLOW_LEGACY_NO_AAD") {
+		t.Fatalf("DecryptString() error = %v, want explicit legacy cutover guidance", err)
+	}
+	plaintext, err := DecryptStringAllowPlaintext(legacy)
+	if err != nil || plaintext != "legacy-secret" {
+		t.Fatalf("DecryptStringAllowPlaintext() = %q, %v", plaintext, err)
+	}
+
+	t.Setenv("FIELD_CRYPTO_ALLOW_LEGACY_NO_AAD", "true")
+	ResetFieldCryptoForTests()
+	plaintext, err = DecryptString(legacy)
+	if err != nil || plaintext != "legacy-secret" {
+		t.Fatalf("DecryptString() with cutover flag = %q, %v", plaintext, err)
 	}
 }
 

@@ -44,13 +44,15 @@ docker compose up -d mysql redis
 docker compose ps mysql redis
 ```
 
-直接使用本机 MySQL 时，可先初始化数据库：
+直接使用本机 MySQL 时，先创建空数据库和最小权限账户；业务表结构由版本化迁移创建：
 
 ```bash
-mysql -uroot -p < backend/scripts/init_caiyun_database.sql
+mysql -uroot -p -e "CREATE DATABASE IF NOT EXISTS caiyun CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
+cd backend
+go run ./cmd/caiyun migrate
 ```
 
-实际业务表结构仍由迁移命令创建和升级。
+后续升级同样只运行 `caiyun migrate`，不再使用已移除的初始化 SQL 副本。
 
 ## 4. 创建后端开发配置
 

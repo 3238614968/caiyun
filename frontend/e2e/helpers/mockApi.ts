@@ -232,7 +232,39 @@ function installMockWebSocket(page: Page) {
       }
     }
 
+    class MockEventSource extends EventTarget {
+      static CONNECTING = 0
+      static OPEN = 1
+      static CLOSED = 2
+
+      url: string
+      withCredentials: boolean
+      readyState = MockEventSource.CONNECTING
+      onopen: ((event: Event) => void) | null = null
+      onmessage: ((event: MessageEvent) => void) | null = null
+      onerror: ((event: Event) => void) | null = null
+
+      constructor(url: string, init?: EventSourceInit) {
+        super()
+        this.url = url
+        this.withCredentials = Boolean(init?.withCredentials)
+        window.setTimeout(() => {
+          this.readyState = MockEventSource.OPEN
+          const event = new Event('open')
+          this.onopen?.(event)
+          this.dispatchEvent(event)
+        }, 0)
+      }
+
+      close() {
+        this.readyState = MockEventSource.CLOSED
+      }
+    }
+
+    // Default production transport is SSE. Mock it as well as WebSocket so
+    // browser unit scenarios never make accidental requests to Vite's proxy.
     window.WebSocket = MockWebSocket as unknown as typeof WebSocket
+    window.EventSource = MockEventSource as unknown as typeof EventSource
   })
 }
 
@@ -293,23 +325,23 @@ export async function mockBackend(page: Page) {
   ]
   let isAuthenticated = false
 
-  await page.route('**/api/**', async (route) => {
+  await page.route('**/api/v1/**', async (route) => {
     const request = route.request()
     const url = new URL(request.url())
     const method = request.method()
     const path = url.pathname
 
-    if (method === 'POST' && path === '/api/auth/login') {
+    if (method === 'POST' && path === '/api/v1/auth/login') {
       isAuthenticated = true
       return fulfill(route, loginResponse())
     }
 
-    if (method === 'POST' && path === '/api/auth/logout') {
+    if (method === 'POST' && path === '/api/v1/auth/logout') {
       isAuthenticated = false
       return fulfill(route, ok({ message: 'ok' }))
     }
 
-    if (method === 'GET' && path === '/api/auth/me') {
+    if (method === 'GET' && path === '/api/v1/auth/me') {
       const cookie = request.headers().cookie || ''
       if (!isAuthenticated && !cookie.includes('e2e_auth=1')) {
         return fulfill(route, { code: 401, message: '未提供认证信息' }, 401)
@@ -317,7 +349,7 @@ export async function mockBackend(page: Page) {
       return fulfill(route, ok(adminUser))
     }
 
-    const operationCancelMatch = path.match(/^\/api\/operations\/([^/]+)\/cancel$/)
+    const operationCancelMatch = path.match(/^\/api\/v1\/operations\/([^/]+)\/cancel$/)
     if (operationCancelMatch && method === 'POST') {
       const operation = operations.get(operationCancelMatch[1]) || {}
       const canceled = { ...operation, status: 'canceled', completed_at: now, updated_at: now }
@@ -325,7 +357,7 @@ export async function mockBackend(page: Page) {
       return fulfill(route, ok(canceled))
     }
 
-    const operationMatch = path.match(/^\/api\/operations\/([^/]+)$/)
+    const operationMatch = path.match(/^\/api\/v1\/operations\/([^/]+)$/)
     if (operationMatch && method === 'GET') {
       const operation = operations.get(operationMatch[1])
       return operation
@@ -333,15 +365,15 @@ export async function mockBackend(page: Page) {
         : fulfill(route, { code: 404, message: '操作不存在' }, 404)
     }
 
-    if (method === 'GET' && path === '/api/stats/dashboard') {
+    if (method === 'GET' && path === '/api/v1/stats/dashboard') {
       return fulfill(route, ok(dashboardData))
     }
 
-    if (method === 'GET' && path === '/api/admin/dashboard') {
+    if (method === 'GET' && path === '/api/v1/admin/dashboard') {
       return fulfill(route, ok(adminDashboardData))
     }
 
-    if (method === 'GET' && path === '/api/stats/trend') {
+    if (method === 'GET' && path === '/api/v1/stats/trend') {
       const days = Number(url.searchParams.get('days') || 7)
       const base = dashboardData.trend_data
       const trend = Array.from({ length: days }, (_, index) => {
@@ -357,16 +389,16 @@ export async function mockBackend(page: Page) {
       return fulfill(route, ok({ trend_data: trend }))
     }
 
-    if (method === 'GET' && path === '/api/announcements') {
+    if (method === 'GET' && path === '/api/v1/announcements') {
       const published = announcements.filter(item => item.is_published)
       return fulfill(route, ok({ announcements: published, total: published.length }))
     }
 
-    if (method === 'GET' && path === '/api/announcements/popup') {
+    if (method === 'GET' && path === '/api/v1/announcements/popup') {
       return fulfill(route, ok({ has_popup: false, announcements: [] }))
     }
 
-    if (method === 'GET' && path === '/api/accounts') {
+    if (method === 'GET' && path === '/api/v1/accounts') {
       const phone = url.searchParams.get('phone') || ''
       const pageSize = Number(url.searchParams.get('page_size') || 10)
       const filtered = phone
@@ -375,7 +407,7 @@ export async function mockBackend(page: Page) {
       return fulfill(route, ok({ accounts: filtered, total: filtered.length, page: 1, page_size: pageSize }))
     }
 
-    if (method === 'POST' && path === '/api/accounts') {
+    if (method === 'POST' && path === '/api/v1/accounts') {
       const body = request.postDataJSON()
       const created = {
         ...baseAccount,
@@ -391,7 +423,7 @@ export async function mockBackend(page: Page) {
       return fulfill(route, ok(created))
     }
 
-    const accountIDMatch = path.match(/^\/api\/accounts\/(\d+)$/)
+    const accountIDMatch = path.match(/^\/api\/v1\/accounts\/(\d+)$/)
     if (accountIDMatch && method === 'PUT') {
       const accountID = Number(accountIDMatch[1])
       const body = request.postDataJSON()
@@ -416,7 +448,7 @@ export async function mockBackend(page: Page) {
       return fulfill(route, ok({ message: 'deleted' }))
     }
 
-    const accountStatusMatch = path.match(/^\/api\/accounts\/(\d+)\/status$/)
+    const accountStatusMatch = path.match(/^\/api\/v1\/accounts\/(\d+)\/status$/)
     if (accountStatusMatch && method === 'PUT') {
       const accountID = Number(accountStatusMatch[1])
       const account = accounts.find(item => item.id === accountID)
@@ -426,7 +458,7 @@ export async function mockBackend(page: Page) {
       return fulfill(route, ok({ message: 'ok' }))
     }
 
-    const accountTriggerMatch = path.match(/^\/api\/accounts\/(\d+)\/trigger$/)
+    const accountTriggerMatch = path.match(/^\/api\/v1\/accounts\/(\d+)\/trigger$/)
     if (accountTriggerMatch && method === 'POST') {
       return fulfill(
         route,
@@ -435,11 +467,11 @@ export async function mockBackend(page: Page) {
       )
     }
 
-    if (method === 'POST' && path === '/api/tasks/trigger-all') {
+    if (method === 'POST' && path === '/api/v1/tasks/trigger-all') {
       return fulfill(route, ok(queueOperation('all_account_tasks')), 202)
     }
 
-    if (method === 'GET' && path === '/api/tasks/logs') {
+    if (method === 'GET' && path === '/api/v1/tasks/logs') {
       const taskType = url.searchParams.get('task_type') || ''
       const status = url.searchParams.get('status') || ''
       const logs = [
@@ -471,11 +503,11 @@ export async function mockBackend(page: Page) {
       return fulfill(route, ok({ task_logs: logs, total: logs.length, page: 1, page_size: 20 }))
     }
 
-    if (method === 'GET' && path === '/api/tasks/status') {
+    if (method === 'GET' && path === '/api/v1/tasks/status') {
       return fulfill(route, ok({ tasks: [] }))
     }
 
-    if (method === 'GET' && path === '/api/tasks/queue-status') {
+    if (method === 'GET' && path === '/api/v1/tasks/queue-status') {
       return fulfill(route, ok({
         backend: 'streams',
         backend_meta: {
@@ -498,7 +530,7 @@ export async function mockBackend(page: Page) {
       }))
     }
 
-    if (method === 'GET' && path === '/api/products/search') {
+    if (method === 'GET' && path === '/api/v1/products/search') {
       const keyword = url.searchParams.get('keyword') || ''
       const filtered = keyword
         ? products.filter(product => product.prize_name.includes(keyword))
@@ -506,26 +538,26 @@ export async function mockBackend(page: Page) {
       return fulfill(route, ok({ products: filtered, total: filtered.length }))
     }
 
-    if (method === 'GET' && path === '/api/products/categories') {
+    if (method === 'GET' && path === '/api/v1/products/categories') {
       return fulfill(route, ok({ categories: ['月卡', '流量'] }))
     }
 
-    if (method === 'POST' && path === '/api/products/update') {
+    if (method === 'POST' && path === '/api/v1/products/update') {
       return fulfill(route, ok({ account_id: request.postDataJSON()?.account_id || 0, count: products.length }))
     }
 
-    if (method === 'GET' && path === '/api/exchange/config') {
+    if (method === 'GET' && path === '/api/v1/exchange/config') {
       return fulfill(route, ok({
         enabled: exchangeConfig.enabled,
         immediate_exchange_enabled: exchangeConfig.immediate_exchange_enabled
       }))
     }
 
-    if (method === 'GET' && (path === '/api/exchange/accounts' || path === '/api/exchange/rules')) {
+    if (method === 'GET' && (path === '/api/v1/exchange/accounts' || path === '/api/v1/exchange/rules' || path === '/api/v1/admin/exchange/rules')) {
       return fulfill(route, ok({ accounts: exchangeAccounts, total: exchangeAccounts.length }))
     }
 
-    if (method === 'POST' && (path === '/api/exchange/accounts' || path === '/api/exchange/rules')) {
+    if (method === 'POST' && (path === '/api/v1/exchange/accounts' || path === '/api/v1/exchange/rules')) {
       const body = request.postDataJSON()
       const cloudAccount = accounts.find(item => item.id === Number(body.account_id)) || accounts[0]
       const created = {
@@ -544,7 +576,7 @@ export async function mockBackend(page: Page) {
       return fulfill(route, ok({ account: created }))
     }
 
-    const exchangeAccountMatch = path.match(/^\/api\/exchange\/(?:accounts|rules)\/(\d+)$/)
+    const exchangeAccountMatch = path.match(/^\/api\/v1\/exchange\/(?:accounts|rules)\/(\d+)$/)
     if (exchangeAccountMatch && method === 'PUT') {
       const account = exchangeAccounts.find(item => item.id === Number(exchangeAccountMatch[1]))
       if (account) {
@@ -561,7 +593,7 @@ export async function mockBackend(page: Page) {
       return fulfill(route, ok({ message: 'deleted' }))
     }
 
-    if (method === 'POST' && path === '/api/exchange/immediate') {
+    if (method === 'POST' && path === '/api/v1/exchange/immediate') {
       const body = request.postDataJSON()
       return fulfill(route, ok(queueOperation('immediate_exchange', {
         account_id: Number(body.account_id || 0),
@@ -569,15 +601,15 @@ export async function mockBackend(page: Page) {
       })), 202)
     }
 
-    if (method === 'POST' && path === '/api/exchange/tasks/batch-execute') {
+    if (method === 'POST' && path === '/api/v1/exchange/tasks/batch-execute') {
       return fulfill(route, ok(queueOperation('batch_exchange_tasks')), 202)
     }
 
-    if (method === 'GET' && path === '/api/exchange/tasks') {
+    if (method === 'GET' && (path === '/api/v1/exchange/tasks' || path === '/api/v1/admin/exchange/tasks')) {
       return fulfill(route, ok({ tasks: exchangeTasks, total: exchangeTasks.length }))
     }
 
-    if (method === 'GET' && path === '/api/exchange/records') {
+    if (method === 'GET' && path === '/api/v1/exchange/records') {
       const productName = url.searchParams.get('product_name') || ''
       const status = url.searchParams.get('status') || ''
       const accountID = Number(url.searchParams.get('account_id') || 0)
@@ -597,7 +629,7 @@ export async function mockBackend(page: Page) {
       }))
     }
 
-    if (method === 'GET' && path === '/api/exchange/records/export') {
+    if (method === 'GET' && path === '/api/v1/exchange/records/export') {
       return route.fulfill({
         status: 200,
         contentType: 'text/csv;charset=utf-8',
@@ -605,7 +637,7 @@ export async function mockBackend(page: Page) {
       })
     }
 
-    if (method === 'POST' && path === '/api/exchange/tasks') {
+    if (method === 'POST' && path === '/api/v1/exchange/tasks') {
       const body = request.postDataJSON()
       const product = products.find(item => item.id === Number(body.product_id)) || baseProduct
       const explicitRuleIDs = Array.isArray(body.exchange_account_ids) ? body.exchange_account_ids.map(Number) : []
@@ -659,18 +691,18 @@ export async function mockBackend(page: Page) {
       return fulfill(route, ok({ task: createdTasks[0], tasks: createdTasks, created: createdTasks.length, errors: [] }))
     }
 
-    if (path.match(/^\/api\/exchange\/tasks\/(\d+)$/) && method === 'DELETE') {
+    if (path.match(/^\/api\/v1\/exchange\/tasks\/(\d+)$/) && method === 'DELETE') {
       return fulfill(route, ok({ message: 'deleted' }))
     }
 
-    const exchangeTaskExecuteMatch = path.match(/^\/api\/exchange\/tasks\/(\d+)\/execute$/)
+    const exchangeTaskExecuteMatch = path.match(/^\/api\/v1\/exchange\/tasks\/(\d+)\/execute$/)
     if (exchangeTaskExecuteMatch && method === 'POST') {
       return fulfill(route, ok(queueOperation('exchange_task', {
         resource_id: Number(exchangeTaskExecuteMatch[1])
       })), 202)
     }
 
-    if (method === 'GET' && path === '/api/admin/accounts/summaries') {
+    if (method === 'GET' && path === '/api/v1/admin/accounts/summaries') {
       return fulfill(route, ok({
         summaries: accounts.map(account => ({
           ...account,
@@ -687,11 +719,19 @@ export async function mockBackend(page: Page) {
       }))
     }
 
-    if (method === 'GET' && path === '/api/admin/accounts') {
+    if (method === 'GET' && path === '/api/v1/admin/accounts') {
       return fulfill(route, ok({ accounts, total: accounts.length, page: 1, page_size: 1000 }))
     }
 
-    if (method === 'GET' && path === '/api/admin/accounts/search') {
+    const adminAccountMatch = path.match(/^\/api\/v1\/admin\/accounts\/(\d+)$/)
+    if (adminAccountMatch && method === 'DELETE') {
+      const accountID = Number(adminAccountMatch[1])
+      const index = accounts.findIndex(account => account.id === accountID)
+      if (index >= 0) accounts.splice(index, 1)
+      return fulfill(route, ok({ message: 'deleted' }))
+    }
+
+    if (method === 'GET' && path === '/api/v1/admin/accounts/search') {
       return fulfill(route, ok({
         accounts: accounts.map(account => ({
           id: account.id,
@@ -704,11 +744,11 @@ export async function mockBackend(page: Page) {
       }))
     }
 
-    if (method === 'GET' && path === '/api/admin/task-configs') {
+    if (method === 'GET' && path === '/api/v1/admin/task-configs') {
       return fulfill(route, ok({ configs: taskConfigs }))
     }
 
-    const taskConfigMatch = path.match(/^\/api\/admin\/task-configs\/([^/]+)$/)
+    const taskConfigMatch = path.match(/^\/api\/v1\/admin\/task-configs\/([^/]+)$/)
     if (taskConfigMatch && method === 'PUT') {
       const body = request.postDataJSON()
       const config = taskConfigs.find(item => item.task_type === taskConfigMatch[1])
@@ -719,24 +759,24 @@ export async function mockBackend(page: Page) {
       return fulfill(route, ok({ message: 'updated' }))
     }
 
-    if (method === 'GET' && path === '/api/admin/exchange/config') {
+    if (method === 'GET' && path === '/api/v1/admin/exchange/config') {
       return fulfill(route, ok(exchangeConfig))
     }
 
-    if (method === 'PUT' && path === '/api/admin/exchange/config') {
+    if (method === 'PUT' && path === '/api/v1/admin/exchange/config') {
       Object.assign(exchangeConfig, request.postDataJSON())
       return fulfill(route, ok({ message: 'saved' }))
     }
 
-    if (method === 'POST' && path === '/api/admin/exchange/execute-monthly') {
+    if (method === 'POST' && path === '/api/v1/admin/exchange/execute-monthly') {
       return fulfill(route, ok(queueOperation('monthly_exchange')), 202)
     }
 
-    if (method === 'GET' && path === '/api/admin/users') {
+    if (method === 'GET' && path === '/api/v1/admin/users') {
       return fulfill(route, ok({ users: adminUsers, total: adminUsers.length, page: 1, size: 10 }))
     }
 
-    const adminUserMatch = path.match(/^\/api\/admin\/users\/(\d+)$/)
+    const adminUserMatch = path.match(/^\/api\/v1\/admin\/users\/(\d+)$/)
     if (adminUserMatch && method === 'DELETE') {
       const index = adminUsers.findIndex(user => user.id === Number(adminUserMatch[1]))
       if (index >= 0) {
@@ -745,7 +785,7 @@ export async function mockBackend(page: Page) {
       return fulfill(route, ok({ message: 'deleted' }))
     }
 
-    const adminUserRoleMatch = path.match(/^\/api\/admin\/users\/(\d+)\/role$/)
+    const adminUserRoleMatch = path.match(/^\/api\/v1\/admin\/users\/(\d+)\/role$/)
     if (adminUserRoleMatch && method === 'PUT') {
       const body = request.postDataJSON()
       const user = adminUsers.find(item => item.id === Number(adminUserRoleMatch[1]))
@@ -755,19 +795,19 @@ export async function mockBackend(page: Page) {
       return fulfill(route, ok({ message: 'updated' }))
     }
 
-    if (path.match(/^\/api\/admin\/users\/(\d+)\/password$/) && method === 'PUT') {
+    if (path.match(/^\/api\/v1\/admin\/users\/(\d+)\/password$/) && method === 'PUT') {
       return fulfill(route, ok({ message: 'password reset' }))
     }
 
-    if (method === 'GET' && path === '/api/admin/stats/overview') {
+    if (method === 'GET' && path === '/api/v1/admin/stats/overview') {
       return fulfill(route, ok({ user_count: 1, account_count: accounts.length, total_cloud: 6800, active_tasks: 1 }))
     }
 
-    if (method === 'GET' && path === '/api/admin/announcements') {
+    if (method === 'GET' && path === '/api/v1/admin/announcements') {
       return fulfill(route, ok({ announcements, total: announcements.length }))
     }
 
-    if (method === 'POST' && path === '/api/admin/announcements') {
+    if (method === 'POST' && path === '/api/v1/admin/announcements') {
       const body = request.postDataJSON()
       const created = {
         ...announcement,
@@ -785,7 +825,7 @@ export async function mockBackend(page: Page) {
       return fulfill(route, ok({ announcement: created }))
     }
 
-    const adminAnnouncementMatch = path.match(/^\/api\/admin\/announcements\/(\d+)$/)
+    const adminAnnouncementMatch = path.match(/^\/api\/v1\/admin\/announcements\/(\d+)$/)
     if (adminAnnouncementMatch && method === 'GET') {
       const item = announcements.find(row => row.id === Number(adminAnnouncementMatch[1])) || null
       return fulfill(route, ok({ announcement: item }))

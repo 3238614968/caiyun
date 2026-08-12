@@ -23,8 +23,6 @@ type GetExchangeConfigResponse struct {
 }
 
 // GetExchangeConfig 获取抢兑配置（管理员）
-
-// GetExchangeConfig 获取抢兑配置（管理员）
 func (h *ExchangeHandler) GetExchangeConfig(c *gin.Context) {
 	// 获取自动更新配置
 	autoUpdate := false
@@ -82,8 +80,6 @@ func (h *ExchangeHandler) GetExchangeConfig(c *gin.Context) {
 }
 
 // GetExchangeConfigPublic 获取抢兑配置（公开，普通用户可访问）
-
-// GetExchangeConfigPublic 获取抢兑配置（公开，普通用户可访问）
 func (h *ExchangeHandler) GetExchangeConfigPublic(c *gin.Context) {
 	// 只返回普通用户需要的配置
 
@@ -106,8 +102,6 @@ func (h *ExchangeHandler) GetExchangeConfigPublic(c *gin.Context) {
 }
 
 // UpdateExchangeConfigRequest 更新抢兑配置请求
-
-// UpdateExchangeConfigRequest 更新抢兑配置请求
 type UpdateExchangeConfigRequest struct {
 	AutoUpdateProducts       bool   `json:"auto_update_products"`
 	Concurrency              int    `json:"concurrency"`
@@ -117,8 +111,6 @@ type UpdateExchangeConfigRequest struct {
 	MonthlyPrizeID           string `json:"monthly_prize_id"`
 	ImmediateExchangeEnabled bool   `json:"immediate_exchange_enabled"`
 }
-
-// UpdateExchangeConfig 更新抢兑配置（管理员）
 
 // UpdateExchangeConfig 更新抢兑配置（管理员）
 func (h *ExchangeHandler) UpdateExchangeConfig(c *gin.Context) {
@@ -170,8 +162,6 @@ func (h *ExchangeHandler) UpdateExchangeConfig(c *gin.Context) {
 
 	apiresponse.Message(c, "更新成功")
 }
-
-// ExecuteMonthlyExchange 立即执行兑换月卡（管理员）
 
 // ExecuteMonthlyExchange 立即执行兑换月卡（管理员）
 func (h *ExchangeHandler) ExecuteMonthlyExchange(c *gin.Context) {

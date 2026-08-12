@@ -28,18 +28,23 @@ var expectedMigrationFiles = []string{
 	"015_exchange_task_rule_fk.sql",
 	"016_exchange_task_schedule_dedupe.sql",
 	"017_exchange_record_rule_fk.sql",
+	"018_execution_fencing_tokens.sql",
+	"019_websocket_sequence_allocator.sql",
+	"020_cloud_stats_account_date_unique.sql",
+	"021_archive_schema_parity_and_exchange_rule_unique.sql",
+	"022_audit_log_anonymous_actor.sql",
 }
 
 func TestMigrationSQLDoesNotWriteSchemaVersionAndCopiesMatch(t *testing.T) {
 	embeddedNames := embeddedMigrationFileNames(t)
 	if !reflect.DeepEqual(embeddedNames, expectedMigrationFiles) {
-		t.Fatalf("embedded migration files = %#v, want contiguous 001-017 %#v", embeddedNames, expectedMigrationFiles)
+		t.Fatalf("embedded migration files = %#v, want contiguous 001-022 %#v", embeddedNames, expectedMigrationFiles)
 	}
 
 	externalDir := filepath.Join("..", "..", "migrations")
 	externalNames := externalMigrationFileNames(t, externalDir)
 	if !reflect.DeepEqual(externalNames, expectedMigrationFiles) {
-		t.Fatalf("external migration files = %#v, want contiguous 001-017 %#v", externalNames, expectedMigrationFiles)
+		t.Fatalf("external migration files = %#v, want contiguous 001-022 %#v", externalNames, expectedMigrationFiles)
 	}
 
 	for _, name := range expectedMigrationFiles {
@@ -65,13 +70,8 @@ func TestMigrationSQLDoesNotWriteSchemaVersionAndCopiesMatch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read embedded baseline: %v", err)
 	}
-	legacyInitPath := filepath.Join(externalDir, "init.sql")
-	legacyInit, err := os.ReadFile(legacyInitPath)
-	if err != nil {
-		t.Fatalf("read legacy init copy: %v", err)
-	}
-	if !bytes.Equal(baseline, legacyInit) {
-		t.Fatal("migrations/init.sql must remain identical to 001_init.sql")
+	if _, err := os.Stat(filepath.Join(externalDir, "init.sql")); !os.IsNotExist(err) {
+		t.Fatal("non-versioned migrations/init.sql must not exist; use 001_init.sql")
 	}
 	for _, incrementalOnly := range []string{
 		"CREATE TABLE IF NOT EXISTS `operations`",
@@ -98,6 +98,26 @@ func TestExchangeTaskDedupeUsesVirtualGeneratedColumn(t *testing.T) {
 	}
 	if bytes.Contains(upper, []byte(" STORED'")) {
 		t.Fatal("008 migration must not use a STORED generated column because its base columns have cascading foreign keys")
+	}
+}
+
+func TestRestartSensitiveMigrationsUseIdempotentGuards(t *testing.T) {
+	dedupe, err := migrationFS.ReadFile("sql/016_exchange_task_schedule_dedupe.sql")
+	if err != nil {
+		t.Fatalf("read 016 migration: %v", err)
+	}
+	for _, token := range []string{"AddColumnIfMissing", "CreateUniqueIndexIfMissing", "DROP PROCEDURE IF EXISTS `AddColumnIfMissing`"} {
+		if !bytes.Contains(dedupe, []byte(token)) {
+			t.Fatalf("016 migration must protect interrupted re-runs with %q", token)
+		}
+	}
+
+	fencing, err := migrationFS.ReadFile("sql/018_execution_fencing_tokens.sql")
+	if err != nil {
+		t.Fatalf("read 018 migration: %v", err)
+	}
+	if !bytes.Contains(fencing, []byte("DROP PROCEDURE IF EXISTS `AddColumnIfMissing`$$")) {
+		t.Fatal("018 migration must clear a helper procedure left by an interrupted run")
 	}
 }
 
@@ -128,6 +148,23 @@ func TestCriticalMigrationColumnsPresent(t *testing.T) {
 		},
 		"017_exchange_record_rule_fk.sql": {
 			"exchange_records", "exchange_account_id", "MODIFY COLUMN",
+		},
+		"018_execution_fencing_tokens.sql": {
+			"operations", "exchange_tasks", "execution_token", "AddColumnIfMissing",
+		},
+		"019_websocket_sequence_allocator.sql": {
+			"CREATE TABLE IF NOT EXISTS `web_socket_sequences`", "PRIMARY KEY (`user_id`)",
+			"INSERT INTO `web_socket_sequences`", "MAX(`sequence`)", "ON DUPLICATE KEY UPDATE",
+		},
+		"020_cloud_stats_account_date_unique.sql": {
+			"DELETE older", "`deleted_at` IS NOT NULL", "`deleted_at` IS NULL", "cloud_stats", "uk_cloud_stats_account_date", "CreateUniqueIndexIfMissing",
+		},
+		"021_archive_schema_parity_and_exchange_rule_unique.sql": {
+			"exchange_records_archive", "exchange_rule_id", "MakeColumnNullableIfRequired",
+			"active_account_id", "uk_exchange_rules_active_account", "idx_users_role_id",
+		},
+		"022_audit_log_anonymous_actor.sql": {
+			"audit_logs", "DropAuditLogUserForeignKey", "MakeAuditLogUserIDNullable", "MODIFY COLUMN `user_id` BIGINT UNSIGNED NULL",
 		},
 	}
 

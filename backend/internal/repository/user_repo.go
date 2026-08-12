@@ -62,6 +62,22 @@ func (r *UserRepository) FindByID(id uint) (*models.User, error) {
 	return &user, nil
 }
 
+// FindByIDForUpdate returns one user while holding an exclusive row lock until
+// the current transaction ends.  It is intentionally kept separate from
+// FindByID so ordinary reads do not accidentally turn into locking reads.
+//
+// The lock clause is emitted for MySQL/InnoDB. SQLite, which is used by the
+// focused service tests, safely ignores FOR UPDATE and still runs the enclosing
+// transaction atomically.
+func (r *UserRepository) FindByIDForUpdate(id uint) (*models.User, error) {
+	var user models.User
+	err := r.db.Clauses(clause.Locking{Strength: "UPDATE"}).First(&user, id).Error
+	if err != nil {
+		return nil, err
+	}
+	return &user, nil
+}
+
 // FindByUsername 根据用户名查找用户
 func (r *UserRepository) FindByUsername(username string) (*models.User, error) {
 	var user models.User
@@ -115,11 +131,41 @@ func (r *UserRepository) UpdateRoleAndRevokeSessions(userID uint, role string) e
 		}).Error
 }
 
+// UpdateRoleAndRevokeSessionsIfCurrentRole updates a role only when it still
+// has the expected previous value. The conditional write is a final fence for
+// callers that made an authorization decision from a locked row: a stale
+// decision cannot overwrite a role changed by another transaction.
+func (r *UserRepository) UpdateRoleAndRevokeSessionsIfCurrentRole(userID uint, currentRole, nextRole string) (bool, error) {
+	result := r.db.Model(&models.User{}).
+		Where("id = ? AND role = ?", userID, currentRole).
+		Updates(map[string]interface{}{
+			"role":          nextRole,
+			"token_version": gorm.Expr("token_version + ?", 1),
+		})
+	if result.Error != nil {
+		return false, result.Error
+	}
+	return result.RowsAffected == 1, nil
+}
+
 // CountByRole 统计指定角色用户数量。
 func (r *UserRepository) CountByRole(role string) (int64, error) {
 	var count int64
 	err := r.db.Model(&models.User{}).Where("role = ?", role).Count(&count).Error
 	return count, err
+}
+
+// LockByRoleForUpdate locks all non-deleted users with a role in a stable
+// order. Administrative role changes call this before looking up their target,
+// so concurrent demotions/deletions serialize on the same admin-row set rather
+// than each transaction observing an independently stale admin count.
+func (r *UserRepository) LockByRoleForUpdate(role string) ([]*models.User, error) {
+	var users []*models.User
+	err := r.db.Clauses(clause.Locking{Strength: "UPDATE"}).
+		Where("role = ?", role).
+		Order("id ASC").
+		Find(&users).Error
+	return users, err
 }
 
 // Delete 删除用户

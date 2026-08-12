@@ -37,13 +37,27 @@ type routeDependencies struct {
 	postAuthRateMw   *middleware.RateLimitMiddlewareInstance
 	auditFilter      *middleware.AuditLogFilter
 	metricsCollector *monitor.Metrics
+	wsHub            *ws.Hub
 	readinessCheck   func(context.Context) error
 	handlers         routeHandlers
 }
 
+const legacyAPISunset = "Wed, 31 Dec 2026 23:59:59 GMT"
+
+// legacyAPIDeprecationMiddleware makes the compatibility window observable to
+// clients without changing response bodies.  New clients must use /api/v1.
+func legacyAPIDeprecationMiddleware() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		c.Header("Deprecation", "true")
+		c.Header("Sunset", legacyAPISunset)
+		c.Header("Link", "</api/v1>; rel=\"successor-version\"")
+		c.Next()
+	}
+}
+
 func registerRoutes(r *gin.Engine, deps routeDependencies) {
 	registerHealthAndMetricsRoutes(r, deps)
-	registerAuthRoutes(r, deps.handlers.auth)
+	registerAuthRoutes(r, deps)
 	registerProtectedRoutes(r, deps)
 	registerAdminRoutes(r, deps)
 	registerWebSocketRoute(r, deps)
@@ -88,32 +102,37 @@ func registerHealthAndMetricsRoutes(r *gin.Engine, deps routeDependencies) {
 	)
 }
 
-func registerAuthRoutes(r *gin.Engine, authHandler *handlers.AuthHandler) {
-	registerAuthRoutesAt(r, "/api/auth", authHandler)
+func registerAuthRoutes(r *gin.Engine, deps routeDependencies) {
+	registerAuthRoutesAt(r, "/api/auth", deps, true)
 	// 企业级 API 版本化入口：新增 /api/v1/auth，旧 /api/auth 继续兼容。
-	registerAuthRoutesAt(r, "/api/v1/auth", authHandler)
+	registerAuthRoutesAt(r, "/api/v1/auth", deps, false)
 }
 
-func registerAuthRoutesAt(r *gin.Engine, basePath string, authHandler *handlers.AuthHandler) {
-	public := r.Group(basePath)
+func registerAuthRoutesAt(r *gin.Engine, basePath string, deps routeDependencies, legacy bool) {
+	public := apiRouteGroup(r, basePath, legacy)
+	// Login, registration and password-reset attempts are security-relevant
+	// actions too.  Record them with the same bounded/redacted audit pipeline as
+	// authenticated API calls; refresh remains excluded by AuditLogFilter to
+	// avoid high-volume token-renewal noise.
+	public.Use(middleware.AuditMiddlewareWithFilter(deps.repos.AuditLog, deps.auditFilter))
 	{
-		public.POST("/register", authHandler.Register)
-		public.POST("/login", authHandler.Login)
-		public.POST("/refresh", authHandler.RefreshToken)
-		public.POST("/password/reset-code/send", authHandler.SendPasswordResetCode)
-		public.POST("/password/reset", authHandler.ResetPassword)
+		public.POST("/register", deps.handlers.auth.Register)
+		public.POST("/login", deps.handlers.auth.Login)
+		public.POST("/refresh", deps.handlers.auth.RefreshToken)
+		public.POST("/password/reset-code/send", deps.handlers.auth.SendPasswordResetCode)
+		public.POST("/password/reset", deps.handlers.auth.ResetPassword)
 	}
 }
 
 func registerProtectedRoutes(r *gin.Engine, deps routeDependencies) {
-	registerProtectedRoutesAt(r, "/api", deps)
+	registerProtectedRoutesAt(r, "/api", deps, true)
 	// 企业级 API 版本化入口：保留旧 /api 路由兼容现有前端，同时新增 /api/v1 供新客户端和 OpenAPI 契约使用。
-	registerProtectedRoutesAt(r, "/api/v1", deps)
+	registerProtectedRoutesAt(r, "/api/v1", deps, false)
 }
 
-func registerProtectedRoutesAt(r *gin.Engine, basePath string, deps routeDependencies) {
+func registerProtectedRoutesAt(r *gin.Engine, basePath string, deps routeDependencies, legacy bool) {
 	h := deps.handlers
-	protected := r.Group(basePath)
+	protected := apiRouteGroup(r, basePath, legacy)
 	protected.Use(middleware.AuthMiddlewareWithUserAndSession(deps.jwtManager, deps.repos.User, deps.repos.RefreshSession))
 	protected.Use(middleware.CSRFMiddleware())
 	protected.Use(deps.postAuthRateMw.HandlerFunc())
@@ -213,14 +232,14 @@ func registerProductRoutes(parent *gin.RouterGroup, exchangeHandler *handlers.Ex
 }
 
 func registerAdminRoutes(r *gin.Engine, deps routeDependencies) {
-	registerAdminRoutesAt(r, "/api/admin", deps)
+	registerAdminRoutesAt(r, "/api/admin", deps, true)
 	// 企业级 API 版本化入口：新增 /api/v1/admin，旧 /api/admin 继续兼容。
-	registerAdminRoutesAt(r, "/api/v1/admin", deps)
+	registerAdminRoutesAt(r, "/api/v1/admin", deps, false)
 }
 
-func registerAdminRoutesAt(r *gin.Engine, basePath string, deps routeDependencies) {
+func registerAdminRoutesAt(r *gin.Engine, basePath string, deps routeDependencies, legacy bool) {
 	h := deps.handlers
-	admin := r.Group(basePath)
+	admin := apiRouteGroup(r, basePath, legacy)
 	admin.Use(
 		middleware.AuthMiddlewareWithUserAndSession(deps.jwtManager, deps.repos.User, deps.repos.RefreshSession),
 		middleware.CSRFMiddleware(),
@@ -243,6 +262,12 @@ func registerAdminRoutesAt(r *gin.Engine, basePath string, deps routeDependencie
 		admin.GET("/task-configs", h.admin.GetTaskConfigs)
 		admin.PUT("/task-configs/:task_type", h.admin.UpdateTaskConfig)
 		admin.GET("/tasks/queue-status", h.queueStatus.GetQueueStatus)
+		if !legacy {
+			// New operational controls are versioned-only. Replay requires an
+			// explicit approval payload and is captured by AuditMiddleware.
+			admin.GET("/tasks/dead-letters", h.queueStatus.ListDeadLetters)
+			admin.POST("/tasks/dead-letters/:id/replay", h.queueStatus.ReplayDeadLetter)
+		}
 
 		// 抢兑配置管理。
 		admin.GET("/exchange/config", h.exchange.GetExchangeConfig)
@@ -263,8 +288,18 @@ func registerAdminRoutesAt(r *gin.Engine, basePath string, deps routeDependencie
 	}
 }
 
+func apiRouteGroup(r *gin.Engine, basePath string, legacy bool) *gin.RouterGroup {
+	if legacy {
+		return r.Group(basePath, legacyAPIDeprecationMiddleware())
+	}
+	return r.Group(basePath)
+}
+
 func registerWebSocketRoute(r *gin.Engine, deps routeDependencies) {
-	wsHub := ws.GetHub()
+	wsHub := deps.wsHub
+	if wsHub == nil {
+		panic("routeDependencies.wsHub is required")
+	}
 	wsHub.SetWSMessageRepository(deps.repos.WSMessage)
 
 	r.GET("/ws", func(c *gin.Context) {

@@ -173,7 +173,7 @@ BACKUP_DIR="$TARGET_DIR/backups/deploy-$(date +%Y%m%d-%H%M%S)"
 mkdir -p "$BACKUP_DIR"
 
 # Legacy binary names are backed up and then removed during the one-artifact transition.
-STATIC_ITEMS=("caiyun-linux" "api-linux" "worker-linux" "migrator-linux" "reencrypt-linux" "index.html" "assets" "images" "bundle-report.json")
+STATIC_ITEMS=("caiyun-linux" "api-linux" "worker-linux" "migrator-linux" "reencrypt-linux" "dist" "index.html" "assets" "images" "bundle-report.json")
 while IFS= read -r -d '' path; do
   item="$(basename "$path")"
   exists=0
@@ -222,7 +222,8 @@ for item in "${STATIC_ITEMS[@]}"; do
   esac
   rm -rf "$TARGET_DIR/$item"
 done
-cp -a "$DIST_DIR"/. "$TARGET_DIR"/
+mkdir -p "$TARGET_DIR/dist"
+cp -a "$DIST_DIR"/. "$TARGET_DIR/dist"/
 
 if [[ "$SKIP_SERVICES" -eq 0 ]] && command -v systemctl >/dev/null 2>&1; then
   systemctl restart "${SERVICE_PREFIX}-api.service"

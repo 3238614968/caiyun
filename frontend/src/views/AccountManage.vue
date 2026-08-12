@@ -469,10 +469,7 @@ const loadAccounts = async () => {
     const data = isAdmin.value
       ? await getAllAccounts(pagination.page, pagination.pageSize, searchForm.phone)
       : await getAccounts(pagination.page, pagination.pageSize, searchForm.phone)
-    accountList.value = sortAccountsByAvailability(data.accounts.map(acc => ({
-      ...acc,
-      user: { username: acc.user?.username || '' }
-    })))
+    accountList.value = sortAccountsByAvailability(data.accounts)
     pagination.total = data.total
   } catch (error) {
     ElMessage.error('加载账号列表失败')

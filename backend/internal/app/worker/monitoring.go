@@ -13,19 +13,19 @@ import (
 	"time"
 
 	"caiyun/internal/bootstrap"
-	"caiyun/internal/envutil"
 	"caiyun/internal/monitor"
 	"caiyun/internal/queue"
 	"caiyun/internal/version"
 
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 )
 
 // startMonitoringAPI 启动监控API（可选）
-func startMonitoringAPI(worker *Worker, core *bootstrap.Core) {
-	host := bootstrap.GetEnv("WORKER_MONITOR_HOST", "127.0.0.1")
-	port := bootstrap.GetEnv("WORKER_MONITOR_PORT", "8081")
-	if !isLoopbackHost(host) && !bootstrap.GetBoolEnv("WORKER_MONITOR_ALLOW_PLAINTEXT", false) {
+func startMonitoringAPI(worker *Worker, core *bootstrap.Core, config MonitoringConfig) {
+	host := config.Host
+	port := config.Port
+	if !isLoopbackHost(host) && !config.AllowPlaintext {
 		log.Printf("监控API未启动：WORKER_MONITOR_HOST=%s 非本机地址。若已由 HTTPS 反代保护，请显式设置 WORKER_MONITOR_ALLOW_PLAINTEXT=true", host)
 		return
 	}
@@ -95,7 +95,7 @@ func startMonitoringAPI(worker *Worker, core *bootstrap.Core) {
 	mux.HandleFunc("/startupz", liveHandler)
 	mux.HandleFunc("/readyz", readyHandler)
 	mux.HandleFunc("/health", readyHandler)
-	mux.HandleFunc("/status", requireMonitorAuth(func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/status", requireMonitorAuth(config.Token, func(w http.ResponseWriter, r *http.Request) {
 		now := time.Now()
 		metricsCollector.TouchWorkerHeartbeat(now)
 		writeJSON(w, http.StatusOK, map[string]interface{}{
@@ -108,14 +108,14 @@ func startMonitoringAPI(worker *Worker, core *bootstrap.Core) {
 			},
 		})
 	}))
-	mux.Handle("/metrics", requireMonitorAuth(func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("/metrics", requireMonitorAuth(config.Token, func(w http.ResponseWriter, r *http.Request) {
 		updateMetrics()
 		metricsHandler.ServeHTTP(w, r)
 	}))
 
 	srv := &http.Server{
 		Addr:              net.JoinHostPort(host, port),
-		Handler:           mux,
+		Handler:           otelhttp.NewHandler(mux, "caiyun.worker.monitor"),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
@@ -185,9 +185,8 @@ func writeJSON(w http.ResponseWriter, statusCode int, data interface{}) {
 	}
 }
 
-func requireMonitorAuth(next http.HandlerFunc) http.HandlerFunc {
+func requireMonitorAuth(token string, next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		token := envutil.String("WORKER_MONITOR_TOKEN", "")
 		if token == "" {
 			http.Error(w, "monitor token is required", http.StatusUnauthorized)
 			return

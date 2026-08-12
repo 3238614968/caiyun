@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"caiyun/internal/dto"
 	"caiyun/internal/models"
 	"caiyun/internal/services"
 	apiresponse "caiyun/pkg/response"
@@ -37,8 +38,6 @@ func mergeUintAliasIDs(groups ...[]uint) []uint {
 	}
 	return uniqueUintValues(merged)
 }
-
-// CreateExchangeTaskRequest 创建抢兑任务请求
 
 // CreateExchangeTaskRequest 创建抢兑任务请求
 type CreateExchangeTaskRequest struct {
@@ -81,8 +80,6 @@ func (req CreateExchangeTaskRequest) NormalizedAccountIDs() []uint {
 	}
 	return mergeUintAliasIDs(req.AccountIDs, singleIDs)
 }
-
-// CreateExchangeTask 创建抢兑任务
 
 // CreateExchangeTask 创建抢兑任务
 func (h *ExchangeHandler) CreateExchangeTask(c *gin.Context) {
@@ -197,21 +194,15 @@ func validateExchangeTaskBatchSize(req CreateExchangeTaskRequest) error {
 }
 
 // GetExchangeTasksResponse 获取抢兑任务列表响应
-
-// GetExchangeTasksResponse 获取抢兑任务列表响应
 type GetExchangeTasksResponse struct {
-	Tasks []*models.ExchangeTask `json:"tasks"`
-	Total int                    `json:"total"`
+	Tasks []*dto.ExchangeTaskResponse `json:"tasks"`
+	Total int                         `json:"total"`
 }
-
-// GetExchangeTasks 获取用户的抢兑任务列表
 
 // GetExchangeTasks 获取用户的抢兑任务列表
 func (h *ExchangeHandler) GetExchangeTasks(c *gin.Context) {
 	h.getExchangeTasks(c, false)
 }
-
-// GetAdminExchangeTasks 获取全站抢兑任务列表（管理员路由专用）。
 
 // GetAdminExchangeTasks 获取全站抢兑任务列表（管理员路由专用）。
 func (h *ExchangeHandler) GetAdminExchangeTasks(c *gin.Context) {
@@ -232,19 +223,15 @@ func (h *ExchangeHandler) getExchangeTasks(c *gin.Context, isAdmin bool) {
 	}
 
 	apiresponse.Success(c, GetExchangeTasksResponse{
-		Tasks: tasks,
+		Tasks: dto.ToExchangeTaskResponses(tasks),
 		Total: len(tasks),
 	})
 }
 
 // UpdateExchangeTaskRequest 更新抢兑任务请求
-
-// UpdateExchangeTaskRequest 更新抢兑任务请求
 type UpdateExchangeTaskRequest struct {
 	MaxAttempts int `json:"max_attempts"`
 }
-
-// UpdateExchangeTask 更新抢兑任务
 
 // UpdateExchangeTask 更新抢兑任务
 func (h *ExchangeHandler) UpdateExchangeTask(c *gin.Context) {
@@ -281,8 +268,6 @@ func (h *ExchangeHandler) UpdateExchangeTask(c *gin.Context) {
 }
 
 // DeleteExchangeTask 删除抢兑任务
-
-// DeleteExchangeTask 删除抢兑任务
 func (h *ExchangeHandler) DeleteExchangeTask(c *gin.Context) {
 	userID, ok := getUserID(c)
 	if !ok {
@@ -304,8 +289,6 @@ func (h *ExchangeHandler) DeleteExchangeTask(c *gin.Context) {
 
 	apiresponse.Message(c, "删除成功")
 }
-
-// ExecuteExchangeTask 立即执行抢兑任务
 
 // ExecuteExchangeTask 立即执行抢兑任务
 func (h *ExchangeHandler) ExecuteExchangeTask(c *gin.Context) {
@@ -347,8 +330,6 @@ func (h *ExchangeHandler) ExecuteExchangeTask(c *gin.Context) {
 type BatchExecuteExchangeTasksRequest struct {
 	TaskIDs []uint `json:"task_ids" binding:"required,min=1,max=50"`
 }
-
-// BatchExecuteExchangeTasks 批量执行抢兑任务
 
 // BatchExecuteExchangeTasks 批量执行抢兑任务
 func (h *ExchangeHandler) BatchExecuteExchangeTasks(c *gin.Context) {

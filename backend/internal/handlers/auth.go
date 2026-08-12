@@ -6,6 +6,8 @@ import (
 	"encoding/base64"
 	"errors"
 	"net/http"
+	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -38,7 +40,7 @@ func NewAuthHandler(authService *services.AuthService, jwtManager *jwt.Manager) 
 
 type RegisterRequest struct {
 	Username string `json:"username" binding:"required,min=3,max=50"`
-	Password string `json:"password" binding:"required,min=6"`
+	Password string `json:"password" binding:"required,min=8"`
 	Email    string `json:"email"`
 }
 
@@ -51,7 +53,7 @@ type ResetPasswordRequest struct {
 	Username    string `json:"username" binding:"required,min=3,max=50"`
 	Email       string `json:"email" binding:"required,email"`
 	Code        string `json:"code" binding:"required,len=6"`
-	NewPassword string `json:"new_password" binding:"required,min=6"`
+	NewPassword string `json:"new_password" binding:"required,min=8"`
 }
 
 type SendPasswordResetCodeRequest struct {
@@ -379,7 +381,19 @@ func requestSessionMetadata(c *gin.Context) services.SessionMetadata {
 }
 
 func isSecureRequest(c *gin.Context) bool {
-	return c.Request.TLS != nil || c.GetHeader("X-Forwarded-Proto") == "https"
+	if raw, configured := os.LookupEnv("COOKIE_SECURE"); configured && strings.TrimSpace(raw) != "" {
+		secure, err := strconv.ParseBool(strings.TrimSpace(raw))
+		if err == nil {
+			return secure
+		}
+	}
+	// Production is fail-closed.  HTTPS termination happens outside the Go
+	// process in many deployments, so this must not depend on a forgeable
+	// forwarding header.
+	if strings.EqualFold(strings.TrimSpace(os.Getenv("APP_ENV")), "production") {
+		return true
+	}
+	return c != nil && c.Request != nil && c.Request.TLS != nil
 }
 
 func generateCSRFToken() (string, error) {

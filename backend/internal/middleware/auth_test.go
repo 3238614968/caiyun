@@ -140,7 +140,7 @@ func TestAuthenticatedRateLimitUsesGinRoutePatternForRedis(t *testing.T) {
 	}
 }
 
-func TestAuthorizationHeaderWithAuthCookieStillRequiresCSRF(t *testing.T) {
+func TestAuthorizationHeaderTakesPrecedenceOverStaleAuthCookie(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	manager := jwt.NewManager("test-secret-at-least-16-bytes")
@@ -161,8 +161,41 @@ func TestAuthorizationHeaderWithAuthCookieStillRequiresCSRF(t *testing.T) {
 	req.AddCookie(&http.Cookie{Name: "auth_token", Value: "stale-cookie-token"})
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
-	if w.Code != http.StatusForbidden {
-		t.Fatalf("mixed header+cookie auth without csrf status=%d, want 403", w.Code)
+	if w.Code != http.StatusOK {
+		t.Fatalf("mixed header+cookie auth without csrf status=%d, want 200", w.Code)
+	}
+}
+
+func TestAdvancedRateLimitExemptsOnlyLivenessEndpoints(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	config := &RateLimitConfig{
+		GlobalRate:  1,
+		GlobalBurst: 1,
+		Backend:     "memory",
+		RedisWindow: time.Second,
+		APIRates:    map[string]APIRateLimit{},
+	}
+	mw := NewAdvancedRateLimitMiddleware(config)
+	defer mw.Stop()
+
+	router := gin.New()
+	router.Use(mw.HandlerFunc())
+	router.GET("/livez", func(c *gin.Context) { c.Status(http.StatusOK) })
+	router.GET("/readyz", func(c *gin.Context) { c.Status(http.StatusOK) })
+
+	for i := 0; i < 3; i++ {
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/livez", nil))
+		if w.Code != http.StatusOK {
+			t.Fatalf("livez request %d status=%d, want 200", i+1, w.Code)
+		}
+	}
+	for i, want := range []int{http.StatusOK, http.StatusTooManyRequests} {
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+		if w.Code != want {
+			t.Fatalf("readyz request %d status=%d, want %d", i+1, w.Code, want)
+		}
 	}
 }
 

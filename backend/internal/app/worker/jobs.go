@@ -52,6 +52,44 @@ func runWithWorkerJobLease(lockStore workerJobLeaseStore, jobName string, ttl ti
 	return job()
 }
 
+// JobCriticality defines startup behavior when a cron registration fails.
+type JobCriticality uint8
+
+const (
+	JobNonCritical JobCriticality = iota
+	JobCritical
+)
+
+// registerWorkerJob centralizes scheduler registration. Critical jobs return a
+// startup-blocking error; non-critical jobs emit one structured log and leave
+// the Worker available for its primary workload.
+func registerWorkerJob(jobScheduler *scheduler.Scheduler, name, schedule string, criticality JobCriticality, description string, job func() error) (bool, error) {
+	if jobScheduler == nil {
+		err := fmt.Errorf("scheduler is not configured")
+		if criticality == JobCritical {
+			return false, fmt.Errorf("critical job %s registration failed: %w", name, err)
+		}
+		log.Printf("【Worker】非关键定时任务未注册 job=%s err=%v", name, err)
+		return false, nil
+	}
+	if job == nil {
+		err := fmt.Errorf("job callback is nil")
+		if criticality == JobCritical {
+			return false, fmt.Errorf("critical job %s registration failed: %w", name, err)
+		}
+		log.Printf("【Worker】非关键定时任务未注册 job=%s err=%v", name, err)
+		return false, nil
+	}
+	if _, err := jobScheduler.AddJobWithName(name, schedule, job, description); err != nil {
+		if criticality == JobCritical {
+			return false, fmt.Errorf("critical job %s registration failed: %w", name, err)
+		}
+		log.Printf("【Worker】非关键定时任务注册失败 job=%s schedule=%s err=%v", name, schedule, err)
+		return false, nil
+	}
+	return true, nil
+}
+
 // registerMonthlyExchangeJob 注册自动兑换月卡定时任务
 func registerMonthlyExchangeJob(scheduler *scheduler.Scheduler, exchangeService *services.ExchangeService, configRepo *repository.SystemConfigRepository) {
 	// 获取兑换时间配置，默认10:00
@@ -72,9 +110,12 @@ func registerMonthlyExchangeJob(scheduler *scheduler.Scheduler, exchangeService 
 	// 构建 cron 表达式
 	cronExpr := fmt.Sprintf("%d %d * * *", minute, hour)
 
-	_, err := scheduler.AddJobWithName(
+	registered, _ := registerWorkerJob(
+		scheduler,
 		"monthly_exchange",
 		cronExpr,
+		JobNonCritical,
+		"自动兑换月卡任务",
 		func() error {
 			// 检查是否启用自动兑换
 			if config, err := configRepo.GetByKey("exchange_monthly_enabled"); err == nil {
@@ -89,11 +130,8 @@ func registerMonthlyExchangeJob(scheduler *scheduler.Scheduler, exchangeService 
 			exchangeService.ExecuteMonthlyExchange()
 			return nil
 		},
-		"自动兑换月卡任务",
 	)
-	if err != nil {
-		log.Printf("【月卡兑换】添加定时任务失败: %v", err)
-	} else {
+	if registered {
 		log.Printf("【月卡兑换】定时任务已注册，执行时间: %02d:%02d", hour, minute)
 	}
 }
@@ -103,9 +141,12 @@ func registerAutoUpdateProductsJob(scheduler *scheduler.Scheduler, exchangeServi
 	// 每天凌晨3点更新商品
 	cronExpr := constants.AutoUpdateProductsCron // 使用常量：每天凌晨3点
 
-	_, err := scheduler.AddJobWithName(
+	registered, _ := registerWorkerJob(
+		scheduler,
 		"auto_update_products",
 		cronExpr,
+		JobNonCritical,
+		"自动更新商品列表任务",
 		func() error {
 			return runWithWorkerJobLease(lockStore, "auto_update_products", time.Hour, func() error {
 				// 检查是否启用自动更新
@@ -136,11 +177,8 @@ func registerAutoUpdateProductsJob(scheduler *scheduler.Scheduler, exchangeServi
 				return nil
 			})
 		},
-		"自动更新商品列表任务",
 	)
-	if err != nil {
-		log.Printf("【商品更新】添加定时任务失败: %v", err)
-	} else {
+	if registered {
 		log.Println("【商品更新】定时任务已注册，执行时间: 每天 03:00")
 	}
 }
@@ -151,9 +189,12 @@ func registerAccountHealthCheckJob(scheduler *scheduler.Scheduler, tokenManager 
 	cronExpr := constants.AccountHealthCheckCron // 使用常量：每6小时
 	var running atomic.Bool
 
-	_, err := scheduler.AddJobWithName(
+	registered, _ := registerWorkerJob(
+		scheduler,
 		"account_health_check",
 		cronExpr,
+		JobNonCritical,
+		"账号健康检查任务",
 		func() error {
 			return runWithWorkerJobLease(lockStore, "account_health_check", 2*time.Hour, func() error {
 				if !running.CompareAndSwap(false, true) {
@@ -207,11 +248,8 @@ func registerAccountHealthCheckJob(scheduler *scheduler.Scheduler, tokenManager 
 				return nil
 			})
 		},
-		"账号健康检查任务",
 	)
-	if err != nil {
-		log.Printf("【账号检测】添加定时任务失败: %v", err)
-	} else {
+	if registered {
 		log.Println("【账号检测】定时任务已注册，执行时间: 每6小时")
 	}
 }
@@ -270,9 +308,12 @@ func registerHistoryArchiveJob(scheduler *scheduler.Scheduler, archiveService *s
 	cronExpr := archiveService.Schedule()
 	var running atomic.Bool
 
-	_, err := scheduler.AddJobWithName(
+	registered, _ := registerWorkerJob(
+		scheduler,
 		"history_archive",
 		cronExpr,
+		JobNonCritical,
+		"归档 task_logs / exchange_records 历史数据",
 		func() error {
 			if !running.CompareAndSwap(false, true) {
 				log.Println("【历史归档】上一轮归档仍在执行，跳过本轮")
@@ -306,11 +347,8 @@ func registerHistoryArchiveJob(scheduler *scheduler.Scheduler, archiveService *s
 			}
 			return err
 		},
-		"归档 task_logs / exchange_records 历史数据",
 	)
-	if err != nil {
-		log.Printf("【历史归档】添加定时任务失败: %v", err)
-	} else {
+	if registered {
 		log.Printf("【历史归档】定时任务已注册，执行时间: %s", cronExpr)
 	}
 }

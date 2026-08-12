@@ -41,7 +41,7 @@ func (s *ExchangeService) ExecuteMonthlyExchangeContext(ctx context.Context) err
 	if err != nil {
 		// 记录错误日志并发送通知
 		log.Printf("【月卡兑换】获取兑换账号列表失败: %v", err)
-		s.hub.Broadcast(ws.Message{
+		s.broadcast(ws.Message{
 			Type: "exchange_error",
 			Data: map[string]interface{}{
 				"task":    "monthly_exchange",
@@ -193,7 +193,7 @@ func (s *ExchangeService) executeMonthlyExchangeForAccountContext(ctx context.Co
 	}
 
 	// 推送 WebSocket 通知
-	s.hub.SendToUser(account.UserID, ws.Message{
+	s.sendToUser(account.UserID, ws.Message{
 		Type: "monthly_exchange_complete",
 		Data: map[string]interface{}{
 			"account_name": accountName,
@@ -211,7 +211,8 @@ func (s *ExchangeService) acquireMonthlyExchangeRunLock() (bool, func()) {
 		return true, func() {}
 	}
 	key := monthlyExchangeRunLockKey(time.Now())
-	locked, err := s.lockStore.SetNX(key, "1", 24*time.Hour)
+	owner := randomLockValue(0)
+	locked, err := s.lockStore.SetNX(key, owner, 24*time.Hour)
 	if err != nil {
 		log.Printf("【月卡兑换】获取全局日级锁失败: %v", err)
 		return false, func() {}
@@ -221,7 +222,7 @@ func (s *ExchangeService) acquireMonthlyExchangeRunLock() (bool, func()) {
 		return false, func() {}
 	}
 	return true, func() {
-		if err := s.lockStore.Del(key); err != nil {
+		if _, err := s.lockStore.DelIfValue(key, owner); err != nil {
 			log.Printf("【月卡兑换】释放全局日级锁失败: %v", err)
 		}
 	}
@@ -232,7 +233,8 @@ func (s *ExchangeService) acquireMonthlyExchangeAccountLock(accountID uint) (boo
 		return true, func() {}
 	}
 	key := monthlyExchangeAccountLockKey(accountID, time.Now())
-	locked, err := s.lockStore.SetNX(key, "1", 25*time.Hour)
+	owner := randomLockValue(0)
+	locked, err := s.lockStore.SetNX(key, owner, 25*time.Hour)
 	if err != nil {
 		log.Printf("【月卡兑换】账号 %d 获取日级锁失败: %v", accountID, err)
 		return false, func() {}
@@ -242,7 +244,7 @@ func (s *ExchangeService) acquireMonthlyExchangeAccountLock(accountID uint) (boo
 		return false, func() {}
 	}
 	return true, func() {
-		if err := s.lockStore.Del(key); err != nil {
+		if _, err := s.lockStore.DelIfValue(key, owner); err != nil {
 			log.Printf("【月卡兑换】账号 %d 释放日级锁失败: %v", accountID, err)
 		}
 	}

@@ -3,12 +3,14 @@ package repository
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"time"
 
 	"caiyun/internal/models"
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // WSMessageRepository persists WebSocket messages until the browser explicitly
@@ -24,10 +26,6 @@ func (r *WSMessageRepository) WithContext(ctx context.Context) *WSMessageReposit
 		return r
 	}
 	return &WSMessageRepository{db: r.db.WithContext(ctx)}
-}
-
-func (r *WSMessageRepository) Create(message *models.WebSocketMessage) error {
-	return r.db.Create(message).Error
 }
 
 func (r *WSMessageRepository) GetUnreadMessages(userID uint, limit int) ([]*models.WebSocketMessage, error) {
@@ -94,16 +92,50 @@ func (r *WSMessageRepository) GetMessageCount(userID uint, isRead bool) (int64, 
 }
 
 func (r *WSMessageRepository) SaveMessage(userID uint, msgType string, data interface{}) error {
-	return r.SaveMessageEnvelope(userID, msgType, data, uuid.NewString(), 0, time.Now().Add(24*time.Hour))
+	_, err := r.PersistMessageEnvelope(userID, msgType, data, uuid.NewString(), time.Now().Add(24*time.Hour))
+	return err
 }
 
-func (r *WSMessageRepository) SaveMessageEnvelope(userID uint, msgType string, data interface{}, messageID string, sequence uint64, expiresAt time.Time) error {
+// PersistMessageEnvelope allocates and writes a user envelope in one database
+// transaction. Redis Pub/Sub is a transport only; this table is the ordering
+// authority used by SSE Last-Event-ID replay across API replicas.
+func (r *WSMessageRepository) PersistMessageEnvelope(userID uint, msgType string, data interface{}, messageID string, expiresAt time.Time) (uint64, error) {
+	if r == nil || r.db == nil {
+		return 0, fmt.Errorf("WebSocket message repository is not configured")
+	}
+	if userID == 0 {
+		return 0, fmt.Errorf("WebSocket message user id is required")
+	}
 	dataJSON, err := json.Marshal(data)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	if messageID == "" {
 		messageID = uuid.NewString()
 	}
-	return r.Create(&models.WebSocketMessage{UserID: userID, Type: msgType, Data: string(dataJSON), MessageID: messageID, Sequence: sequence, ExpiresAt: &expiresAt})
+
+	var sequence uint64
+	err = r.db.Transaction(func(tx *gorm.DB) error {
+		var allocator models.WebSocketSequence
+		if err := tx.Clauses(clause.OnConflict{
+			Columns: []clause.Column{{Name: "user_id"}},
+			DoUpdates: clause.Assignments(map[string]interface{}{
+				"sequence": gorm.Expr("sequence + 1"),
+			}),
+		}).Create(&models.WebSocketSequence{UserID: userID, Sequence: 1}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("user_id = ?", userID).First(&allocator).Error; err != nil {
+			return err
+		}
+		sequence = allocator.Sequence
+		return tx.Create(&models.WebSocketMessage{
+			UserID: userID, Type: msgType, Data: string(dataJSON), MessageID: messageID,
+			Sequence: sequence, ExpiresAt: &expiresAt,
+		}).Error
+	})
+	if err != nil {
+		return 0, err
+	}
+	return sequence, nil
 }

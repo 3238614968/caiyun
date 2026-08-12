@@ -104,6 +104,10 @@ frontend/reports/
 /frontend/docs/**/[Ss][Pp][Ee][Cc]*.*
 /frontend/docs/**/*[Aa][Uu][Dd][Ii][Tt]*.*
 /frontend/docs/**/*审计*.*
+# Architecture governance documents are local deployment/audit material and
+# must never be included in source-control releases.
+/docs/architecture/
+frontend/src/api/generated/
 
 # Local generated API contracts and scratch files
 ## `generate-openapi-local.py` only writes below this directory.

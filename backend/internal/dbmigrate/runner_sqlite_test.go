@@ -38,16 +38,19 @@ func TestApplyMigrationStatementsRecordsVersionOnSuccess(t *testing.T) {
 	if value != "ok" {
 		t.Fatalf("tx_success value = %q, want ok", value)
 	}
-	var count int64
-	if err := db.Table("schema_migrations").Where("version = ?", "999_unit_success").Count(&count).Error; err != nil {
-		t.Fatalf("count migration record error: %v", err)
+	var record schemaMigrationRecord
+	if err := db.Where("version = ?", "999_unit_success").Take(&record).Error; err != nil {
+		t.Fatalf("load migration record error: %v", err)
 	}
-	if count != 1 {
-		t.Fatalf("migration record count = %d, want 1", count)
+	if record.Dirty {
+		t.Fatal("successful migration must clear dirty state")
+	}
+	if len(record.Checksum) != 64 {
+		t.Fatalf("checksum length = %d, want 64", len(record.Checksum))
 	}
 }
 
-func TestApplyMigrationStatementsLeavesPartialDDLUnrecordedOnError(t *testing.T) {
+func TestApplyMigrationStatementsLeavesPartialDDLMarkedDirtyOnError(t *testing.T) {
 	db := newMigrationUnitDB(t)
 	ctx := context.Background()
 	if err := ensureSchemaMigrations(ctx, db); err != nil {
@@ -80,12 +83,58 @@ func TestApplyMigrationStatementsLeavesPartialDDLUnrecordedOnError(t *testing.T)
 		t.Fatalf("partial_failure value = %q, want persisted", value)
 	}
 
-	var count int64
-	if err := db.Table("schema_migrations").Where("version = ?", "999_unit_failure").Count(&count).Error; err != nil {
-		t.Fatalf("count migration record error: %v", err)
+	var record schemaMigrationRecord
+	if err := db.Where("version = ?", "999_unit_failure").Take(&record).Error; err != nil {
+		t.Fatalf("load failed migration record error: %v", err)
 	}
-	if count != 0 {
-		t.Fatalf("failed migration record count = %d, want 0", count)
+	if !record.Dirty {
+		t.Fatal("partially applied migration must remain dirty")
+	}
+	if len(record.Checksum) != 64 {
+		t.Fatalf("checksum length = %d, want 64", len(record.Checksum))
+	}
+}
+
+func TestValidateAppliedMigrationRejectsChecksumMismatchAndBackfillsLegacyRecord(t *testing.T) {
+	db := newMigrationUnitDB(t)
+	ctx := context.Background()
+	if err := ensureSchemaMigrations(ctx, db); err != nil {
+		t.Fatalf("ensureSchemaMigrations error: %v", err)
+	}
+
+	checksum := migrationChecksum([]byte("migration content"))
+	record := schemaMigrationRecord{Version: "999_checksum", Description: "legacy"}
+	if err := db.Create(&record).Error; err != nil {
+		t.Fatalf("create legacy migration record: %v", err)
+	}
+	if err := validateAppliedMigration(ctx, db, &record, record.Version, "checksum", checksum); err != nil {
+		t.Fatalf("backfill legacy checksum: %v", err)
+	}
+	var backfilled schemaMigrationRecord
+	if err := db.Where("version = ?", record.Version).Take(&backfilled).Error; err != nil {
+		t.Fatalf("load backfilled migration record: %v", err)
+	}
+	if backfilled.Checksum != checksum || backfilled.Dirty {
+		t.Fatalf("backfilled record = %#v, want checksum=%s and clean", backfilled, checksum)
+	}
+
+	if err := validateAppliedMigration(ctx, db, &backfilled, backfilled.Version, "checksum", migrationChecksum([]byte("changed content"))); err == nil || !strings.Contains(err.Error(), "checksum mismatch") {
+		t.Fatalf("checksum mismatch error = %v, want mismatch", err)
+	}
+}
+
+func TestValidateAppliedMigrationRejectsDirtyRecord(t *testing.T) {
+	db := newMigrationUnitDB(t)
+	ctx := context.Background()
+	if err := ensureSchemaMigrations(ctx, db); err != nil {
+		t.Fatalf("ensureSchemaMigrations error: %v", err)
+	}
+	record := schemaMigrationRecord{Version: "999_dirty", Description: "dirty", Checksum: migrationChecksum([]byte("dirty")), Dirty: true}
+	if err := db.Create(&record).Error; err != nil {
+		t.Fatalf("create dirty migration record: %v", err)
+	}
+	if err := validateAppliedMigration(ctx, db, &record, record.Version, record.Description, record.Checksum); err == nil || !strings.Contains(err.Error(), "marked dirty") {
+		t.Fatalf("dirty migration error = %v, want marked dirty", err)
 	}
 }
 

@@ -4,5 +4,5 @@ import { operationHeaders } from '../operation'
 import type { ImmediateExchangeRequest } from './types'
 
 export function immediateExchange(data: ImmediateExchangeRequest): Promise<OperationResponse> {
-  return request<OperationResponse | ApiResponse<OperationResponse>>({ url: '/api/exchange/immediate', method: 'post', data, headers: operationHeaders() }).then(unwrapOperationResponse)
+  return request<OperationResponse | ApiResponse<OperationResponse>>({ url: '/api/v1/exchange/immediate', method: 'post', data, headers: operationHeaders() }).then(unwrapOperationResponse)
 }

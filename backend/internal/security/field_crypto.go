@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 )
@@ -22,13 +23,16 @@ const (
 	dataEncryptionKeyEnv            = "DATA_ENCRYPTION_KEY"
 	dataEncryptionKeysEnv           = "DATA_ENCRYPTION_KEYS"
 	dataEncryptionCurrentVersionEnv = "DATA_ENCRYPTION_CURRENT_VERSION"
+	dataEncryptionAllowLegacyAADEnv = "FIELD_CRYPTO_ALLOW_LEGACY_NO_AAD"
+	fieldCryptoAAD                  = "caiyun:field-crypto:v1"
 )
 
 type fieldCryptoConfig struct {
-	enabled        bool
-	currentVersion string
-	keys           map[string][]byte
-	err            error
+	enabled          bool
+	currentVersion   string
+	keys             map[string][]byte
+	allowLegacyNoAAD bool
+	err              error
 }
 
 var (
@@ -115,23 +119,26 @@ func EncryptString(value string) (string, error) {
 		return "", fmt.Errorf("生成随机 nonce 失败: %w", err)
 	}
 
-	ciphertext := gcm.Seal(nil, nonce, []byte(value), nil)
+	ciphertext := gcm.Seal(nil, nonce, []byte(value), []byte(fieldCryptoAAD))
 	payload := append(nonce, ciphertext...)
 	return encryptedPrefixForVersion(cfg.currentVersion) + base64.RawStdEncoding.EncodeToString(payload), nil
 }
 
 func DecryptString(value string) (string, error) {
-	return decryptString(value, !isProductionEnvironment())
+	return decryptString(value, !isProductionEnvironment(), false)
 }
 
 // DecryptStringAllowPlaintext is reserved for the explicit reencrypt command,
 // which must be able to inventory and rotate legacy plaintext rows. Serving
 // API/Worker paths use DecryptString and reject plaintext in production.
 func DecryptStringAllowPlaintext(value string) (string, error) {
-	return decryptString(value, true)
+	// The reencrypt command is the sole explicit migration path.  It must read
+	// pre-AAD ciphertexts even after serving processes have disabled the
+	// temporary compatibility switch.
+	return decryptString(value, true, true)
 }
 
-func decryptString(value string, allowPlaintext bool) (string, error) {
+func decryptString(value string, allowPlaintext, forceLegacyNoAAD bool) (string, error) {
 	if value == "" {
 		return value, nil
 	}
@@ -176,8 +183,16 @@ func decryptString(value string, allowPlaintext bool) (string, error) {
 
 	nonce := payload[:gcm.NonceSize()]
 	ciphertext := payload[gcm.NonceSize():]
-	plaintext, err := gcm.Open(nil, nonce, ciphertext, nil)
+	plaintext, err := gcm.Open(nil, nonce, ciphertext, []byte(fieldCryptoAAD))
+	if err != nil && (forceLegacyNoAAD || cfg.allowLegacyNoAAD) {
+		// Pre-AAD ciphertexts are accepted only during the explicit reencrypt
+		// command or while the temporary cutover flag is enabled.
+		plaintext, err = gcm.Open(nil, nonce, ciphertext, nil)
+	}
 	if err != nil {
+		if !forceLegacyNoAAD && !cfg.allowLegacyNoAAD {
+			return "", fmt.Errorf("解密字段失败（如为旧版无 AAD 密文，请在重加密窗口临时设置 %s=true）: %w", dataEncryptionAllowLegacyAADEnv, err)
+		}
 		return "", fmt.Errorf("解密字段失败: %w", err)
 	}
 	return string(plaintext), nil
@@ -188,6 +203,16 @@ func loadFieldCryptoConfig() fieldCryptoConfig {
 		rawSingle := strings.TrimSpace(os.Getenv(dataEncryptionKeyEnv))
 		rawKeys := strings.TrimSpace(os.Getenv(dataEncryptionKeysEnv))
 		rawCurrentVersion := strings.TrimSpace(os.Getenv(dataEncryptionCurrentVersionEnv))
+		rawAllowLegacyNoAAD := strings.TrimSpace(os.Getenv(dataEncryptionAllowLegacyAADEnv))
+		allowLegacyNoAAD := false
+		if rawAllowLegacyNoAAD != "" {
+			parsed, err := strconv.ParseBool(rawAllowLegacyNoAAD)
+			if err != nil {
+				fieldCryptoCfg.err = fmt.Errorf("%s 配置无效: %w", dataEncryptionAllowLegacyAADEnv, err)
+				return
+			}
+			allowLegacyNoAAD = parsed
+		}
 
 		if isProductionEnvironment() {
 			if rawKeys == "" {
@@ -246,7 +271,12 @@ func loadFieldCryptoConfig() fieldCryptoConfig {
 			fieldCryptoCfg.err = err
 			return
 		}
-		fieldCryptoCfg = fieldCryptoConfig{enabled: true, currentVersion: currentVersion, keys: keys}
+		fieldCryptoCfg = fieldCryptoConfig{
+			enabled:          true,
+			currentVersion:   currentVersion,
+			keys:             keys,
+			allowLegacyNoAAD: allowLegacyNoAAD,
+		}
 	})
 	return fieldCryptoCfg
 }

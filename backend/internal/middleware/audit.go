@@ -23,6 +23,9 @@ const (
 	auditPersistTimeout     = 3 * time.Second
 	auditShutdownDrainTime  = 15 * time.Second
 	auditShutdownCancelWait = time.Second
+	// A short bounded wait absorbs brief writer bursts without extending normal
+	// request latency by the full persistence timeout when storage is degraded.
+	auditEnqueueTimeout = 100 * time.Millisecond
 )
 
 // asyncAuditWriter 是应用级单例，所有审计中间件共享同一组 worker，
@@ -175,7 +178,7 @@ func (w *asyncAuditWriter) enqueue(auditLog *models.AuditLog) {
 	}
 	select {
 	case w.ch <- auditLog:
-	default:
+	case <-time.After(auditEnqueueTimeout):
 		recordAuditDrop("审计日志队列已满，丢弃当前审计日志\n")
 	}
 }
@@ -574,7 +577,7 @@ func (f *AuditLogFilter) ShouldLog(path string) bool {
 func AuditMiddlewareWithFilter(auditRepo *repository.AuditLogRepository, filter *AuditLogFilter) gin.HandlerFunc {
 	inner := AuditMiddleware(auditRepo)
 	return func(c *gin.Context) {
-		if !filter.ShouldLog(c.Request.URL.Path) {
+		if filter != nil && !filter.ShouldLog(c.Request.URL.Path) {
 			c.Next()
 			return
 		}

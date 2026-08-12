@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"caiyun/internal/dto"
 	"caiyun/internal/models"
 	"caiyun/internal/queue"
 	"caiyun/internal/services"
@@ -21,10 +22,7 @@ type TaskHandler struct {
 	cloudService     *services.CloudService
 	accountService   *services.AccountService
 	operationService *services.OperationService
-	redisCache       interface {
-		LLen(key string) int64
-		ZCard(key string) int64
-	}
+	taskQueue        queue.ReliableTaskQueue
 }
 
 func NewTaskHandler(taskService *services.TaskService, cloudService *services.CloudService, accountService *services.AccountService) *TaskHandler {
@@ -35,20 +33,19 @@ func NewTaskHandler(taskService *services.TaskService, cloudService *services.Cl
 	}
 }
 
-// SetRedisCache 设置Redis缓存（用于获取队列状态）
-func (h *TaskHandler) SetRedisCache(cache interface {
-	LLen(key string) int64
-	ZCard(key string) int64
-}) {
-	h.redisCache = cache
+// SetTaskQueue injects the configured queue backend for the legacy status
+// helper. New routes use QueueStatusHandler directly; keeping both paths on
+// the same abstraction prevents accidental Redis List status reads.
+func (h *TaskHandler) SetTaskQueue(taskQueue queue.ReliableTaskQueue) {
+	h.taskQueue = taskQueue
 }
 
 // TaskLogsResponse 任务日志响应
 type TaskLogsResponse struct {
-	TaskLogs []*models.TaskLog `json:"task_logs"`
-	Total    int64             `json:"total"`
-	Page     int               `json:"page"`
-	PageSize int               `json:"page_size"`
+	TaskLogs []*dto.TaskLogResponse `json:"task_logs"`
+	Total    int64                  `json:"total"`
+	Page     int                    `json:"page"`
+	PageSize int                    `json:"page_size"`
 }
 
 // GetTaskLogs 获取任务日志
@@ -105,7 +102,7 @@ func (h *TaskHandler) GetTaskLogs(c *gin.Context) {
 	}
 
 	response.Success(c, TaskLogsResponse{
-		TaskLogs: taskLogs,
+		TaskLogs: dto.ToTaskLogResponses(taskLogs),
 		Total:    total,
 		Page:     page,
 		PageSize: pageSize,
@@ -144,10 +141,10 @@ func (h *TaskHandler) GetDashboard(c *gin.Context) {
 
 // CloudStatsResponse 云朵统计响应
 type CloudStatsResponse struct {
-	CloudStats []*models.CloudStats `json:"cloud_stats"`
-	Total      int64                `json:"total"`
-	Page       int                  `json:"page"`
-	PageSize   int                  `json:"page_size"`
+	CloudStats []*dto.CloudStatsResponse `json:"cloud_stats"`
+	Total      int64                     `json:"total"`
+	Page       int                       `json:"page"`
+	PageSize   int                       `json:"page_size"`
 }
 
 // GetCloudStats 获取云朵统计
@@ -204,7 +201,7 @@ func (h *TaskHandler) GetCloudStats(c *gin.Context) {
 	}
 
 	response.Success(c, CloudStatsResponse{
-		CloudStats: cloudStats,
+		CloudStats: dto.ToCloudStatsResponses(cloudStats),
 		Total:      total,
 		Page:       page,
 		PageSize:   pageSize,
@@ -417,11 +414,24 @@ func (h *TaskHandler) GetQueueStatus(c *gin.Context) {
 	var processingLength int64
 	var delayedLength int64
 	var deadLetterLength int64
-	if h.redisCache != nil {
-		queueLength = h.redisCache.LLen(queue.TaskQueueKey)
-		processingLength = h.redisCache.LLen(queue.TaskProcessingKey)
-		delayedLength = h.redisCache.ZCard(queue.TaskDelayedKey)
-		deadLetterLength = h.redisCache.LLen(queue.TaskDeadLetterKey)
+	metadata := queue.MetadataOf(h.taskQueue)
+	errors := make([]string, 0)
+	if h.taskQueue == nil {
+		errors = append(errors, "reliable task queue is not configured")
+	} else {
+		var err error
+		if queueLength, err = h.taskQueue.GetQueueLength(); err != nil {
+			errors = append(errors, fmt.Sprintf("pending queue: %v", err))
+		}
+		if processingLength, err = h.taskQueue.GetProcessingLength(); err != nil {
+			errors = append(errors, fmt.Sprintf("processing queue: %v", err))
+		}
+		if delayedLength, err = h.taskQueue.GetDelayedLength(); err != nil {
+			errors = append(errors, fmt.Sprintf("delayed queue: %v", err))
+		}
+		if deadLetterLength, err = h.taskQueue.GetDeadLetterLength(); err != nil {
+			errors = append(errors, fmt.Sprintf("dead-letter queue: %v", err))
+		}
 	}
 
 	response.Success(c, QueueStatusResponse{
@@ -434,15 +444,10 @@ func (h *TaskHandler) GetQueueStatus(c *gin.Context) {
 		CompletedTasks:  0,
 		SuccessfulTasks: 0,
 		FailedTasks:     0,
-		Backend:         queue.TaskQueueBackendList,
-		BackendMeta: queue.TaskQueueMetadata{
-			Backend:       queue.TaskQueueBackendList,
-			PendingKey:    queue.TaskQueueKey,
-			ProcessingKey: queue.TaskProcessingKey,
-			DelayedKey:    queue.TaskDelayedKey,
-			DeadLetterKey: queue.TaskDeadLetterKey,
-		},
-		IsHealthy: true,
+		Backend:         metadata.Backend,
+		BackendMeta:     metadata,
+		IsHealthy:       len(errors) == 0,
+		Errors:          errors,
 	})
 }
 

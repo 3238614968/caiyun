@@ -34,6 +34,16 @@ func taskDedupeKey(message *TaskMessage) string {
 	if message == nil {
 		return ""
 	}
+	// Operation outbox rows receive a new durable queue epoch whenever they are
+	// retried or manually replayed. Prefer that explicit key over OperationID:
+	// otherwise a still-live Redis dedupe claim would suppress a legitimate
+	// failed -> queued transition for up to the dedupe TTL.
+	if idempotencyKey := strings.TrimSpace(message.IdempotencyKey); idempotencyKey != "" {
+		if strings.HasPrefix(idempotencyKey, taskDedupeKeyPrefix) {
+			return idempotencyKey
+		}
+		return taskDedupeKeyPrefix + idempotencyKey
+	}
 	if operationID := strings.TrimSpace(message.OperationID); operationID != "" {
 		return taskDedupeKeyPrefix + "operation:" + operationID
 	}

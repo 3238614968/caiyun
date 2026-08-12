@@ -19,7 +19,10 @@ func HTTPMetricsMiddleware(metrics *monitor.Metrics) gin.HandlerFunc {
 		duration := time.Since(start)
 		route := c.FullPath()
 		if route == "" {
-			route = c.Request.URL.Path
+			// Never put arbitrary request paths (for example scanner-generated
+			// IDs) into Prometheus labels.  Routed requests retain their stable
+			// Gin pattern; all unmatched requests share one bounded label value.
+			route = "/unmatched"
 		}
 		status := strconv.Itoa(c.Writer.Status())
 		if metrics != nil {

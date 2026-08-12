@@ -270,6 +270,55 @@ func TestTaskQueueDequeueAckAndRecover(t *testing.T) {
 	}
 }
 
+func TestTaskQueueDeadLetterReplayResetsRetryAndRejectsOperation(t *testing.T) {
+	store := newFakeQueueStore()
+	q := newTaskQueueWithStore(store)
+	message := &TaskMessage{AccountID: 10, UserID: 20, TaskType: "signin", RetryCount: 3, CreatedAt: time.Now().Add(-time.Hour).Unix()}
+	data, err := json.Marshal(message)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.LPush(TaskProcessingKey, string(data)); err != nil {
+		t.Fatal(err)
+	}
+	message.raw = string(data)
+	if err := q.DeadLetter(message, "upstream unavailable"); err != nil {
+		t.Fatalf("DeadLetter() error = %v", err)
+	}
+	items, err := q.ListDeadLetters(10)
+	if err != nil || len(items) != 1 || items[0].ID == "" || items[0].Task == nil {
+		t.Fatalf("ListDeadLetters() items=%+v err=%v", items, err)
+	}
+	replayed, err := q.ReplayDeadLetter(items[0].ID)
+	if err != nil {
+		t.Fatalf("ReplayDeadLetter() error = %v", err)
+	}
+	if replayed.RetryCount != 0 || replayed.ProcessingAt != 0 || replayed.CreatedAt <= message.CreatedAt {
+		t.Fatalf("replayed message was not reset: %+v", replayed)
+	}
+	if dead, _ := q.GetDeadLetterLength(); dead != 0 {
+		t.Fatalf("dead-letter length = %d, want 0", dead)
+	}
+	if pending, _ := q.GetQueueLength(); pending != 1 {
+		t.Fatalf("pending length = %d, want 1", pending)
+	}
+
+	operationPayload, err := encodeListDeadLetter(&TaskMessage{OperationID: "operation-1", UserID: 20}, "", "operation failed")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.LPush(TaskDeadLetterKey, operationPayload); err != nil {
+		t.Fatal(err)
+	}
+	operationItems, err := q.ListDeadLetters(10)
+	if err != nil || len(operationItems) != 1 {
+		t.Fatalf("operation DLQ list items=%+v err=%v", operationItems, err)
+	}
+	if _, err := q.ReplayDeadLetter(operationItems[0].ID); !errors.Is(err, ErrOperationDeadLetterReplay) {
+		t.Fatalf("operation replay error = %v, want ErrOperationDeadLetterReplay", err)
+	}
+}
+
 func TestTaskQueueRecoverStaleProcessing(t *testing.T) {
 	store := newFakeQueueStore()
 	q := newTaskQueueWithStore(store)
@@ -308,6 +357,38 @@ func TestTaskQueueRecoverStaleProcessing(t *testing.T) {
 	}
 	if restored.ProcessingAt != 0 {
 		t.Fatalf("ProcessingAt after recover = %d, want 0", restored.ProcessingAt)
+	}
+}
+
+func TestTaskQueueRenewVisibilityPreventsStaleRecovery(t *testing.T) {
+	store := newFakeQueueStore()
+	q := newTaskQueueWithStore(store)
+	stale := TaskMessage{
+		AccountID:    1,
+		UserID:       2,
+		TaskType:     "all",
+		CreatedAt:    time.Now().Add(-time.Hour).Unix(),
+		ProcessingAt: time.Now().Add(-time.Hour).Unix(),
+	}
+	raw, err := json.Marshal(stale)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.LPush(TaskProcessingKey, string(raw)); err != nil {
+		t.Fatal(err)
+	}
+	stale.raw = string(raw)
+
+	renewed, err := q.RenewVisibility(&stale)
+	if err != nil || !renewed {
+		t.Fatalf("RenewVisibility() = (%t, %v), want true/nil", renewed, err)
+	}
+	if stale.ProcessingAt < time.Now().Add(-time.Minute).Unix() {
+		t.Fatalf("processing timestamp was not refreshed: %d", stale.ProcessingAt)
+	}
+	recovered, err := q.RecoverStaleProcessing(time.Minute)
+	if err != nil || recovered != 0 {
+		t.Fatalf("RecoverStaleProcessing() after renewal = (%d, %v), want 0/nil", recovered, err)
 	}
 }
 

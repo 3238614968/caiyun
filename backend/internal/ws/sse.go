@@ -91,7 +91,7 @@ func (h *Hub) unregisterSSE(c *SSEClient) {
 	}
 }
 func (h *Hub) replaySSE(w http.ResponseWriter, r *http.Request, uid uint, repo *repository.WSMessageRepository) {
-	last, _ := strconv.ParseUint(strings.TrimSpace(r.Header.Get("Last-Event-ID")), 10, 64)
+	last := requestedSSELastEventID(r)
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
 	var rows []*models.WebSocketMessage
@@ -113,6 +113,21 @@ func (h *Hub) replaySSE(w http.ResponseWriter, r *http.Request, uid uint, repo *
 		}
 		_, _ = repo.MarkAsDeliveredByMessageID(uid, row.MessageID)
 	}
+}
+
+func requestedSSELastEventID(r *http.Request) uint64 {
+	if r == nil {
+		return 0
+	}
+	lastEventID := strings.TrimSpace(r.Header.Get("Last-Event-ID"))
+	if lastEventID == "" {
+		// EventSource cannot set arbitrary request headers after a client-owned
+		// backoff reconnect. Accept the same opaque sequence through the query
+		// string while preserving header precedence for native reconnects.
+		lastEventID = strings.TrimSpace(r.URL.Query().Get("last_event_id"))
+	}
+	last, _ := strconv.ParseUint(lastEventID, 10, 64)
+	return last
 }
 func writeSSE(w http.ResponseWriter, msg Message) bool {
 	raw, err := json.Marshal(msg)

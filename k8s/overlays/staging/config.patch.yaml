@@ -1,0 +1,10 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: caiyun-config
+data:
+  APP_ENV: staging
+  COOKIE_SECURE: "true"
+  ALLOWED_ORIGINS: "https://staging.caiyun.example"
+  WORKER_MONITOR_HOST: "0.0.0.0"
+  WORKER_MONITOR_ALLOW_PLAINTEXT: "true"

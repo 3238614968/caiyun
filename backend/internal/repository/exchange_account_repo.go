@@ -56,9 +56,9 @@ func (r *ExchangeAccountRepository) Update(account *models.ExchangeAccount) erro
 	if err != nil {
 		return err
 	}
-	return r.db.Model(&models.ExchangeAccount{}).
+	return mapExchangeRuleWriteError(r.db.Model(&models.ExchangeAccount{}).
 		Where("id = ?", account.ID).
-		Updates(updates).Error
+		Updates(updates).Error)
 }
 
 // Delete 删除兑换账号

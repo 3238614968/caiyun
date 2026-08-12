@@ -44,6 +44,23 @@ type Operation struct {
 	UpdatedAt      time.Time       `gorm:"index" json:"updated_at"`
 }
 
+// OperationUpdate is the public, replay-safe event projection of an
+// asynchronous command. It intentionally excludes payloads, idempotency keys,
+// lease tokens and raw upstream errors.
+type OperationUpdate struct {
+	OperationID  string          `json:"operation_id"`
+	Type         string          `json:"type"`
+	Status       OperationStatus `json:"status"`
+	AccountID    uint            `json:"account_id,omitempty"`
+	ResourceID   uint            `json:"resource_id,omitempty"`
+	AttemptCount int             `json:"attempt_count"`
+	ErrorSummary string          `json:"error_summary,omitempty"`
+	QueuedAt     time.Time       `json:"queued_at"`
+	StartedAt    *time.Time      `json:"started_at,omitempty"`
+	CompletedAt  *time.Time      `json:"completed_at,omitempty"`
+	UpdatedAt    time.Time       `json:"updated_at"`
+}
+
 func (Operation) TableName() string { return "operations" }
 
 func (o *Operation) Terminal() bool {

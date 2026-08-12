@@ -119,7 +119,7 @@ groups:
   - name: caiyun.worker
     rules:
       - alert: CaiyunWorkerMetricsDown
-        expr: up{job=~".*caiyun.*worker.*"} == 0
+        expr: (up{job="caiyun-worker"} == 0) or absent(caiyun_worker_up{job="caiyun-worker"})
         for: 2m
         labels:
           severity: critical
@@ -129,7 +129,9 @@ groups:
           description: "Prometheus 无法抓取 Worker /metrics，请检查服务状态或监控 token。"
 
       - alert: CaiyunWorkerHeartbeatStale
-        expr: (time() - caiyun_worker_heartbeat_unix) > 180
+        # API and Worker expose the same registry. Restrict the test to the
+        # Worker ServiceMonitor target and use the registered worker_up gauge.
+        expr: (caiyun_worker_up{job="caiyun-worker"} == 1) and (time() - caiyun_worker_heartbeat_unix{job="caiyun-worker"} > 180)
         for: 3m
         labels:
           severity: critical
@@ -137,6 +139,28 @@ groups:
         annotations:
           summary: "Worker 心跳超过 3 分钟未更新"
           description: "Worker 进程可能卡死、任务线程阻塞或监控上报异常，请检查 /status 与服务日志。"
+
+  - name: caiyun.operation
+    rules:
+      - alert: CaiyunOperationFailureSpike
+        expr: sum(increase(caiyun_operation_transitions_total{status="failed"}[10m])) > 10
+        for: 5m
+        labels:
+          severity: warning
+          service: caiyun
+        annotations:
+          summary: "异步 Operation 失败数量快速上升"
+          description: "10 分钟内失败 Operation 超过 10 个；检查 Worker 日志、死信队列和上游服务状态。"
+
+      - alert: CaiyunOperationFailureRatioHigh
+        expr: sum(increase(caiyun_operation_transitions_total{status="failed"}[15m])) / clamp_min(sum(increase(caiyun_operation_transitions_total{status=~"succeeded|failed"}[15m])), 1) > 0.2
+        for: 10m
+        labels:
+          severity: warning
+          service: caiyun
+        annotations:
+          summary: "异步 Operation 失败率超过 20%"
+          description: "终态 Operation 的 15 分钟失败率持续过高；优先检查队列积压、Worker 心跳和最近发布的上游调用变更。"
 
   - name: caiyun.history_archive
     rules:

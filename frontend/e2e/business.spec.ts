@@ -42,8 +42,10 @@ test('兑换中心可批量选择账号创建抢兑任务', async ({ page }) => 
   await expect(page.getByText('商品中心')).toBeVisible()
   await expect(page.getByText('E2E月卡')).toBeVisible()
 
-  const productCard = page.locator('.product-card').filter({ hasText: 'E2E月卡' })
-  await productCard.getByRole('button', { name: '立即抢兑' }).click()
+  // “立即抢兑” is a separate immediate-command path. Task creation lives on
+  // the task tab and must retain its own form coverage.
+  await page.getByRole('tab', { name: '抢兑任务' }).click()
+  await page.getByRole('button', { name: '新建抢兑任务' }).click()
 
   const taskDialog = page.getByRole('dialog', { name: '创建抢兑任务' })
   await expect(taskDialog.getByText('E2E月卡', { exact: true })).toBeVisible()
@@ -51,7 +53,6 @@ test('兑换中心可批量选择账号创建抢兑任务', async ({ page }) => 
   await expect(taskDialog.getByText('已选择 2 个抢兑规则')).toBeVisible()
   await taskDialog.getByRole('button', { name: '确定' }).click()
 
-  await page.getByRole('tab', { name: '抢兑任务' }).click()
   const table = page.getByRole('table')
   await expect(table.filter({ hasText: 'E2E月卡' })).toBeVisible()
   await expect(table.filter({ hasText: '抢兑主账号' })).toBeVisible()

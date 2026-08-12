@@ -99,7 +99,7 @@ import AnnouncementPanel from '../components/dashboard/AnnouncementPanel.vue'
 import AccountCloudRankingCard, { type AccountCloudRankingRow } from '../components/dashboard/AccountCloudRankingCard.vue'
 import DashboardStatGrid, { type DashboardStatItem } from '../components/dashboard/DashboardStatGrid.vue'
 import TaskStatusMonitor from '../components/TaskStatusMonitor.vue'
-import { wsClient } from '../api/websocket'
+import { isOperationUpdatedMessage, wsClient, type WsMessage } from '../api/websocket'
 import { getAdminDashboard, type AdminDashboardData } from '../api/account'
 import { useAuthStore } from '../store/auth'
 import { getAnnouncements, type Announcement } from '../api/announcement'
@@ -341,16 +341,27 @@ const handleSummaryRefresh = () => {
   }, 1000)
 }
 
+// Operation terminal events carry no private payload and let the dashboard
+// refresh immediately instead of waiting for the next manual navigation.
+const handleOperationRefresh = (msg: WsMessage) => {
+  if (!isOperationUpdatedMessage(msg)) return
+  if (['succeeded', 'failed', 'canceled'].includes(msg.data.status)) {
+    handleSummaryRefresh()
+  }
+}
+
 onMounted(() => {
   loadReadAnnouncementIDs()
   loadDashboardData()
   loadTrendData()
   loadAnnouncements()
   wsClient.on('task_summary', handleSummaryRefresh)
+  wsClient.on('operation.updated', handleOperationRefresh)
 })
 
 onUnmounted(() => {
   wsClient.off('task_summary', handleSummaryRefresh)
+  wsClient.off('operation.updated', handleOperationRefresh)
 })
 </script>
 

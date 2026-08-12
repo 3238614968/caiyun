@@ -6,6 +6,7 @@ import (
 	"caiyun/internal/monitor"
 	"caiyun/internal/repository"
 	"caiyun/internal/ws"
+	"context"
 	"fmt"
 	"log"
 	"strings"
@@ -34,16 +35,19 @@ type ExchangeScheduler struct {
 	queueMutex    sync.RWMutex
 
 	// 停止信号
-	stopChan chan struct{}
-	stopOnce sync.Once
-	loopWG   sync.WaitGroup
+	stopChan        chan struct{}
+	stopOnce        sync.Once
+	loopWG          sync.WaitGroup
+	executionCtx    context.Context
+	cancelExecution context.CancelFunc
+	executionWG     sync.WaitGroup
 }
 
 const defaultExchangeTaskRunningTimeout = 15 * time.Minute
 
 type schedulerLeaseStore interface {
 	SetNX(key string, value interface{}, expiration time.Duration) (bool, error)
-	Del(keys ...string) error
+	DelIfValue(key, value string) (bool, error)
 }
 
 // NewExchangeScheduler 创建抢兑调度器
@@ -55,7 +59,13 @@ func NewExchangeScheduler(
 	configRepo *repository.SystemConfigRepository,
 	taskLogRepo *repository.TaskLogRepository,
 	tokenMgr *TokenManager,
+	eventHubs ...*ws.Hub,
 ) *ExchangeScheduler {
+	var eventHub *ws.Hub
+	if len(eventHubs) > 0 {
+		eventHub = eventHubs[0]
+	}
+	executionCtx, cancelExecution := context.WithCancel(context.Background())
 	return &ExchangeScheduler{
 		exchangeTaskRepo:    exchangeTaskRepo,
 		exchangeAccountRepo: exchangeAccountRepo,
@@ -64,10 +74,19 @@ func NewExchangeScheduler(
 		configRepo:          configRepo,
 		taskLogRepo:         taskLogRepo,
 		tokenMgr:            tokenMgr,
-		hub:                 ws.GetHub(),
+		hub:                 eventHub,
 		leaseOwner:          randomLockValue(0),
 		stopChan:            make(chan struct{}),
 		runningTimeout:      exchangeTaskRunningTimeoutFromEnv(),
+		executionCtx:        executionCtx,
+		cancelExecution:     cancelExecution,
+	}
+}
+
+// SetEventHub attaches the process-owned realtime delivery hub.
+func (s *ExchangeScheduler) SetEventHub(eventHub *ws.Hub) {
+	if s != nil {
+		s.hub = eventHub
 	}
 }
 
@@ -116,8 +135,15 @@ func (s *ExchangeScheduler) Stop() {
 	log.Println("【抢兑调度器】停止...")
 	s.stopOnce.Do(func() {
 		close(s.stopChan)
+		if s.cancelExecution != nil {
+			s.cancelExecution()
+		}
 	})
 	s.loopWG.Wait()
+	// Running exchange attempts share executionCtx.  Cancel it before waiting so
+	// a process shutdown does not leave a scheduler task sleeping between retry
+	// attempts or waiting for the request pacing limiter.
+	s.executionWG.Wait()
 }
 
 // scheduleLoop 调度循环
@@ -275,7 +301,7 @@ func (s *ExchangeScheduler) prepareQueueByTime(hour, minute int) {
 
 	log.Printf("【抢兑调度器】%s 抢兑队列已准备，共 %d 个任务", slot, len(tasks))
 
-	s.hub.Broadcast(ws.Message{
+	s.broadcast(ws.Message{
 		Type: "exchange_preparing",
 		Data: map[string]interface{}{
 			"time":    slot,
@@ -343,7 +369,9 @@ func (s *ExchangeScheduler) executeExchangeByTime(hour, minute int) {
 	}
 
 	log.Printf("【抢兑调度器】开始执行 %s 抢兑，共 %d 个任务", slot, len(tasksToExecute))
+	s.executionWG.Add(1)
 	go func() {
+		defer s.executionWG.Done()
 		defer func() {
 			if r := recover(); r != nil {
 				log.Printf("【抢兑调度器】%s 抢兑执行 panic: %v", slot, r)

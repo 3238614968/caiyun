@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -49,10 +50,14 @@ type streamQueueStore interface {
 	XAddBatchWithDedupe(stream string, maxLenApprox int64, items []cache.StreamEnqueueItem, expiration time.Duration) ([]string, error)
 	XReadGroup(group, consumer, stream, id string, count int64, block time.Duration) ([]cache.StreamMessage, error)
 	XAckAndDelete(stream, group string, ids ...string) (int64, error)
+	XRange(stream, start, end string, count int64) ([]cache.StreamMessage, error)
+	XMoveEntryToStream(source, id, destination string, maxLenApprox int64, values map[string]interface{}) (string, bool, error)
+	XDel(stream string, ids ...string) (int64, error)
 	XMoveToStream(source, group, id, destination string, maxLenApprox int64, values map[string]interface{}) (string, bool, error)
 	XMoveToZSet(source, group, id, destination, member string, score float64) (bool, error)
 	XPromoteZSetToStream(source, destination, member string, maxScore float64, maxLenApprox int64, values map[string]interface{}) (string, bool, error)
 	XAutoClaim(stream, group, consumer string, minIdle time.Duration, start string, count int64) ([]cache.StreamMessage, string, error)
+	XRenewPending(stream, group, consumer, id string) (bool, error)
 	XPendingCount(stream, group string) (int64, error)
 	XLen(stream string) int64
 	ZRangeByScore(key string, min, max string, count int64) ([]string, error)
@@ -286,6 +291,27 @@ func (q *StreamTaskQueue) Ack(message *TaskMessage) error {
 
 func (q *StreamTaskQueue) Requeue(message *TaskMessage) error {
 	return q.RequeueDelayed(message, retryBackoff(message))
+}
+
+// RenewVisibility resets the PEL idle time only when this queue consumer still
+// owns the exact pending entry.  It deliberately does not XCLAIM a delivery
+// from another consumer: doing so could steal a task after a stale recovery
+// has already handed it to a new Worker.
+func (q *StreamTaskQueue) RenewVisibility(message *TaskMessage) (bool, error) {
+	if message == nil {
+		return false, fmt.Errorf("任务消息为空")
+	}
+	if strings.TrimSpace(message.StreamID) == "" {
+		return false, fmt.Errorf("Streams 消息缺少 StreamID")
+	}
+	if err := q.ensureGroup(); err != nil {
+		return false, err
+	}
+	renewed, err := q.cache.XRenewPending(q.opts.StreamKey, q.opts.ConsumerGroup, q.opts.ConsumerName, message.StreamID)
+	if err != nil {
+		return false, fmt.Errorf("续约 Streams 处理中任务失败: %w", err)
+	}
+	return renewed, nil
 }
 
 func (q *StreamTaskQueue) RequeueDelayed(message *TaskMessage, delay time.Duration) error {
@@ -528,6 +554,25 @@ func boundMalformedDeadLetterPayload(payload string) (captured string, originalL
 	return string(data), originalLength, sha256Hex, truncated
 }
 
+func streamDeadLetterMessage(message cache.StreamMessage) (*DeadLetterMessage, *TaskMessage, error) {
+	reason := strings.TrimSpace(fmt.Sprint(message.Values[streamDeadReasonField]))
+	failedAt := int64(0)
+	if raw, ok := message.Values[streamDeadFailedAtField]; ok {
+		if parsed, err := strconv.ParseInt(strings.TrimSpace(fmt.Sprint(raw)), 10, 64); err == nil {
+			failedAt = parsed
+		}
+	}
+	payload, ok := message.Values[streamDeadOriginalDataField]
+	if !ok {
+		return &DeadLetterMessage{ID: message.ID, Reason: reason, FailedAt: time.Unix(failedAt, 0).UTC(), Malformed: true}, nil, nil
+	}
+	var task TaskMessage
+	if err := json.Unmarshal([]byte(fmt.Sprint(payload)), &task); err != nil {
+		return &DeadLetterMessage{ID: message.ID, Reason: reason, FailedAt: time.Unix(failedAt, 0).UTC(), Malformed: true}, nil, nil
+	}
+	return &DeadLetterMessage{ID: message.ID, Reason: reason, FailedAt: time.Unix(failedAt, 0).UTC(), Task: &task}, &task, nil
+}
+
 func (q *StreamTaskQueue) GetQueueLength() (int64, error) {
 	pending, err := q.GetProcessingLength()
 	if err != nil {
@@ -556,6 +601,86 @@ func (q *StreamTaskQueue) GetDelayedLength() (int64, error) {
 
 func (q *StreamTaskQueue) GetDeadLetterLength() (int64, error) {
 	return q.cache.XLen(q.opts.DeadLetterKey), nil
+}
+
+func (q *StreamTaskQueue) ListDeadLetters(limit int) ([]*DeadLetterMessage, error) {
+	if limit <= 0 || limit > 200 {
+		limit = 100
+	}
+	messages, err := q.cache.XRange(q.opts.DeadLetterKey, "-", "+", int64(limit))
+	if err != nil {
+		return nil, err
+	}
+	items := make([]*DeadLetterMessage, 0, len(messages))
+	for _, message := range messages {
+		item, _, parseErr := streamDeadLetterMessage(message)
+		if parseErr == nil {
+			items = append(items, item)
+		}
+	}
+	return items, nil
+}
+
+func (q *StreamTaskQueue) GetDeadLetter(id string) (*DeadLetterMessage, error) {
+	messages, err := q.cache.XRange(q.opts.DeadLetterKey, id, id, 1)
+	if err != nil {
+		return nil, err
+	}
+	if len(messages) != 1 {
+		return nil, ErrDeadLetterNotFound
+	}
+	item, _, err := streamDeadLetterMessage(messages[0])
+	if err != nil {
+		return nil, err
+	}
+	return item, nil
+}
+
+func (q *StreamTaskQueue) ReplayDeadLetter(id string) (*TaskMessage, error) {
+	messages, err := q.cache.XRange(q.opts.DeadLetterKey, id, id, 1)
+	if err != nil {
+		return nil, err
+	}
+	if len(messages) != 1 {
+		return nil, ErrDeadLetterNotFound
+	}
+	item, task, err := streamDeadLetterMessage(messages[0])
+	if err != nil {
+		return nil, err
+	}
+	if item.Malformed || task == nil {
+		return nil, fmt.Errorf("malformed dead-letter entry cannot be replayed")
+	}
+	if task.OperationID != "" {
+		return nil, ErrOperationDeadLetterReplay
+	}
+	message := resetReplayMessage(task)
+	payload, err := encodeTaskMessage(message)
+	if err != nil {
+		return nil, err
+	}
+	_, moved, err := q.cache.XMoveEntryToStream(
+		q.opts.DeadLetterKey, id, q.opts.StreamKey, mainTaskStreamMaxLenApprox,
+		map[string]interface{}{streamPayloadField: payload},
+	)
+	if err != nil {
+		return nil, err
+	}
+	if !moved {
+		return nil, ErrDeadLetterNotFound
+	}
+	return message, nil
+}
+
+func (q *StreamTaskQueue) ArchiveDeadLetter(id string) error {
+	deleted, err := q.cache.XDel(q.opts.DeadLetterKey, id)
+	if err != nil {
+		return err
+	}
+	if deleted != 1 {
+		return ErrDeadLetterNotFound
+	}
+	return nil
 }
 
 func (q *StreamTaskQueue) Clear() error {

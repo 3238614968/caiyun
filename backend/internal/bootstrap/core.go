@@ -12,6 +12,7 @@ import (
 	"caiyun/internal/core/auth"
 	corehttp "caiyun/internal/core/http"
 	"caiyun/internal/dbmigrate"
+	"caiyun/internal/observability"
 	"caiyun/internal/repository"
 	"caiyun/internal/services"
 	"caiyun/pkg/database"
@@ -19,7 +20,52 @@ import (
 	"gorm.io/gorm"
 )
 
+// CoreConfig contains every infrastructure setting consumed while constructing
+// Core. It is the single structured configuration boundary for DB, Redis and
+// dependency clock validation.
+type CoreConfig struct {
+	Database            database.Config
+	Redis               cache.RedisConfig
+	ClockSkewMax        time.Duration
+	SyncTaskDefinitions bool
+}
+
+// LoadCoreConfig resolves the Core configuration once from the bootstrap
+// environment. Application code receives Core/its dependencies rather than
+// reading these keys again.
+func LoadCoreConfig() (CoreConfig, error) {
+	config := CoreConfig{
+		Database: database.Config{
+			Host:            GetEnv("DB_HOST", "localhost"),
+			Port:            GetEnv("DB_PORT", "3306"),
+			User:            GetEnv("DB_USER", "caiyun_app"),
+			Password:        GetEnv("DB_PASSWORD", ""),
+			DBName:          GetEnv("DB_NAME", "caiyun"),
+			MaxIdleConns:    GetIntEnv("DB_MAX_IDLE_CONNS", 20),
+			MaxOpenConns:    GetIntEnv("DB_MAX_OPEN_CONNS", 100),
+			ConnMaxLifetime: GetDurationEnv("DB_CONN_MAX_LIFETIME", time.Hour),
+			ConnMaxIdleTime: GetDurationEnv("DB_CONN_MAX_IDLE_TIME", 10*time.Minute),
+		},
+		Redis: cache.RedisConfig{
+			Host:     GetEnv("REDIS_HOST", "localhost"),
+			Port:     GetEnv("REDIS_PORT", "6379"),
+			Password: GetEnv("REDIS_PASSWORD", ""),
+			DB:       GetIntEnv("REDIS_DB", 0),
+		},
+		ClockSkewMax:        GetDurationEnv("CLOCK_SKEW_MAX", 30*time.Second),
+		SyncTaskDefinitions: GetBoolEnv("TASK_CONFIG_SYNC_ON_STARTUP", false),
+	}
+	if config.Database.MaxIdleConns < 0 || config.Database.MaxOpenConns < 1 {
+		return CoreConfig{}, fmt.Errorf("数据库连接池配置无效")
+	}
+	if config.ClockSkewMax <= 0 {
+		config.ClockSkewMax = 30 * time.Second
+	}
+	return config, nil
+}
+
 type Core struct {
+	Config     CoreConfig
 	DB         *gorm.DB
 	Redis      *cache.RedisCache
 	Auth       *auth.Auth
@@ -66,27 +112,32 @@ type Repositories struct {
 	Schema          *repository.SchemaRepository
 }
 
+// InitCore resolves configuration at the process boundary. New callers that
+// already validated configuration should use InitCoreWithConfig.
 func InitCore() (*Core, error) {
+	config, err := LoadCoreConfig()
+	if err != nil {
+		return nil, fmt.Errorf("基础设施配置无效: %w", err)
+	}
+	return InitCoreWithConfig(config)
+}
+
+// InitCoreWithConfig constructs dependencies from an explicit configuration.
+// It makes startup tests and alternate process assemblers independent from
+// mutable environment state after the configuration has been loaded.
+func InitCoreWithConfig(config CoreConfig) (*Core, error) {
 	autoMigrate, err := resolveEmbeddedMigrationPolicy()
 	if err != nil {
 		return nil, fmt.Errorf("数据库迁移配置无效: %w", err)
 	}
 
-	db, err := database.NewMySQL(database.Config{
-		Host: GetEnv("DB_HOST", "localhost"),
-		Port: GetEnv("DB_PORT", "3306"),
-		User: GetEnv("DB_USER", "caiyun_app"),
-		// 数据库密码是外部服务凭据，不应套用 JWT/HMAC 的 32 字符密钥长度规则；
-		// 是否允许短密码由 MySQL 自身账号策略决定。
-		Password:        GetEnv("DB_PASSWORD", ""),
-		DBName:          GetEnv("DB_NAME", "caiyun"),
-		MaxIdleConns:    GetIntEnv("DB_MAX_IDLE_CONNS", 20),
-		MaxOpenConns:    GetIntEnv("DB_MAX_OPEN_CONNS", 100),
-		ConnMaxLifetime: GetDurationEnv("DB_CONN_MAX_LIFETIME", time.Hour),
-		ConnMaxIdleTime: GetDurationEnv("DB_CONN_MAX_IDLE_TIME", 10*time.Minute),
-	})
+	db, err := database.NewMySQL(config.Database)
 	if err != nil {
 		return nil, fmt.Errorf("数据库连接失败: %w", err)
+	}
+	if err := observability.InstallGORMTracing(db); err != nil {
+		_ = closeGormDB(db)
+		return nil, fmt.Errorf("数据库追踪初始化失败: %w", err)
 	}
 
 	if autoMigrate {
@@ -98,14 +149,7 @@ func InitCore() (*Core, error) {
 		log.Println("API/Worker 已跳过嵌入式数据库迁移，仅进行结构校验；生产迁移必须使用专用 migrator")
 	}
 
-	redisCache, err := cache.NewRedisCache(cache.RedisConfig{
-		Host: GetEnv("REDIS_HOST", "localhost"),
-		Port: GetEnv("REDIS_PORT", "6379"),
-		// Redis 本地部署通常不设置密码，REDIS_PASSWORD= 空值是合法配置。
-		// 不能用 GetSecretEnv，否则 ALLOW_INSECURE_DEFAULTS=false 时会把空密码当成启动致命错误。
-		Password: GetEnv("REDIS_PASSWORD", ""),
-		DB:       GetIntEnv("REDIS_DB", 0),
-	})
+	redisCache, err := cache.NewRedisCache(config.Redis)
 	if err != nil {
 		_ = closeGormDB(db)
 		return nil, fmt.Errorf("Redis 连接失败: %w", err)
@@ -114,7 +158,7 @@ func InitCore() (*Core, error) {
 		_ = closeGormDB(db)
 		return nil, fmt.Errorf("Redis 连接失败: 缓存实例为空")
 	}
-	if err := validateDependencyClocks(db, redisCache); err != nil {
+	if err := validateDependencyClocks(db, redisCache, config.ClockSkewMax); err != nil {
 		_ = redisCache.Close()
 		_ = closeGormDB(db)
 		return nil, err
@@ -144,15 +188,21 @@ func InitCore() (*Core, error) {
 		_ = closeGormDB(db)
 		return nil, fmt.Errorf("数据库结构校验失败: %w", err)
 	}
-	// DDL 由非生产环境的内嵌 runner 或生产专用 migrator 执行；这里保留 schema 校验作为防线。
-	// TaskConfig 同步属于业务数据而非 DDL，仍可在启动时进行。
-	if err := repos.TaskConfig.SyncDefinitions(services.DefaultTaskConfigs()); err != nil {
-		_ = redisCache.Close()
-		_ = closeGormDB(db)
-		return nil, fmt.Errorf("任务配置同步失败: %w", err)
+	if config.SyncTaskDefinitions {
+		// This is an explicit development/bootstrap escape hatch.  Production
+		// API and Worker processes remain read-only with respect to schema and
+		// task definitions; the dedicated migrator owns those release writes.
+		if err := repos.TaskConfig.SyncDefinitions(services.DefaultTaskConfigs()); err != nil {
+			_ = redisCache.Close()
+			_ = closeGormDB(db)
+			return nil, fmt.Errorf("任务配置同步失败: %w", err)
+		}
+	} else {
+		log.Println("API/Worker 已跳过任务配置同步；发布写入由专用 migrator 负责")
 	}
 
 	return &Core{
+		Config:     config,
 		DB:         db,
 		Redis:      redisCache,
 		Auth:       auth.NewAuth(corehttp.NewClient()),
@@ -161,8 +211,7 @@ func InitCore() (*Core, error) {
 	}, nil
 }
 
-func validateDependencyClocks(db *gorm.DB, redisCache *cache.RedisCache) error {
-	maxSkew := GetDurationEnv("CLOCK_SKEW_MAX", 30*time.Second)
+func validateDependencyClocks(db *gorm.DB, redisCache *cache.RedisCache, maxSkew time.Duration) error {
 	if maxSkew <= 0 {
 		maxSkew = 30 * time.Second
 	}

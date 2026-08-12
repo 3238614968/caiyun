@@ -12,8 +12,8 @@ export function operationQueuedMessage(_operation: OperationResponse, subject = 
 }
 
 export function getOperation(id: string): Promise<OperationResponse> {
-  return request<OperationResponse | ApiResponse<OperationResponse>>({ url: `/api/operations/${encodeURIComponent(id)}`, method: 'get' }).then(unwrapOperationResponse)
+  return request<OperationResponse | ApiResponse<OperationResponse>>({ url: `/api/v1/operations/${encodeURIComponent(id)}`, method: 'get' }).then(unwrapOperationResponse)
 }
 export function cancelOperation(id: string): Promise<OperationResponse> {
-  return request<OperationResponse | ApiResponse<OperationResponse>>({ url: `/api/operations/${encodeURIComponent(id)}/cancel`, method: 'post' }).then(unwrapOperationResponse)
+  return request<OperationResponse | ApiResponse<OperationResponse>>({ url: `/api/v1/operations/${encodeURIComponent(id)}/cancel`, method: 'post' }).then(unwrapOperationResponse)
 }

@@ -51,15 +51,29 @@ jobs:
       - name: Validate repository policy and deployment scripts
         working-directory: .
         run: |
-          bash -n scripts/deploy-linux.sh scripts/rollback-linux.sh scripts/health-check.sh scripts/deploy-smoke-test.sh scripts/package-release.sh scripts/migration-smoke-test.sh scripts/generate-sbom.sh scripts/sign-release.sh scripts/import-calendar.sh scripts/rotate-encryption.sh scripts/check-no-local-docs.sh scripts/deploy-k8s.sh
+          bash -n scripts/deploy-linux.sh scripts/rollback-linux.sh scripts/health-check.sh scripts/deploy-smoke-test.sh scripts/package-release.sh scripts/migration-smoke-test.sh scripts/generate-sbom.sh scripts/sign-release.sh scripts/import-calendar.sh scripts/rotate-encryption.sh scripts/check-no-local-docs.sh scripts/check-no-release-binaries.sh scripts/deploy-k8s.sh scripts/verify-k8s-runtime.sh scripts/verify-otel-runtime.sh scripts/verify-compose-runtime.sh scripts/verify-legacy-list-drain.sh scripts/chaos-drill.sh scripts/capacity-drill.sh scripts/collect-slo-snapshot.sh
           bash scripts/check-no-local-docs.sh
+          bash scripts/check-no-release-binaries.sh
           bash scripts/deploy-smoke-test.sh
           bash scripts/migration-smoke-test.sh
+          python scripts/sync_k8s_sql.py --check
+          python scripts/validate-k8s-manifests.py
+          python scripts/validate-deployment-hardening.py
+          python scripts/validate-alert-metric-contract.py
+
+          python scripts/validate-dto-boundaries.py
+          python scripts/validate-streams-cutover.py
+          python -m unittest discover -s scripts/tests -p "test_*.py"
 
       - name: Validate local OpenAPI route inventory
         run: |
           python scripts/generate-openapi-local.py
           python scripts/validate-openapi-local.py
+          python scripts/generate-asyncapi-local.py
+          python scripts/validate-asyncapi-local.py
+          python scripts/generate-api-client-types.py
+          python scripts/generate-api-client-types.py --check
+          python scripts/validate-frontend-contract-usage.py
 
       - name: Setup Go
         uses: actions/setup-go@v5
@@ -93,6 +107,18 @@ jobs:
           CAIYUN_TEST_MYSQL_PASSWORD: caiyun_root_test
         run: go test ./internal/dbmigrate -run MySQLIntegration -count=1
 
+      - name: Operation MySQL/Redis cancel and replay race integration
+        env:
+          GOTOOLCHAIN: local
+          CGO_ENABLED: '1'
+          CAIYUN_OPERATION_INTEGRATION: '1'
+          CAIYUN_TEST_MYSQL_ADDR: 127.0.0.1:3306
+          CAIYUN_TEST_MYSQL_USER: root
+          CAIYUN_TEST_MYSQL_PASSWORD: caiyun_root_test
+          CAIYUN_TEST_REDIS_ADDR: 127.0.0.1:6379
+          CAIYUN_TEST_REDIS_DB: '15'
+        run: go test ./internal/services -run OperationMySQLRedisIntegration -count=1
+
       - name: Vet
         env:
           GOTOOLCHAIN: local
@@ -119,10 +145,10 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-      - name: Install govulncheck
+      - name: Install govulncheck (pinned)
         env:
           GOTOOLCHAIN: auto
-        run: go install golang.org/x/vuln/cmd/govulncheck@latest
+        run: go install golang.org/x/vuln/cmd/govulncheck@v1.1.4
 
       - name: Vulnerability scan
         env:
@@ -215,6 +241,9 @@ jobs:
 
       - name: Typecheck
         run: npm run typecheck
+
+      - name: Verify development API/SSE/WebSocket proxies
+        run: npm run check:dev-proxy
 
       - name: Lint
         run: npm run lint -- --max-warnings=0
@@ -339,10 +368,9 @@ jobs:
           cosign sign "${IMAGE_PREFIX}/caiyun-frontend:${IMAGE_TAG}"
 
   compose-e2e:
-    name: Docker Compose real E2E
+    name: Docker Compose real E2E (including PRs)
     runs-on: ubuntu-latest
     needs: [backend, frontend]
-    if: github.event_name != 'pull_request'
 
     steps:
       - name: Checkout

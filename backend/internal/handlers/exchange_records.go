@@ -1,7 +1,7 @@
 package handlers
 
 import (
-	"caiyun/internal/models"
+	"caiyun/internal/dto"
 	apiresponse "caiyun/pkg/response"
 	"encoding/csv"
 	"net/http"
@@ -13,17 +13,15 @@ import (
 )
 
 type GetExchangeRecordsResponse struct {
-	Records []*models.ExchangeRecord `json:"records"`
-	Total   int64                    `json:"total"`
-	Stats   RecordStats              `json:"stats"`
+	Records []*dto.ExchangeRecordResponse `json:"records"`
+	Total   int64                         `json:"total"`
+	Stats   RecordStats                   `json:"stats"`
 }
 
 type RecordStats struct {
 	Success int64 `json:"success"`
 	Failed  int64 `json:"failed"`
 }
-
-// GetExchangeRecords 获取抢兑记录列表
 
 // GetExchangeRecords 获取抢兑记录列表
 func (h *ExchangeHandler) GetExchangeRecords(c *gin.Context) {
@@ -68,7 +66,7 @@ func (h *ExchangeHandler) GetExchangeRecords(c *gin.Context) {
 	}
 
 	apiresponse.Success(c, GetExchangeRecordsResponse{
-		Records: records,
+		Records: dto.ToExchangeRecordResponses(records),
 		Total:   total,
 		Stats: RecordStats{
 			Success: successCount,
@@ -76,8 +74,6 @@ func (h *ExchangeHandler) GetExchangeRecords(c *gin.Context) {
 		},
 	})
 }
-
-// ExportExchangeRecords 导出抢兑记录
 
 // ExportExchangeRecords 导出抢兑记录
 func (h *ExchangeHandler) ExportExchangeRecords(c *gin.Context) {
@@ -117,7 +113,7 @@ func (h *ExchangeHandler) ExportExchangeRecords(c *gin.Context) {
 		c.Header("Content-Type", "application/json")
 		c.Header("Content-Disposition", "attachment; filename=exchange_records.json")
 		c.JSON(http.StatusOK, gin.H{
-			"records":     records,
+			"records":     dto.ToExchangeRecordResponses(records),
 			"total":       len(records),
 			"exported_at": time.Now().Format("2006-01-02 15:04:05"),
 		})

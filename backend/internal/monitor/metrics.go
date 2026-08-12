@@ -2,6 +2,7 @@ package monitor
 
 import (
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -49,6 +50,10 @@ type Metrics struct {
 	// Worker 相关指标。
 	workerUp            prometheus.Gauge
 	workerHeartbeatUnix prometheus.Gauge
+	workerMetricsOnce   sync.Once
+
+	// Operation 相关指标。
+	operationTransitions *prometheus.CounterVec
 
 	// 缓存相关指标。
 	cacheHits   prometheus.Counter
@@ -243,6 +248,12 @@ func NewMetrics() *Metrics {
 		Name:      "heartbeat_unix",
 		Help:      "Worker 最近一次心跳时间（Unix 时间戳）",
 	})
+	m.operationTransitions = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: "caiyun",
+		Subsystem: "operation",
+		Name:      "transitions_total",
+		Help:      "异步 Operation 按状态记录的生命周期转换次数",
+	}, []string{"status"})
 
 	// 缓存指标。
 	m.cacheHits = prometheus.NewCounter(prometheus.CounterOpts{
@@ -343,8 +354,7 @@ func NewMetrics() *Metrics {
 	m.registry.MustRegister(m.queueProcessing)
 	m.registry.MustRegister(m.queueDelayed)
 	m.registry.MustRegister(m.queueDead)
-	m.registry.MustRegister(m.workerUp)
-	m.registry.MustRegister(m.workerHeartbeatUnix)
+	m.registry.MustRegister(m.operationTransitions)
 	m.registry.MustRegister(m.cacheHits)
 	m.registry.MustRegister(m.cacheMisses)
 	m.registry.MustRegister(m.auditDropped)
@@ -359,6 +369,19 @@ func NewMetrics() *Metrics {
 	m.registry.MustRegister(m.historyArchiveLastSuccessUnix)
 
 	return m
+}
+
+// registerWorkerMetrics keeps API-only registries free of zero-valued Worker
+// gauges.  A Worker activates them on its first lifecycle/heartbeat update;
+// both API and Worker can still share the same Metrics implementation.
+func (m *Metrics) registerWorkerMetrics() {
+	if m == nil {
+		return
+	}
+	m.workerMetricsOnce.Do(func() {
+		m.registry.MustRegister(m.workerUp)
+		m.registry.MustRegister(m.workerHeartbeatUnix)
+	})
 }
 
 // Registry 返回指标注册器。
@@ -428,6 +451,7 @@ func (m *Metrics) SetWorkerState(up bool) {
 	if m == nil {
 		return
 	}
+	m.registerWorkerMetrics()
 	if up {
 		m.workerUp.Set(1)
 		return
@@ -440,11 +464,28 @@ func (m *Metrics) TouchWorkerHeartbeat(now time.Time) {
 	if m == nil {
 		return
 	}
+	m.registerWorkerMetrics()
 	if now.IsZero() {
 		now = time.Now()
 	}
 	m.workerUp.Set(1)
 	m.workerHeartbeatUnix.Set(float64(now.Unix()))
+}
+
+// RecordOperationTransition counts a durable state transition. The Operation
+// repository remains authoritative; this metric is emitted only after its
+// compare-and-swap update succeeds.
+func (m *Metrics) RecordOperationTransition(status string) {
+	if m == nil {
+		return
+	}
+	status = strings.TrimSpace(status)
+	switch status {
+	case "queued", "running", "succeeded", "failed", "canceled":
+	default:
+		status = "unknown"
+	}
+	m.operationTransitions.WithLabelValues(status).Inc()
 }
 
 // IncCacheHits 增加缓存命中次数。

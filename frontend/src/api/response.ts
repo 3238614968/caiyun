@@ -1,3 +1,13 @@
+import type { OperationResponse } from './generated/operation-contract'
+
+export type {
+  OperationAcceptedResponse,
+  OperationResponse,
+  OperationStatus,
+  OperationUpdate,
+  OperationUpdatedEvent
+} from './generated/operation-contract'
+
 export interface ApiResponse<T> {
   code: number
   message: string
@@ -18,21 +28,29 @@ export function unwrapApiData<T>(value: T | ApiResponse<T>, fallback: T): T {
   return value ?? fallback
 }
 
-export type OperationStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'canceled'
-export interface OperationResponse {
-  operation_id: string
-  type: string
-  status: OperationStatus
-  account_id?: number
-  resource_id?: number
-  attempt_count: number
-  error_summary?: string
-  queued_at: string
-  started_at?: string
-  completed_at?: string
-  created_at: string
-  updated_at: string
+// ApiContractError distinguishes a successful HTTP response whose payload does
+// not satisfy the documented API envelope from a business/API failure.  This is
+// intentionally surfaced to callers rather than fabricating a successful
+// operation with an empty ID.
+export class ApiContractError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'ApiContractError'
+  }
 }
+
+export function requireApiData<T>(value: T | ApiResponse<T>, subject = 'API response'): T {
+  const data = isApiResponse<T>(value) ? value.data : value
+  if (data === undefined || data === null) {
+    throw new ApiContractError(`${subject} is missing data`)
+  }
+  return data
+}
+
 export function unwrapOperationResponse(value: OperationResponse | ApiResponse<OperationResponse>): OperationResponse {
-  return unwrapApiData(value, { operation_id: '', type: '', status: 'queued', attempt_count: 0, queued_at: '', created_at: '', updated_at: '' })
+	const operation = requireApiData(value, 'operation response')
+	if (!operation.operation_id || !operation.type || !operation.status) {
+		throw new ApiContractError('operation response is incomplete')
+	}
+	return operation
 }

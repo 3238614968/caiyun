@@ -1,82 +1,36 @@
 import request from './axios'
 import { unwrapApiData, unwrapOperationResponse, type ApiResponse, type OperationResponse } from './response'
 import { operationHeaders } from './operation'
+import type {
+  CloudStat as CloudStatContract,
+  CloudStatList as CloudStatListContract,
+  DashboardAccountRank as DashboardAccountRankContract,
+  DashboardData as DashboardDataContract,
+  DashboardTrendPoint as DashboardTrendPointContract,
+  QueueStatus as QueueStatusContract,
+  TaskLog as TaskLogContract,
+  TaskLogList as TaskLogListContract,
+  TaskStatus as TaskStatusContract,
+  TaskStatusItem as TaskStatusItemContract,
+  TotalCloudCount as TotalCloudCountContract,
+  TrendData as TrendDataContract
+} from './generated/operation-contract'
 
-// 任务日志接口
-export interface TaskLog {
-  id: number
-  user_id: number
-  account_id: number
-  account?: {
-    id: number
-    phone?: string
-    remark?: string
-  }
-  task_type: string
-  status: string
-  message: string
-  cloud_gained: number
-  execution_time: number
-  created_at: string
-}
+// 高频任务读取 DTO 由 OpenAPI 契约生成，避免前后端字段静默漂移。
+export type TaskLog = TaskLogContract
 
-// 云朵统计接口
-export interface CloudStats {
-  id: number
-  user_id: number
-  account_id: number
-  date: string
-  cloud_count: number
-  cloud_diff: number
-  cloud_diff_week: number
-  created_at: string
-  updated_at: string
-}
+// 统计读取 DTO 也由 OpenAPI 生成，手写查询参数保留在客户端边界。
+export type CloudStats = CloudStatContract
+export type DashboardData = DashboardDataContract
+export type TrendPoint = DashboardTrendPointContract
+export type AccountRank = DashboardAccountRankContract
+export type CloudStatsResponse = CloudStatListContract
+export type TrendDataResponse = TrendDataContract
+export type TotalCloudCountResponse = TotalCloudCountContract
 
-// 仪表盘数据接口
-export interface DashboardData {
-  total_cloud: number
-  account_count: number
-  today_gained: number
-  yesterday_diff: number
-  week_diff: number
-  success_rate: number
-  trend_data: TrendPoint[]
-  account_ranking: AccountRank[]
-}
-
-// 趋势点接口
-export interface TrendPoint {
-  date: string
-  cloud_count: number
-  cloud_diff?: number
-  has_data?: boolean
-}
-
-// 账号排名接口
-export interface AccountRank {
-  account_id: number
-  phone: string
-  remark: string
-  cloud_count: number
-}
-
-// 任务日志响应
-export interface TaskLogsResponse {
-  task_logs: TaskLog[]
-  total: number
-  page: number
-  page_size: number
-}
+export type TaskLogsResponse = TaskLogListContract
 
 // 云朵统计响应
-export interface CloudStatsResponse {
-  cloud_stats: CloudStats[]
-  total: number
-  page: number
-  page_size: number
-}
-
 export interface TaskLogQuery {
   account_id?: number
   task_type?: string
@@ -95,7 +49,7 @@ export function getTaskLogs(accountIdOrQuery?: number | TaskLogQuery, page: numb
   const fallback: TaskLogsResponse = { task_logs: [], total: 0, page: normalizedPage, page_size: normalizedPageSize }
 
   return request<TaskLogsResponse | ApiResponse<TaskLogsResponse>>({
-    url: '/api/tasks/logs',
+    url: '/api/v1/tasks/logs',
     method: 'get',
     params: {
       account_id: query.account_id,
@@ -121,7 +75,7 @@ export function getDashboard(): Promise<DashboardData> {
   }
 
   return request<{ data: DashboardData } | ApiResponse<DashboardData>>({
-    url: '/api/stats/dashboard',
+    url: '/api/v1/stats/dashboard',
     method: 'get'
   }).then((res) => {
     const unified = unwrapApiData(res as ApiResponse<DashboardData>, fallback)
@@ -136,17 +90,17 @@ export function getDashboard(): Promise<DashboardData> {
 export function getCloudStats(accountId?: number, page: number = 1, pageSize: number = 10): Promise<CloudStatsResponse> {
   const fallback: CloudStatsResponse = { cloud_stats: [], total: 0, page, page_size: pageSize }
   return request<CloudStatsResponse | ApiResponse<CloudStatsResponse>>({
-    url: '/api/stats/cloud',
+    url: '/api/v1/stats/cloud',
     method: 'get',
     params: { account_id: accountId, page, page_size: pageSize }
   }).then((res) => unwrapApiData(res, fallback))
 }
 
 // 获取趋势数据
-export function getTrendData(days: number = 7): Promise<{ trend_data: TrendPoint[] }> {
-  const fallback = { trend_data: [] as TrendPoint[] }
-  return request<typeof fallback | ApiResponse<typeof fallback>>({
-    url: '/api/stats/trend',
+export function getTrendData(days: number = 7): Promise<TrendDataResponse> {
+  const fallback: TrendDataResponse = { trend_data: [] }
+  return request<TrendDataResponse | ApiResponse<TrendDataResponse>>({
+    url: '/api/v1/stats/trend',
     method: 'get',
     params: { days }
   }).then((res) => unwrapApiData(res, fallback))
@@ -154,64 +108,33 @@ export function getTrendData(days: number = 7): Promise<{ trend_data: TrendPoint
 
 // 触发所有账号的任务
 export function triggerAllTasks(): Promise<OperationResponse> {
-  return request<OperationResponse | ApiResponse<OperationResponse>>({ url: '/api/tasks/trigger-all', method: 'post', headers: operationHeaders() }).then(unwrapOperationResponse)
+  return request<OperationResponse | ApiResponse<OperationResponse>>({ url: '/api/v1/tasks/trigger-all', method: 'post', headers: operationHeaders() }).then(unwrapOperationResponse)
 }
 
 // 计算统计数据
 export function calculateStats(): Promise<{ message: string }> {
   return request({
-    url: '/api/stats/calculate',
+    url: '/api/v1/stats/calculate',
     method: 'post'
   })
 }
 
 // 获取总云朵数
-export function getTotalCloudCount(): Promise<{ total_cloud: number }> {
-  const fallback = { total_cloud: 0 }
-  return request<typeof fallback | ApiResponse<typeof fallback>>({
-    url: '/api/stats/total-cloud',
+export function getTotalCloudCount(): Promise<TotalCloudCountResponse> {
+  const fallback: TotalCloudCountResponse = { total_cloud: 0 }
+  return request<TotalCloudCountResponse | ApiResponse<TotalCloudCountResponse>>({
+    url: '/api/v1/stats/total-cloud',
     method: 'get'
   }).then((res) => unwrapApiData(res, fallback))
 }
 
-// 任务状态接口
-export interface TaskStatus {
-  account_id: number
-  task_type: string
-  status: 'pending' | 'running' | 'success' | 'failed' | 'retrying'
-  progress: number
-  message: string
-  start_time?: string
-  end_time?: string
+// 任务状态 DTO 以契约字段为准；前端保留历史 status 联合类型以兼容推送事件。
+export type TaskStatus = Omit<TaskStatusItemContract, 'status'> & {
+  status: TaskStatusItemContract['status'] | 'retrying'
 }
+export type TaskStatusResponse = Omit<TaskStatusContract, 'tasks'> & { tasks: TaskStatus[] }
 
-// 队列状态接口
-export interface QueueStatus {
-  backend?: string
-  backend_meta?: {
-    backend?: string
-    pending_key?: string
-    processing_key?: string
-    delayed_key?: string
-    dead_letter_key?: string
-    stream_key?: string
-    consumer_group?: string
-    consumer_name?: string
-    max_len_approx?: number | string
-    labels?: Record<string, string>
-  }
-  is_healthy?: boolean
-  errors?: string[]
-  queue_length: number
-  processing_count?: number
-  delayed_count?: number
-  dead_letter_count?: number
-  active_workers: number
-  pending_tasks: number
-  completed_tasks: number
-  successful_tasks: number
-  failed_tasks: number
-}
+export type QueueStatus = QueueStatusContract
 
 // 获取队列状态
 export function getQueueStatus(): Promise<QueueStatus> {
@@ -232,7 +155,7 @@ export function getQueueStatus(): Promise<QueueStatus> {
   }
 
   return request<QueueStatus | ApiResponse<QueueStatus>>({
-    url: '/api/tasks/queue-status',
+    url: '/api/v1/tasks/queue-status',
     method: 'get'
   }).then((res) => unwrapApiData(res, fallback))
 }
@@ -240,9 +163,9 @@ export function getQueueStatus(): Promise<QueueStatus> {
 // 获取任务状态
 export function getTaskStatus(accountId?: number): Promise<TaskStatus[]> {
   // 后端返回: { tasks: TaskStatus[] }
-  const fallback = { tasks: [] as TaskStatus[] }
-  return request<typeof fallback | ApiResponse<typeof fallback>>({
-    url: '/api/tasks/status',
+  const fallback: TaskStatusResponse = { tasks: [] }
+  return request<TaskStatusResponse | ApiResponse<TaskStatusResponse>>({
+    url: '/api/v1/tasks/status',
     method: 'get',
     params: { account_id: accountId }
   }).then((res) => unwrapApiData(res, fallback).tasks)

@@ -140,6 +140,61 @@ func (q *TaskQueue) Requeue(message *TaskMessage) error {
 	return q.RequeueDelayed(message, retryBackoff(message))
 }
 
+// RenewVisibility refreshes the processing timestamp for a List-backed
+// delivery.  The timestamp is part of the exact list value, so replace it
+// atomically when the cache supports the queue Lua primitives.  A missing
+// value is not an error: another recovery path may already have moved it.
+func (q *TaskQueue) RenewVisibility(message *TaskMessage) (bool, error) {
+	if message == nil {
+		return false, fmt.Errorf("任务消息为空")
+	}
+	raw, err := messageRaw(message)
+	if err != nil {
+		return false, err
+	}
+
+	updated := *message
+	updated.ProcessingAt = time.Now().Unix()
+	updated.raw = ""
+	payloadBytes, err := json.Marshal(&updated)
+	if err != nil {
+		return false, fmt.Errorf("序列化续约任务失败: %w", err)
+	}
+	payload := string(payloadBytes)
+	if payload == raw {
+		return true, nil
+	}
+
+	if atomic, ok := q.cache.(atomicListQueueStore); ok {
+		renewed, err := atomic.ReplaceListItem(TaskProcessingKey, raw, payload)
+		if err != nil {
+			return false, fmt.Errorf("续约处理中任务失败: %w", err)
+		}
+		if renewed {
+			message.ProcessingAt = updated.ProcessingAt
+			message.raw = payload
+		}
+		return renewed, nil
+	}
+
+	removed, err := q.cache.LRem(TaskProcessingKey, 1, raw)
+	if err != nil {
+		return false, fmt.Errorf("续约处理中任务失败: %w", err)
+	}
+	if removed == 0 {
+		return false, nil
+	}
+	if err := q.cache.LPush(TaskProcessingKey, payload); err != nil {
+		// Keep the old representation recoverable if the replacement write
+		// fails after removal.  The original error remains the actionable one.
+		_ = q.cache.LPush(TaskProcessingKey, raw)
+		return false, fmt.Errorf("写入续约处理中任务失败: %w", err)
+	}
+	message.ProcessingAt = updated.ProcessingAt
+	message.raw = payload
+	return true, nil
+}
+
 // RequeueDelayed 将失败任务移入延迟队列，到期后由 Worker 维护循环恢复到 pending。
 func (q *TaskQueue) RequeueDelayed(message *TaskMessage, delay time.Duration) error {
 	if message == nil {
@@ -209,16 +264,10 @@ func (q *TaskQueue) DeadLetter(message *TaskMessage, reason string) error {
 		return err
 	}
 	message.ProcessingAt = 0
-	payload := map[string]interface{}{
-		"message":   message,
-		"reason":    reason,
-		"failed_at": time.Now().Unix(),
-	}
-	data, err := json.Marshal(payload)
+	deadPayload, err := encodeListDeadLetter(message, "", reason)
 	if err != nil {
 		return fmt.Errorf("序列化死信消息失败: %w", err)
 	}
-	deadPayload := string(data)
 	if atomic, ok := q.cache.(atomicListQueueStore); ok {
 		moved, err := atomic.MoveListItemToList(TaskProcessingKey, TaskDeadLetterKey, raw, deadPayload)
 		if err != nil {
@@ -304,16 +353,10 @@ func (q *TaskQueue) Dequeue(timeout time.Duration) (*TaskMessage, error) {
 }
 
 func (q *TaskQueue) deadLetterRaw(raw, reason string) error {
-	payload := map[string]interface{}{
-		"raw_message": raw,
-		"reason":      reason,
-		"failed_at":   time.Now().Unix(),
-	}
-	data, err := json.Marshal(payload)
+	deadPayload, err := encodeListDeadLetter(nil, raw, reason)
 	if err != nil {
 		return fmt.Errorf("序列化死信消息失败: %w", err)
 	}
-	deadPayload := string(data)
 	if atomic, ok := q.cache.(atomicListQueueStore); ok {
 		moved, err := atomic.MoveListItemToList(TaskProcessingKey, TaskDeadLetterKey, raw, deadPayload)
 		if err != nil {
@@ -447,6 +490,135 @@ func (q *TaskQueue) GetQueueLength() (int64, error) {
 
 func (q *TaskQueue) GetDeadLetterLength() (int64, error) {
 	return q.cache.LLen(TaskDeadLetterKey), nil
+}
+
+// ListDeadLetters returns the newest dead-letter entries up to limit.  It is
+// an inspection API; only ReplayDeadLetter performs a state transition.
+func (q *TaskQueue) ListDeadLetters(limit int) ([]*DeadLetterMessage, error) {
+	if limit <= 0 || limit > 200 {
+		limit = 100
+	}
+	rawItems, err := q.cache.LRange(TaskDeadLetterKey, 0, int64(limit-1))
+	if err != nil {
+		return nil, err
+	}
+	items := make([]*DeadLetterMessage, 0, len(rawItems))
+	for _, raw := range rawItems {
+		item, _, parseErr := parseListDeadLetter(raw)
+		if parseErr != nil {
+			continue
+		}
+		items = append(items, item)
+	}
+	return items, nil
+}
+
+func (q *TaskQueue) GetDeadLetter(id string) (*DeadLetterMessage, error) {
+	items, err := q.listDeadLettersWithRaw()
+	if err != nil {
+		return nil, err
+	}
+	for _, entry := range items {
+		if entry.item.ID == id {
+			return entry.item, nil
+		}
+	}
+	return nil, ErrDeadLetterNotFound
+}
+
+// ReplayDeadLetter atomically moves a non-Operation message back to pending
+// whenever the store provides list move primitives. Operation messages are
+// replayed through OperationService so their durable state is transitioned
+// before Redis delivery is retried.
+func (q *TaskQueue) ReplayDeadLetter(id string) (*TaskMessage, error) {
+	entries, err := q.listDeadLettersWithRaw()
+	if err != nil {
+		return nil, err
+	}
+	for _, entry := range entries {
+		if entry.item.ID != id {
+			continue
+		}
+		if entry.item.Malformed || entry.task == nil {
+			return nil, fmt.Errorf("malformed dead-letter entry cannot be replayed")
+		}
+		if entry.task.OperationID != "" {
+			return nil, ErrOperationDeadLetterReplay
+		}
+		message := resetReplayMessage(entry.task)
+		payload, err := json.Marshal(message)
+		if err != nil {
+			return nil, err
+		}
+		if atomic, ok := q.cache.(atomicListQueueStore); ok {
+			moved, err := atomic.MoveListItemToList(TaskDeadLetterKey, TaskQueueKey, entry.raw, string(payload))
+			if err != nil {
+				return nil, err
+			}
+			if !moved {
+				return nil, ErrDeadLetterNotFound
+			}
+			return message, nil
+		}
+		removed, err := q.cache.LRem(TaskDeadLetterKey, 1, entry.raw)
+		if err != nil {
+			return nil, err
+		}
+		if removed != 1 {
+			return nil, ErrDeadLetterNotFound
+		}
+		if err := q.cache.LPush(TaskQueueKey, string(payload)); err != nil {
+			_ = q.cache.LPush(TaskDeadLetterKey, entry.raw)
+			return nil, err
+		}
+		return message, nil
+	}
+	return nil, ErrDeadLetterNotFound
+}
+
+// ArchiveDeadLetter removes an entry after OperationService has durably
+// re-queued the associated command. It deliberately does not enqueue again.
+func (q *TaskQueue) ArchiveDeadLetter(id string) error {
+	entries, err := q.listDeadLettersWithRaw()
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		if entry.item.ID != id {
+			continue
+		}
+		removed, err := q.cache.LRem(TaskDeadLetterKey, 1, entry.raw)
+		if err != nil {
+			return err
+		}
+		if removed != 1 {
+			return ErrDeadLetterNotFound
+		}
+		return nil
+	}
+	return ErrDeadLetterNotFound
+}
+
+type listDeadLetterRaw struct {
+	raw  string
+	item *DeadLetterMessage
+	task *TaskMessage
+}
+
+func (q *TaskQueue) listDeadLettersWithRaw() ([]listDeadLetterRaw, error) {
+	rawItems, err := q.cache.LRange(TaskDeadLetterKey, 0, -1)
+	if err != nil {
+		return nil, err
+	}
+	items := make([]listDeadLetterRaw, 0, len(rawItems))
+	for _, raw := range rawItems {
+		item, task, parseErr := parseListDeadLetter(raw)
+		if parseErr != nil {
+			continue
+		}
+		items = append(items, listDeadLetterRaw{raw: raw, item: item, task: task})
+	}
+	return items, nil
 }
 
 func (q *TaskQueue) GetProcessingLength() (int64, error) {

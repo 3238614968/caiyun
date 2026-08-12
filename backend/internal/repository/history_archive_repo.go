@@ -14,9 +14,31 @@ const (
 	maxArchiveBatchSize     = 10000
 )
 
-var allowedArchiveTablePairs = map[string]string{
-	"task_logs":        "task_logs_archive",
-	"exchange_records": "exchange_records_archive",
+type archiveTableSpec struct {
+	archiveTable string
+	columns      []string
+}
+
+// Archive columns are intentionally explicit.  `INSERT ... SELECT *` made the
+// archive operation depend on two independently evolving table definitions;
+// adding exchange_rule_id to live exchange_records after the archive table had
+// been created with CREATE TABLE LIKE caused positional copies to fail.  Keep
+// this list synchronized with migration 021's archive-parity DDL.
+var archiveTableSpecs = map[string]archiveTableSpec{
+	"task_logs": {
+		archiveTable: "task_logs_archive",
+		columns: []string{
+			"id", "user_id", "account_id", "task_type", "status", "message",
+			"cloud_gained", "execution_time", "created_at", "deleted_at",
+		},
+	},
+	"exchange_records": {
+		archiveTable: "exchange_records_archive",
+		columns: []string{
+			"id", "user_id", "exchange_account_id", "exchange_rule_id", "exchange_task_id",
+			"product_id", "prize_id", "prize_name", "status", "message", "execution_time_ms", "created_at",
+		},
+	},
 }
 
 // HistoryArchiveRepository 负责将冷热数据从主表归档到 archive 表。
@@ -49,12 +71,13 @@ func (r *HistoryArchiveRepository) archiveBatch(sourceTable, archiveTable string
 		return 0, fmt.Errorf("archive repository 未初始化")
 	}
 	batchSize = normalizeArchiveBatchSize(batchSize)
-	if err := validateArchiveTables(sourceTable, archiveTable); err != nil {
+	spec, err := archiveTableSpecFor(sourceTable, archiveTable)
+	if err != nil {
 		return 0, err
 	}
 
 	var moved int64
-	err := r.db.Transaction(func(tx *gorm.DB) error {
+	err = r.db.Transaction(func(tx *gorm.DB) error {
 		var ids []uint
 		if err := tx.Table(sourceTable).
 			Select("id").
@@ -70,9 +93,16 @@ func (r *HistoryArchiveRepository) archiveBatch(sourceTable, archiveTable string
 		}
 
 		placeholders, args := archiveIDPlaceholders(ids)
-		insertSQL := fmt.Sprintf("INSERT IGNORE INTO `%s` SELECT * FROM `%s` WHERE id IN (%s)", archiveTable, sourceTable, placeholders)
-		if err := tx.Exec(insertSQL, args...).Error; err != nil {
-			return err
+		// A duplicate archive primary key must abort this transaction.  INSERT
+		// IGNORE followed by DELETE could silently drop the source row when a
+		// previous partial/manual archive had already copied that ID.
+		insertSQL := buildArchiveInsertSQL(sourceTable, archiveTable, spec.columns, placeholders)
+		insertResult := tx.Exec(insertSQL, args...)
+		if insertResult.Error != nil {
+			return insertResult.Error
+		}
+		if insertResult.RowsAffected != int64(len(ids)) {
+			return fmt.Errorf("archive %s -> %s inserted %d rows, expected %d", sourceTable, archiveTable, insertResult.RowsAffected, len(ids))
 		}
 
 		deleteSQL := fmt.Sprintf("DELETE FROM `%s` WHERE id IN (%s)", sourceTable, placeholders)
@@ -106,10 +136,26 @@ func archiveIDPlaceholders(ids []uint) (string, []interface{}) {
 	return strings.Join(parts, ", "), args
 }
 
-func validateArchiveTables(sourceTable, archiveTable string) error {
-	expectedArchive, ok := allowedArchiveTablePairs[sourceTable]
-	if !ok || expectedArchive != archiveTable {
-		return fmt.Errorf("unsupported archive table pair: %s -> %s", sourceTable, archiveTable)
+func archiveTableSpecFor(sourceTable, archiveTable string) (archiveTableSpec, error) {
+	spec, ok := archiveTableSpecs[sourceTable]
+	if !ok || spec.archiveTable != archiveTable {
+		return archiveTableSpec{}, fmt.Errorf("unsupported archive table pair: %s -> %s", sourceTable, archiveTable)
 	}
-	return nil
+	return spec, nil
+}
+
+func buildArchiveInsertSQL(sourceTable, archiveTable string, columns []string, placeholders string) string {
+	quotedColumns := make([]string, 0, len(columns))
+	for _, column := range columns {
+		quotedColumns = append(quotedColumns, "`"+column+"`")
+	}
+	columnList := strings.Join(quotedColumns, ", ")
+	return fmt.Sprintf(
+		"INSERT INTO `%s` (%s) SELECT %s FROM `%s` WHERE `id` IN (%s)",
+		archiveTable,
+		columnList,
+		columnList,
+		sourceTable,
+		placeholders,
+	)
 }

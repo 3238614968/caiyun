@@ -2,42 +2,14 @@ import { defineConfig } from 'vitest/config'
 import vue from '@vitejs/plugin-vue'
 import Components from 'unplugin-vue-components/vite'
 import { ElementPlusResolver } from 'unplugin-vue-components/resolvers'
+import * as ElementPlusIcons from '@element-plus/icons-vue'
 import { resolve } from 'path'
 
-const elementPlusIconNames = new Set([
-  'ArrowDown',
-  'Bell',
-  'Box',
-  'CircleCheck',
-  'CircleClose',
-  'Cloudy',
-  'Close',
-  'DataLine',
-  'Document',
-  'Download',
-  'Expand',
-  'Fold',
-  'FullScreen',
-  'HomeFilled',
-  'InfoFilled',
-  'List',
-  'Lock',
-  'Message',
-  'PieChart',
-  'Plus',
-  'Present',
-  'Refresh',
-  'Search',
-  'Setting',
-  'Shop',
-  'SwitchButton',
-  'Timer',
-  'User',
-  'Warning'
-])
-
 const elementPlusIconResolver = (name: string) => {
-  if (!elementPlusIconNames.has(name)) return undefined
+  // Resolve only exports actually provided by Element Plus. This removes the
+  // maintenance-prone handwritten icon allowlist while avoiding imports for
+  // arbitrary component names.
+  if (!(name in ElementPlusIcons)) return undefined
   return {
     name,
     from: '@element-plus/icons-vue'
@@ -82,6 +54,11 @@ export default defineConfig({
   server: {
     proxy: {
       '/api': {
+        target: 'http://localhost:8080',
+        changeOrigin: true
+      },
+      '/events': {
+        // EventSource uses a regular long-lived HTTP request, not WebSocket.
         target: 'http://localhost:8080',
         changeOrigin: true
       },

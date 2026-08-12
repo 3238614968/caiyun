@@ -17,7 +17,6 @@ const defaultEventChannel = "caiyun:ws:events"
 // in-memory cross-node transport while production uses Redis Pub/Sub.
 type EventTransport interface {
 	Publish(context.Context, string, string) error
-	NextSequence(context.Context, string) (uint64, error)
 	Subscribe(context.Context, string) (*cache.PubSubSubscription, error)
 }
 
@@ -81,10 +80,6 @@ func (b *redisEventBus) publish(message Message) error {
 		return err
 	}
 	return b.transport.Publish(b.ctx, b.channel, string(payload))
-}
-
-func (b *redisEventBus) nextSequence(userID uint) (uint64, error) {
-	return b.transport.NextSequence(b.ctx, fmt.Sprintf("caiyun:ws:seq:%d", userID))
 }
 
 func (b *redisEventBus) Stop() {

@@ -236,6 +236,64 @@ func TestSetAuthCookiesUsesSecureHttpOnlyAndDoubleSubmitCSRF(t *testing.T) {
 	}
 }
 
+func TestCookieSecurePolicy(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	newContext := func(t *testing.T, tlsEnabled bool, forwardedProto string) *gin.Context {
+		t.Helper()
+		recorder := httptest.NewRecorder()
+		context, _ := gin.CreateTestContext(recorder)
+		context.Request = httptest.NewRequest(http.MethodGet, "http://example.test/", nil)
+		if tlsEnabled {
+			context.Request.TLS = &tls.ConnectionState{}
+		}
+		context.Request.Header.Set("X-Forwarded-Proto", forwardedProto)
+		return context
+	}
+
+	t.Run("plain HTTP development is not secure", func(t *testing.T) {
+		t.Setenv("APP_ENV", "development")
+		t.Setenv("COOKIE_SECURE", "")
+		if isSecureRequest(newContext(t, false, "")) {
+			t.Fatal("plain HTTP development request set Secure cookie")
+		}
+	})
+	t.Run("TLS is secure", func(t *testing.T) {
+		t.Setenv("APP_ENV", "development")
+		t.Setenv("COOKIE_SECURE", "")
+		if !isSecureRequest(newContext(t, true, "")) {
+			t.Fatal("TLS request did not set Secure cookie")
+		}
+	})
+	t.Run("production is secure behind a reverse proxy", func(t *testing.T) {
+		t.Setenv("APP_ENV", "production")
+		t.Setenv("COOKIE_SECURE", "")
+		if !isSecureRequest(newContext(t, false, "")) {
+			t.Fatal("production request did not set Secure cookie")
+		}
+	})
+	t.Run("explicit setting wins", func(t *testing.T) {
+		t.Setenv("APP_ENV", "production")
+		t.Setenv("COOKIE_SECURE", "false")
+		if isSecureRequest(newContext(t, false, "https")) {
+			t.Fatal("explicit COOKIE_SECURE=false was ignored")
+		}
+	})
+	t.Run("invalid production setting remains secure", func(t *testing.T) {
+		t.Setenv("APP_ENV", "production")
+		t.Setenv("COOKIE_SECURE", "invalid")
+		if !isSecureRequest(newContext(t, false, "")) {
+			t.Fatal("invalid COOKIE_SECURE disabled production Secure cookie")
+		}
+	})
+	t.Run("forwarded protocol alone is ignored", func(t *testing.T) {
+		t.Setenv("APP_ENV", "development")
+		t.Setenv("COOKIE_SECURE", "")
+		if isSecureRequest(newContext(t, false, "https")) {
+			t.Fatal("untrusted X-Forwarded-Proto set Secure cookie")
+		}
+	})
+}
+
 func TestRefreshCookieRequiresCSRFAndRotatesSession(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	fixture := newHandlerAuthFixture(t)

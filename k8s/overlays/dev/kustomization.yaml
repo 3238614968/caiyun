@@ -1,0 +1,23 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ../../
+
+namespace: caiyun-dev
+
+commonLabels:
+  app.kubernetes.io/part-of: caiyun
+  app.kubernetes.io/environment: dev
+
+images:
+  - name: caiyun-backend
+    newName: registry.example.invalid/caiyun-backend
+    newTag: dev
+  - name: caiyun-frontend
+    newName: registry.example.invalid/caiyun-frontend
+    newTag: dev
+
+patches:
+  - path: config.patch.yaml
+  - path: workloads.patch.yaml

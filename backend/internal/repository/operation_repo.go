@@ -136,6 +136,67 @@ func (r *OperationRepository) MarkFailed(id, executionToken, errorSummary string
 	return operationOwnershipResult(result)
 }
 
+// ReplayFailed returns a terminal failed command to the durable queued state.
+// It is intentionally restricted to failed rows and clears the previous lease,
+// so an administrator cannot resurrect a canceled/succeeded command or let an
+// old Worker write through after manual dead-letter replay.
+func (r *OperationRepository) ReplayFailed(id string, now time.Time) (bool, error) {
+	result := r.db.Model(&models.Operation{}).
+		Where("id = ? AND status = ?", id, models.OperationFailed).
+		Updates(map[string]interface{}{
+			"status":          models.OperationQueued,
+			"execution_token": "",
+			"queued_at":       now,
+			"started_at":      nil,
+			"completed_at":    nil,
+			"attempt_count":   0,
+			"error_summary":   "manually replayed from dead letter",
+			"updated_at":      now,
+		})
+	if result.Error != nil {
+		return false, result.Error
+	}
+	return result.RowsAffected == 1, nil
+}
+
+// RequeueStaleRunning is the database-side complement to queue PEL recovery.
+// It uses one fenced transition per candidate so a concurrent RenewRunning or
+// successful completion wins the race and is never overwritten.  The limit
+// bounds one maintenance tick without relying on database-specific UPDATE
+// LIMIT syntax.
+func (r *OperationRepository) RequeueStaleRunning(staleBefore, now time.Time, limit int) (int, error) {
+	if limit <= 0 || limit > 500 {
+		limit = 100
+	}
+	var candidates []models.Operation
+	if err := r.db.Where("status = ? AND updated_at < ?", models.OperationRunning, staleBefore).
+		Order("updated_at ASC").Limit(limit).Find(&candidates).Error; err != nil {
+		return 0, err
+	}
+
+	recovered := 0
+	for _, candidate := range candidates {
+		result := r.db.Model(&models.Operation{}).
+			Where("id = ? AND status = ? AND updated_at < ?", candidate.ID, models.OperationRunning, staleBefore).
+			Updates(map[string]interface{}{
+				"status":          models.OperationQueued,
+				"execution_token": "",
+				"queued_at":       now,
+				"started_at":      nil,
+				"completed_at":    nil,
+				"error_summary":   "worker lease expired; queued for recovery",
+				"updated_at":      now,
+			})
+		if result.Error != nil {
+			return recovered, result.Error
+		}
+		if result.RowsAffected == 1 {
+			recovered++
+		}
+	}
+	return recovered, nil
+}
+
 func (r *OperationRepository) RenewRunning(id, executionToken string, now time.Time) (bool, error) {
 	result := r.db.Model(&models.Operation{}).
 		Where("id = ? AND status = ? AND execution_token = ?", id, models.OperationRunning, executionToken).

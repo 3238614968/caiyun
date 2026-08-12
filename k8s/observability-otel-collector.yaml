@@ -1,0 +1,146 @@
+# Optional production Collector. The production Kustomize overlay includes this
+# resource, while development/staging keep tracing disabled by default.
+#
+# Required secrets (kept outside source control):
+#   caiyun-otel-receiver-tls: tls.crt, tls.key
+#   caiyun-otel-exporter: trace-backend-otlp-http-endpoint, trace-backend-authorization
+#   caiyun-otel-receiver-ca: ca.crt (mounted by API and Worker through the
+#   production workload patch so OTLP/gRPC is authenticated end-to-end).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: caiyun-otel-collector-config
+  namespace: caiyun
+data:
+  otel-collector-config.yaml: |
+    extensions:
+      health_check:
+        endpoint: 0.0.0.0:13133
+    receivers:
+      otlp:
+        protocols:
+          grpc:
+            endpoint: 0.0.0.0:4317
+            tls:
+              cert_file: /etc/otel/receiver/tls.crt
+              key_file: /etc/otel/receiver/tls.key
+    processors:
+      memory_limiter:
+        check_interval: 1s
+        limit_mib: 256
+        spike_limit_mib: 64
+      batch:
+        send_batch_size: 512
+        timeout: 5s
+    exporters:
+      otlphttp:
+        endpoint: ${env:TRACE_BACKEND_OTLP_HTTP_ENDPOINT}
+        headers:
+          Authorization: ${env:TRACE_BACKEND_OTLP_AUTHORIZATION}
+    service:
+      extensions: [health_check]
+      pipelines:
+        traces:
+          receivers: [otlp]
+          processors: [memory_limiter, batch]
+          exporters: [otlphttp]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: caiyun-otel-collector
+  namespace: caiyun
+  labels:
+    app: caiyun-otel-collector
+spec:
+  selector:
+    app: caiyun-otel-collector
+  ports:
+    - name: otlp-grpc
+      port: 4317
+      targetPort: otlp-grpc
+    - name: health
+      port: 13133
+      targetPort: health
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: caiyun-otel-collector
+  namespace: caiyun
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: caiyun-otel-collector
+  template:
+    metadata:
+      labels:
+        app: caiyun-otel-collector
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: otel-collector
+          # Replace with a reviewed, immutable Collector digest during release.
+          image: otel/opentelemetry-collector-contrib:0.113.0
+          args: ["--config=/conf/otel-collector-config.yaml"]
+          ports:
+            - name: otlp-grpc
+              containerPort: 4317
+            - name: health
+              containerPort: 13133
+          env:
+            - name: TRACE_BACKEND_OTLP_HTTP_ENDPOINT
+              valueFrom:
+                secretKeyRef:
+                  name: caiyun-otel-exporter
+                  key: trace-backend-otlp-http-endpoint
+            - name: TRACE_BACKEND_OTLP_AUTHORIZATION
+              valueFrom:
+                secretKeyRef:
+                  name: caiyun-otel-exporter
+                  key: trace-backend-authorization
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          readinessProbe:
+            httpGet:
+              path: /
+              port: health
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /
+              port: health
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          volumeMounts:
+            - name: collector-config
+              mountPath: /conf
+              readOnly: true
+            - name: receiver-tls
+              mountPath: /etc/otel/receiver
+              readOnly: true
+      volumes:
+        - name: collector-config
+          configMap:
+            name: caiyun-otel-collector-config
+        - name: receiver-tls
+          secret:
+            secretName: caiyun-otel-receiver-tls

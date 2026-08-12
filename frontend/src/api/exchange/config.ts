@@ -1,7 +1,7 @@
 import request from '../axios'
 import { unwrapApiData, unwrapOperationResponse, type ApiResponse, type OperationResponse } from '../response'
 import { operationHeaders } from '../operation'
-import type { ExchangeConfig, SuccessResponse, UpdateExchangeConfigRequest } from './types'
+import type { ExchangeConfig, ExchangeConfigPublic, SuccessResponse, UpdateExchangeConfigRequest } from './types'
 
 export function getExchangeConfig(): Promise<ExchangeConfig> {
   const fallback: ExchangeConfig = {
@@ -14,27 +14,27 @@ export function getExchangeConfig(): Promise<ExchangeConfig> {
     immediate_exchange_enabled: false
   }
   return request<ExchangeConfig | ApiResponse<ExchangeConfig>>({
-    url: '/api/admin/exchange/config',
+    url: '/api/v1/admin/exchange/config',
     method: 'get'
   }).then((res) => unwrapApiData(res, fallback))
 }
 
-export function getExchangeConfigPublic(): Promise<{ enabled: boolean; immediate_exchange_enabled: boolean }> {
-  const fallback = { enabled: true, immediate_exchange_enabled: false }
-  return request<typeof fallback | ApiResponse<typeof fallback>>({
-    url: '/api/exchange/config',
+export function getExchangeConfigPublic(): Promise<ExchangeConfigPublic> {
+  const fallback: ExchangeConfigPublic = { enabled: true, immediate_exchange_enabled: false }
+  return request<ExchangeConfigPublic | ApiResponse<ExchangeConfigPublic>>({
+    url: '/api/v1/exchange/config',
     method: 'get'
   }).then((res) => unwrapApiData(res, fallback))
 }
 
 export function updateExchangeConfig(data: UpdateExchangeConfigRequest): Promise<SuccessResponse> {
   return request<SuccessResponse>({
-    url: '/api/admin/exchange/config',
+    url: '/api/v1/admin/exchange/config',
     method: 'put',
     data
   })
 }
 
 export function executeMonthlyExchange(): Promise<OperationResponse> {
-  return request<OperationResponse | ApiResponse<OperationResponse>>({ url: '/api/admin/exchange/execute-monthly', method: 'post', headers: operationHeaders() }).then(unwrapOperationResponse)
+  return request<OperationResponse | ApiResponse<OperationResponse>>({ url: '/api/v1/admin/exchange/execute-monthly', method: 'post', headers: operationHeaders() }).then(unwrapOperationResponse)
 }

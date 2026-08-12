@@ -19,8 +19,8 @@ function appPath(path: string): string {
 
 // 创建 axios 实例
 const service: AxiosInstance = axios.create({
-  // 注意：本项目各接口 `url` 已包含 `/api/...` 前缀，因此这里默认不再追加 `/api`，
-  // 否则会出现 `/api/api/...` 导致 404。
+  // 注意：本项目各接口 `url` 已包含 `/api/v1/...` 前缀，因此这里默认不再追加 `/api`，
+  // 否则会出现 `/api/v1/v1/...` 导致 404。
   baseURL: import.meta.env.VITE_API_BASE_URL || '',
   timeout: 30000,
   withCredentials: true,
@@ -39,7 +39,7 @@ export function resetAuthExpiredState(): void {
 function isSilentAuthError(error: AxiosError<ErrorResponseBody>): boolean {
   const config = error.config as AppAxiosRequestConfig | undefined
   const url = String(config?.url || '')
-  return !!config?.silentAuthError || url.includes('/api/auth/me')
+  return !!config?.silentAuthError || url.includes('/api/v1/auth/me')
 }
 
 function canAttemptSessionRefresh(config?: AppAxiosRequestConfig): config is AppAxiosRequestConfig {
@@ -56,7 +56,7 @@ function canAttemptSessionRefresh(config?: AppAxiosRequestConfig): config is App
 
 async function refreshBrowserSession(): Promise<void> {
   if (!refreshSessionPromise) {
-    refreshSessionPromise = service.post('/api/auth/refresh', undefined, {
+    refreshSessionPromise = service.post('/api/v1/auth/refresh', undefined, {
       silentAuthError: true,
       _authRetry: true
     } as AppAxiosRequestConfig).then(() => undefined).finally(() => {

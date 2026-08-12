@@ -7,6 +7,7 @@ import (
 	"caiyun/internal/security"
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -14,6 +15,7 @@ import (
 
 	"caiyun/internal/models"
 
+	"github.com/google/uuid"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
@@ -21,7 +23,8 @@ import (
 
 func newRepositoryTestDB(t *testing.T, modelsToMigrate ...interface{}) *gorm.DB {
 	t.Helper()
-	db, err := gorm.Open(sqlite.Open("file::memory:?cache=shared"), &gorm.Config{
+	dsn := fmt.Sprintf("file:repository-%s?mode=memory&cache=shared", uuid.NewString())
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{
 		Logger: logger.Default.LogMode(logger.Silent),
 	})
 	if err != nil {
@@ -33,6 +36,32 @@ func newRepositoryTestDB(t *testing.T, modelsToMigrate ...interface{}) *gorm.DB 
 		}
 	}
 	return db
+}
+
+func TestWSMessageRepositoryPersistsDurablePerUserSequences(t *testing.T) {
+	db := newRepositoryTestDB(t, &models.WebSocketMessage{}, &models.WebSocketSequence{})
+	repo := NewWSMessageRepository(db)
+
+	first, err := repo.PersistMessageEnvelope(7, "operation.updated", map[string]string{"id": "first"}, "msg-1", time.Now().Add(time.Hour))
+	if err != nil || first != 1 {
+		t.Fatalf("first sequence = (%d, %v), want (1, nil)", first, err)
+	}
+	second, err := repo.PersistMessageEnvelope(7, "operation.updated", map[string]string{"id": "second"}, "msg-2", time.Now().Add(time.Hour))
+	if err != nil || second != 2 {
+		t.Fatalf("second sequence = (%d, %v), want (2, nil)", second, err)
+	}
+	otherUser, err := repo.PersistMessageEnvelope(8, "operation.updated", map[string]string{"id": "other"}, "msg-3", time.Now().Add(time.Hour))
+	if err != nil || otherUser != 1 {
+		t.Fatalf("other user sequence = (%d, %v), want (1, nil)", otherUser, err)
+	}
+
+	afterFirst, err := repo.GetMessagesAfterSequence(7, 1, 10)
+	if err != nil {
+		t.Fatalf("GetMessagesAfterSequence: %v", err)
+	}
+	if len(afterFirst) != 1 || afterFirst[0].MessageID != "msg-2" || afterFirst[0].Sequence != 2 {
+		t.Fatalf("replay after sequence 1 = %#v, want msg-2/2", afterFirst)
+	}
 }
 
 func TestAccountRepositoryListByUserIDSortsActiveFirst(t *testing.T) {
@@ -49,6 +78,9 @@ func TestAccountRepositoryListByUserIDSortsActiveFirst(t *testing.T) {
 		if err := db.Create(account).Error; err != nil {
 			t.Fatalf("create account: %v", err)
 		}
+	}
+	if err := db.Model(&models.Account{}).Where("id = ?", accounts[0].ID).Update("is_active", false).Error; err != nil {
+		t.Fatalf("mark inactive account: %v", err)
 	}
 
 	got, total, err := repo.ListByUserID(1, 0, 10, "")
@@ -109,7 +141,7 @@ func TestExchangeTaskRepositoryRunningStateMigration(t *testing.T) {
 	db := newRepositoryTestDB(t, &models.ExchangeTask{})
 	repo := NewExchangeTaskRepository(db)
 	stale := &models.ExchangeTask{UserID: 1, ExchangeAccountID: 1, ProductID: 1, PrizeID: "p1", PrizeName: "stale", Status: string(models.ExchangeTaskRunning), UpdatedAt: time.Now().Add(-2 * time.Hour)}
-	fresh := &models.ExchangeTask{UserID: 1, ExchangeAccountID: 1, ProductID: 2, PrizeID: "p2", PrizeName: "fresh", Status: string(models.ExchangeTaskRunning), UpdatedAt: time.Now()}
+	fresh := &models.ExchangeTask{UserID: 1, ExchangeAccountID: 1, ProductID: 2, PrizeID: "p2", PrizeName: "fresh", Status: string(models.ExchangeTaskRunning), ExecutionToken: "fresh-worker", UpdatedAt: time.Now()}
 	pending := &models.ExchangeTask{UserID: 1, ExchangeAccountID: 1, ProductID: 3, PrizeID: "p3", PrizeName: "pending", Status: string(models.ExchangeTaskPending), UpdatedAt: time.Now().Add(-2 * time.Hour)}
 	for _, task := range []*models.ExchangeTask{stale, fresh, pending} {
 		if err := db.Create(task).Error; err != nil {
@@ -125,11 +157,11 @@ func TestExchangeTaskRepositoryRunningStateMigration(t *testing.T) {
 		t.Fatalf("recovered = %d, want 1", recovered)
 	}
 
-	released, err := repo.ReleaseRunning(fresh.ID, "worker canceled")
+	released, err := repo.ReleaseRunning(fresh.ID, "fresh-worker", "worker canceled")
 	if err != nil || !released {
 		t.Fatalf("ReleaseRunning() = (%v, %v), want (true, nil)", released, err)
 	}
-	released, err = repo.ReleaseRunning(fresh.ID, "must not overwrite terminal/pending state")
+	released, err = repo.ReleaseRunning(fresh.ID, "fresh-worker", "must not overwrite terminal/pending state")
 	if err != nil || released {
 		t.Fatalf("second ReleaseRunning() = (%v, %v), want (false, nil)", released, err)
 	}
@@ -144,6 +176,62 @@ func TestExchangeTaskRepositoryRunningStateMigration(t *testing.T) {
 	}
 	if statuses["p1"] != string(models.ExchangeTaskPending) || statuses["p2"] != string(models.ExchangeTaskPending) || statuses["p3"] != string(models.ExchangeTaskPending) {
 		t.Fatalf("statuses = %#v", statuses)
+	}
+}
+
+func TestExchangeTaskRepositoryFencingTokenRejectsStaleWorker(t *testing.T) {
+	db := newRepositoryTestDB(t, &models.ExchangeTask{}, &models.ExchangeRecord{})
+	repo := NewExchangeTaskRepository(db)
+	task := &models.ExchangeTask{
+		UserID:            7,
+		ExchangeAccountID: 8,
+		ProductID:         9,
+		PrizeID:           "fencing-prize",
+		PrizeName:         "fencing task",
+		Status:            string(models.ExchangeTaskPending),
+	}
+	if err := db.Create(task).Error; err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+
+	claimed, oldToken, err := repo.TryMarkRunning(task.ID)
+	if err != nil || !claimed || oldToken == "" {
+		t.Fatalf("first claim = (%t, %q, %v)", claimed, oldToken, err)
+	}
+	if released, err := repo.ReleaseRunning(task.ID, oldToken, "lease expired"); err != nil || !released {
+		t.Fatalf("release old owner = (%t, %v)", released, err)
+	}
+	claimed, newToken, err := repo.TryMarkRunning(task.ID)
+	if err != nil || !claimed || newToken == "" || newToken == oldToken {
+		t.Fatalf("second claim = (%t, %q, %v)", claimed, newToken, err)
+	}
+
+	if err := repo.FinalizeOwned(task, oldToken, false, "stale failure", models.ExchangeTaskFailed, 0); !errors.Is(err, ErrExchangeTaskExecutionLost) {
+		t.Fatalf("stale finalize error = %v, want ErrExchangeTaskExecutionLost", err)
+	}
+	var current models.ExchangeTask
+	if err := db.First(&current, task.ID).Error; err != nil {
+		t.Fatalf("load task after stale finalize: %v", err)
+	}
+	if current.Status != string(models.ExchangeTaskRunning) || current.ExecutionToken != newToken || current.AttemptedCount != 0 {
+		t.Fatalf("stale worker overwrote task: %+v", current)
+	}
+	var recordCount int64
+	if err := db.Model(&models.ExchangeRecord{}).Count(&recordCount).Error; err != nil || recordCount != 0 {
+		t.Fatalf("records after stale finalize = %d, err=%v; want 0", recordCount, err)
+	}
+
+	if err := repo.FinalizeOwned(task, newToken, true, "success", models.ExchangeTaskCompleted, 12); err != nil {
+		t.Fatalf("new owner finalize: %v", err)
+	}
+	if err := db.First(&current, task.ID).Error; err != nil {
+		t.Fatalf("load finalized task: %v", err)
+	}
+	if current.Status != string(models.ExchangeTaskCompleted) || current.ExecutionToken != "" || current.AttemptedCount != 1 || current.SuccessCount != 1 {
+		t.Fatalf("finalized task = %+v", current)
+	}
+	if err := db.Model(&models.ExchangeRecord{}).Count(&recordCount).Error; err != nil || recordCount != 1 {
+		t.Fatalf("records after new finalize = %d, err=%v; want 1", recordCount, err)
 	}
 }
 
@@ -237,6 +325,9 @@ func TestExchangeTaskRepositoryGetByUserIDWithFilterSupportsKeywordCloudAndActiv
 	accountC := &models.Account{UserID: user1.ID, Phone: "13900001003", Auth: "auth-c", CloudCount: 3200, Remark: "北京账号", IsActive: true}
 	accountOther := &models.Account{UserID: user2.ID, Phone: "13900001999", Auth: "auth-other", CloudCount: 9999, Remark: "其他用户", IsActive: true}
 	mustCreateRecords(t, db, accountA, accountB, accountC, accountOther)
+	if err := db.Model(&models.Account{}).Where("id = ?", accountB.ID).Update("is_active", false).Error; err != nil {
+		t.Fatalf("mark inactive account: %v", err)
+	}
 
 	productA := &models.Product{PrizeID: "repo-filter-prod-a", PrizeName: "A", POrder: 100, Category: "会员"}
 	productB := &models.Product{PrizeID: "repo-filter-prod-b", PrizeName: "B", POrder: 200, Category: "会员"}
@@ -249,6 +340,9 @@ func TestExchangeTaskRepositoryGetByUserIDWithFilterSupportsKeywordCloudAndActiv
 	ruleC := &models.ExchangeAccount{UserID: user1.ID, AccountID: accountC.ID, Phone: accountC.Phone, Auth: "rule-auth-c", Remark: "北京停用规则", ExchangeTime1: "10:00:00", ExchangeTime2: "16:00:00", IsActive: false}
 	ruleOther := &models.ExchangeAccount{UserID: user2.ID, AccountID: accountOther.ID, Phone: accountOther.Phone, Auth: "rule-auth-other", Remark: "其他用户规则", ExchangeTime1: "10:00:00", ExchangeTime2: "16:00:00", IsActive: true}
 	mustCreateRecords(t, db, ruleA, ruleB, ruleC, ruleOther)
+	if err := db.Model(&models.ExchangeAccount{}).Where("id = ?", ruleC.ID).Update("is_active", false).Error; err != nil {
+		t.Fatalf("mark inactive exchange rule: %v", err)
+	}
 
 	taskA := &models.ExchangeTask{UserID: user1.ID, ExchangeAccountID: ruleA.ID, ProductID: productA.ID, PrizeID: productA.PrizeID, PrizeName: productA.PrizeName, Status: string(models.ExchangeTaskPending), RestockCycle: "daily"}
 	taskB := &models.ExchangeTask{UserID: user1.ID, ExchangeAccountID: ruleB.ID, ProductID: productB.ID, PrizeID: productB.PrizeID, PrizeName: productB.PrizeName, Status: string(models.ExchangeTaskPending), RestockCycle: "weekly"}
@@ -412,6 +506,12 @@ func TestExchangeTaskRepositoryCalculateNextRunUsesCalendarOverride(t *testing.T
 func mustCreateRecords(t *testing.T, db *gorm.DB, values ...interface{}) {
 	t.Helper()
 	for _, value := range values {
+		if user, ok := value.(*models.User); ok {
+			if err := NewUserRepository(db).Create(user); err != nil {
+				t.Fatalf("create record %T error: %v", value, err)
+			}
+			continue
+		}
 		if err := db.Create(value).Error; err != nil {
 			t.Fatalf("create record %T error: %v", value, err)
 		}
@@ -532,7 +632,7 @@ func TestTaskLogRepositoryDateRangeQueriesClampUnsafeLimits(t *testing.T) {
 }
 
 func TestExchangeTaskRepositoryUpdateTaskDefinitionDoesNotOverwriteCounters(t *testing.T) {
-	db := newRepositoryTestDB(t, &models.ExchangeTask{})
+	db := newRepositoryTestDB(t, &models.ExchangeTask{}, &models.ExchangeRecord{})
 	repo := NewExchangeTaskRepository(db)
 	task := &models.ExchangeTask{
 		UserID:            1,
@@ -600,5 +700,67 @@ func TestCloudStatsRepositoryFindByDateRangeAppliesPaging(t *testing.T) {
 	}
 	if stats[0].Date != "2026-06-27" || stats[1].Date != "2026-06-26" {
 		t.Fatalf("dates = %s, %s; want latest two rows", stats[0].Date, stats[1].Date)
+	}
+}
+
+func TestCloudStatsRepositoryUpsertUsesAccountDateUniqueness(t *testing.T) {
+	db := newRepositoryTestDB(t, &models.Account{}, &models.CloudStats{})
+	repo := NewCloudStatsRepository(db)
+	account := &models.Account{ID: 1, UserID: 1, Phone: "13300000001", IsActive: true}
+	if err := db.Create(account).Error; err != nil {
+		t.Fatalf("create account: %v", err)
+	}
+	first := &models.CloudStats{UserID: 1, AccountID: account.ID, Date: "2026-07-30", CloudCount: 100, CloudDiff: 4}
+	if err := repo.UpsertByAccountIDAndDate(first); err != nil {
+		t.Fatalf("first upsert: %v", err)
+	}
+	second := &models.CloudStats{UserID: 1, AccountID: account.ID, Date: "2026-07-30", CloudCount: 135, CloudDiff: 7, CloudDiffWeek: 18}
+	if err := repo.UpsertByAccountIDAndDate(second); err != nil {
+		t.Fatalf("second upsert: %v", err)
+	}
+
+	var rows []models.CloudStats
+	if err := db.Where("account_id = ? AND date = ?", account.ID, "2026-07-30").Find(&rows).Error; err != nil {
+		t.Fatalf("load upsert rows: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("row count = %d, want 1", len(rows))
+	}
+	if rows[0].CloudCount != 135 || rows[0].CloudDiff != 7 || rows[0].CloudDiffWeek != 18 {
+		t.Fatalf("upserted row = %+v", rows[0])
+	}
+}
+
+func TestCloudStatsRepositoryUsesLatestSnapshotAndAggregateTimestamps(t *testing.T) {
+	db := newRepositoryTestDB(t, &models.CloudStats{})
+	repo := NewCloudStatsRepository(db)
+	today := time.Now().In(cstZone).Format("2006-01-02")
+	yesterday := time.Now().In(cstZone).AddDate(0, 0, -1).Format("2006-01-02")
+	rows := []*models.CloudStats{
+		{UserID: 1, AccountID: 1, Date: yesterday, CloudCount: 100},
+		{UserID: 1, AccountID: 2, Date: yesterday, CloudCount: 200},
+		{UserID: 1, AccountID: 1, Date: today, CloudCount: 300},
+		{UserID: 1, AccountID: 2, Date: today, CloudCount: 400},
+	}
+	for _, row := range rows {
+		if err := db.Create(row).Error; err != nil {
+			t.Fatalf("create cloud stat: %v", err)
+		}
+	}
+
+	total, err := repo.GetTotalCloudCountByUserID(1)
+	if err != nil {
+		t.Fatalf("GetTotalCloudCountByUserID error: %v", err)
+	}
+	if total != 700 {
+		t.Fatalf("latest snapshot total = %d, want 700", total)
+	}
+
+	trend, err := repo.GetTrendDataByUserID(1, 2)
+	if err != nil {
+		t.Fatalf("GetTrendDataByUserID error: %v", err)
+	}
+	if len(trend) != 2 || trend[0].CloudCount != 300 || trend[1].CloudCount != 700 {
+		t.Fatalf("aggregated trend = %#v, want daily totals [300 700]", trend)
 	}
 }

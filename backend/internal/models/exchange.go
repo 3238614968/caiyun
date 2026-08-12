@@ -166,17 +166,25 @@ const (
 
 // WebSocketMessage WebSocket消息持久化模型
 type WebSocketMessage struct {
-	ID          uint       `gorm:"primarykey" json:"id"`
-	UserID      uint       `gorm:"not null;index;index:idx_ws_user_sequence,priority:1" json:"user_id"`
-	MessageID   string     `gorm:"column:message_id;size:64;uniqueIndex" json:"message_id"`
-	Sequence    uint64     `gorm:"index:idx_ws_user_sequence,priority:2" json:"sequence"`
-	Type        string     `gorm:"size:50;not null" json:"type"`
-	Data        string     `gorm:"type:text" json:"data"`
-	IsRead      bool       `gorm:"default:false" json:"is_read"`
-	IsDelivered bool       `gorm:"default:false" json:"is_delivered"`
-	CreatedAt   time.Time  `json:"created_at"`
-	ExpiresAt   *time.Time `json:"expires_at,omitempty"`
-	ReadAt      *time.Time `json:"read_at,omitempty"`
-	DeliveredAt *time.Time `json:"delivered_at,omitempty"`
-	AckedAt     *time.Time `json:"acked_at,omitempty"`
+	ID          uint   `gorm:"primarykey"`
+	UserID      uint   `gorm:"not null;index;index:idx_ws_user_sequence,priority:1"`
+	MessageID   string `gorm:"column:message_id;size:64;uniqueIndex"`
+	Sequence    uint64 `gorm:"index:idx_ws_user_sequence,priority:2"`
+	Type        string `gorm:"size:50;not null"`
+	Data        string `gorm:"type:text"`
+	IsRead      bool   `gorm:"default:false"`
+	IsDelivered bool   `gorm:"default:false"`
+	CreatedAt   time.Time
+	ExpiresAt   *time.Time
+	ReadAt      *time.Time
+	DeliveredAt *time.Time
+	AckedAt     *time.Time
+}
+
+// WebSocketSequence is the durable, per-user sequencer for replayable push
+// envelopes. It deliberately has no transport tags: API responses use DTOs
+// and the Hub builds the Message envelope explicitly.
+type WebSocketSequence struct {
+	UserID   uint   `gorm:"primaryKey"`
+	Sequence uint64 `gorm:"not null"`
 }

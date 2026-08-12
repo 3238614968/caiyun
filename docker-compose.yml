@@ -6,7 +6,9 @@ x-backend-image: &backend-image
 
 x-backend-environment: &backend-environment
   APP_ENV: production
+  COOKIE_SECURE: "true"
   DB_AUTO_MIGRATE: "false"
+  TASK_CONFIG_SYNC_ON_STARTUP: "false"
   DB_HOST: mysql
   DB_PORT: 3306
   DB_USER: ${MYSQL_USER:-caiyun_app}
@@ -17,6 +19,7 @@ x-backend-environment: &backend-environment
   REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD is required}
   DATA_ENCRYPTION_KEYS: ${DATA_ENCRYPTION_KEYS:?DATA_ENCRYPTION_KEYS is required}
   DATA_ENCRYPTION_CURRENT_VERSION: ${DATA_ENCRYPTION_CURRENT_VERSION:?DATA_ENCRYPTION_CURRENT_VERSION is required}
+  FIELD_CRYPTO_ALLOW_LEGACY_NO_AAD: ${FIELD_CRYPTO_ALLOW_LEGACY_NO_AAD:-false}
   TRUSTED_PROXIES: ${TRUSTED_PROXIES:-none}
   RATE_LIMIT_BACKEND: ${RATE_LIMIT_BACKEND:-redis}
   RATE_LIMIT_REDIS_WINDOW: ${RATE_LIMIT_REDIS_WINDOW:-1s}
@@ -28,6 +31,10 @@ x-backend-environment: &backend-environment
   WS_MAX_RETRIES: ${WS_MAX_RETRIES:-3}
   TZ: Asia/Shanghai
   CLOCK_SKEW_MAX: ${CLOCK_SKEW_MAX:-30s}
+  OTEL_ENABLED: ${OTEL_ENABLED:-false}
+  OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+  OTEL_EXPORTER_OTLP_INSECURE: ${OTEL_EXPORTER_OTLP_INSECURE:-false}
+  OTEL_SAMPLE_RATIO: ${OTEL_SAMPLE_RATIO:-0.10}
 
 services:
   mysql:
@@ -44,7 +51,9 @@ services:
       - "127.0.0.1:3306:3306"
     volumes:
       - mysql-data:/var/lib/mysql
-      - ./backend/scripts/init_caiyun_database.sql:/docker-entrypoint-initdb.d/001_init_caiyun_database.sql:ro
+      # Fresh local databases bootstrap from the first versioned migration.
+      # Existing environments use the unified `caiyun migrate` command.
+      - ./backend/migrations/001_init.sql:/docker-entrypoint-initdb.d/001_init.sql:ro
     networks: [caiyun-network]
     healthcheck:
       test: ["CMD-SHELL", "MYSQL_PWD=\"$${MYSQL_ROOT_PASSWORD}\" mysqladmin ping -h 127.0.0.1 -u root"]
@@ -98,6 +107,9 @@ services:
     <<: *backend-image
     container_name: caiyun-api
     restart: unless-stopped
+    # API closes Hub/SSE, drains ordinary requests and audits; leave
+    # room for Docker's signal delivery and process cleanup.
+    stop_grace_period: 60s
     command: ["api"]
     ports:
       - "127.0.0.1:8080:8080"
@@ -122,6 +134,7 @@ services:
       SMTP_FROM_NAME: ${SMTP_FROM_NAME:-移动云盘}
       SMTP_USE_TLS: ${SMTP_USE_TLS:-false}
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost,http://127.0.0.1}
+      API_MONITOR_TOKEN: ${API_MONITOR_TOKEN:?API_MONITOR_TOKEN is required}
       TASK_CONCURRENCY: ${TASK_CONCURRENCY:-10}
       INSTANCE_ID: compose-api
     networks: [caiyun-network]
@@ -141,6 +154,8 @@ services:
     <<: *backend-image
     container_name: caiyun-worker
     restart: unless-stopped
+    # Worker cancels consumers, waits task/background groups, then closes DB.
+    stop_grace_period: 75s
     command: ["worker"]
     ports:
       - "127.0.0.1:8081:8081"

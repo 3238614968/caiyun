@@ -43,7 +43,7 @@ test('管理员用户管理支持改角色、重置密码和删除用户', async
 
   await page.getByRole('row', { name: /e2e-user/ }).getByRole('button', { name: '重置密码' }).click()
   const passwordDialog = page.getByRole('dialog', { name: '重置用户密码' })
-  await passwordDialog.getByPlaceholder('至少12位，包含至少三类字符').fill('E2eStrongPass123!')
+  await passwordDialog.getByPlaceholder('至少6位，需同时包含字母和数字').fill('E2eStrongPass123!')
   await passwordDialog.getByRole('button', { name: '确定重置' }).click()
   await expect(page.getByText('密码重置成功')).toBeVisible()
 
@@ -103,14 +103,14 @@ test('/logs 页面刷新后仍保持 SPA 路由并展示日志', async ({ page }
   await page.goto('/logs')
 
   await expect(page.getByText('运行日志')).toBeVisible()
-  await expect(page.getByText('13900000001')).toBeVisible()
+  await expect(page.getByText('139****0001')).toBeVisible()
   await expect(page.getByText('+5')).toBeVisible()
 
   await page.reload()
   await expect(page.getByText('运行日志')).toBeVisible()
-  await expect(page.getByText('13900000001')).toBeVisible()
+  await expect(page.getByText('139****0001')).toBeVisible()
 
-  await page.getByRole('row', { name: /13900000001/ }).getByRole('button', { name: '详情' }).click()
+  await page.getByRole('row', { name: /139\*\*\*\*0001/ }).getByRole('button', { name: '详情' }).click()
   await expect(page.getByRole('dialog', { name: '日志详情' })).toBeVisible()
 })
 
@@ -133,11 +133,13 @@ test('手动执行账号任务返回 202 并显示可追踪的排队操作号', 
 
   const responsePromise = page.waitForResponse(response =>
     response.request().method() === 'POST' &&
-    /\/api\/accounts\/1\/trigger$/.test(new URL(response.url()).pathname)
+    /\/api\/v1\/accounts\/1\/trigger$/.test(new URL(response.url()).pathname)
   )
   await page.getByRole('row', { name: /13900000001/ }).getByRole('button', { name: '执行任务' }).click()
 
   const response = await responsePromise
   expect(response.status()).toBe(202)
-  await expect(page.getByText('任务已加入队列（操作号：op-e2e-0001）')).toBeVisible()
+  await expect(page.getByText('任务已加入队列')).toBeVisible()
+  await expect.poll(async () => ((await response.json()) as { data?: { operation_id?: string } }).data?.operation_id)
+    .toBe('op-e2e-0001')
 })

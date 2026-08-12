@@ -32,7 +32,11 @@ $checksumPath = Join-Path $out "SHA256SUMS"
 
 Push-Location $backend
 try {
-    $env:GOTOOLCHAIN = "auto"
+    # Respect an explicitly selected locally installed toolchain. CI leaves this unset
+    # and continues to use Go's normal automatic selection from go.mod.
+    if ([string]::IsNullOrWhiteSpace($env:GOTOOLCHAIN)) {
+        $env:GOTOOLCHAIN = "auto"
+    }
     $env:GOOS = "linux"
     $env:GOARCH = "amd64"
     $env:CGO_ENABLED = "0"

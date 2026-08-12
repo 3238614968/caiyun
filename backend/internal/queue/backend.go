@@ -29,6 +29,11 @@ type ReliableTaskQueue interface {
 	Ack(message *TaskMessage) error
 	Requeue(message *TaskMessage) error
 	RequeueDelayed(message *TaskMessage, delay time.Duration) error
+	// RenewVisibility records that the consumer is still actively executing a
+	// delivery.  It never creates a new delivery: false means the original
+	// processing record is no longer owned by this consumer and must be left
+	// for normal recovery rather than ACKed.
+	RenewVisibility(message *TaskMessage) (bool, error)
 	DeadLetter(message *TaskMessage, reason string) error
 	RecoverStaleProcessing(visibilityTimeout time.Duration) (int, error)
 	PromoteDueDelayed(limit int64) (int, error)
@@ -80,7 +85,15 @@ func NewConfiguredTaskQueue(redisCache *cache.RedisCache) (ReliableTaskQueue, er
 }
 
 func NewTaskQueueBackend(redisCache *cache.RedisCache, backend string) (ReliableTaskQueue, error) {
-	switch normalizeTaskQueueBackend(backend) {
+	normalized := normalizeTaskQueueBackend(backend)
+	// The List implementation remains available for focused compatibility tests
+	// and explicit local migration tooling.  Production commands must use the
+	// Streams implementation, whose enqueue+dedupe write is atomic and whose
+	// consumer-group recovery is the supported delivery contract.
+	if normalized == TaskQueueBackendList && strings.EqualFold(strings.TrimSpace(envutil.String("APP_ENV", "")), "production") {
+		return nil, fmt.Errorf("生产环境仅支持 TASK_QUEUE_BACKEND=streams")
+	}
+	switch normalized {
 	case TaskQueueBackendList:
 		return NewTaskQueue(redisCache), nil
 	case TaskQueueBackendStreams:

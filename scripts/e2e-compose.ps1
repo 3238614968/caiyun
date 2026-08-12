@@ -21,10 +21,15 @@ DATA_ENCRYPTION_KEYS=v1=0123456789abcdef0123456789abcdef
 DATA_ENCRYPTION_CURRENT_VERSION=v1
 TRUSTED_PROXIES=none
 WORKER_MONITOR_TOKEN=caiyun_worker_e2e_token
+API_MONITOR_TOKEN=caiyun_api_e2e_token
 GRAFANA_ADMIN_PASSWORD=caiyun_grafana_e2e_change_me
 TASK_QUEUE_BACKEND=streams
 ALLOWED_ORIGINS=http://frontend:8080,http://localhost,http://127.0.0.1
 '@ | Set-Content -Encoding UTF8 $EnvFile
+}
+
+if (-not (Select-String -Path $EnvFile -Pattern '^API_MONITOR_TOKEN=' -Quiet)) {
+  Add-Content -Encoding UTF8 $EnvFile "`nAPI_MONITOR_TOKEN=caiyun_api_e2e_token"
 }
 
 $composeArgs = @(

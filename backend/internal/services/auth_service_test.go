@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -11,6 +12,7 @@ import (
 	"caiyun/internal/repository"
 	"caiyun/pkg/jwt"
 
+	"github.com/go-redis/redis/v8"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -132,7 +134,7 @@ func (c *fakePasswordResetCache) Get(key string, dest interface{}) error {
 	defer c.mu.Unlock()
 	value, ok := c.values[key]
 	if !ok {
-		return errors.New("not found")
+		return redis.Nil
 	}
 	switch source := value.(type) {
 	case *passwordResetCodeRecord:
@@ -151,6 +153,97 @@ func (c *fakePasswordResetCache) Get(key string, dest interface{}) error {
 		return errors.New("unsupported value")
 	}
 	return nil
+}
+
+func TestLoginProtectionTracksUsernameIPAndPair(t *testing.T) {
+	repo := newFakeAuthUserRepo()
+	service := NewAuthServiceWithPasswordResetCache(
+		repo,
+		jwt.NewManager("0123456789abcdef0123456789abcdef"),
+		time.Hour,
+		PasswordResetConfig{},
+		nil,
+	)
+	keys := loginLockKeysFor("Alice", "203.0.113.8")
+	if keys.Username == keys.ClientIP || keys.ClientIP == keys.UsernameAndClient {
+		t.Fatalf("login lock scopes overlap: %+v", keys)
+	}
+	if err := service.recordLoginFailureForKeys(keys); err != nil {
+		t.Fatalf("recordLoginFailureForKeys() error = %v", err)
+	}
+	for _, key := range keys.all() {
+		count, err := service.getLoginFailCount(key)
+		if err != nil || count != 1 {
+			t.Fatalf("counter %q = (%d, %v), want (1, nil)", key, count, err)
+		}
+	}
+	if err := service.clearLoginFailureForKeys(keys); err != nil {
+		t.Fatalf("clearLoginFailureForKeys() error = %v", err)
+	}
+}
+
+func TestLoginProtectionUsesHigherThresholdForSharedClientIP(t *testing.T) {
+	repo := newFakeAuthUserRepo()
+	service := NewAuthServiceWithPasswordResetCache(
+		repo,
+		jwt.NewManager("0123456789abcdef0123456789abcdef"),
+		time.Hour,
+		PasswordResetConfig{},
+		nil,
+	)
+	clientIP := "203.0.113.42"
+	for i := 0; i < loginUsernameMaxAttempts; i++ {
+		keys := loginLockKeysFor(fmt.Sprintf("user-%d", i), clientIP)
+		if err := service.recordLoginFailureForKeys(keys); err != nil {
+			t.Fatalf("record shared-IP failure %d: %v", i, err)
+		}
+	}
+	locked, err := service.isLoginLockedForKeys(loginLockKeysFor("unrelated-user", clientIP))
+	if err != nil {
+		t.Fatalf("isLoginLockedForKeys() error = %v", err)
+	}
+	if locked {
+		t.Fatalf("shared IP locked after %d unrelated failures, want threshold %d", loginUsernameMaxAttempts, loginClientIPMaxAttempts)
+	}
+
+	for i := loginUsernameMaxAttempts; i < loginClientIPMaxAttempts; i++ {
+		keys := loginLockKeysFor(fmt.Sprintf("user-%d", i), clientIP)
+		if err := service.recordLoginFailureForKeys(keys); err != nil {
+			t.Fatalf("record shared-IP failure %d: %v", i, err)
+		}
+	}
+	locked, err = service.isLoginLockedForKeys(loginLockKeysFor("unrelated-user", clientIP))
+	if err != nil {
+		t.Fatalf("isLoginLockedForKeys() after threshold error = %v", err)
+	}
+	if !locked {
+		t.Fatalf("shared IP should lock at threshold %d", loginClientIPMaxAttempts)
+	}
+}
+
+type failingLoginCleanupCache struct{ *fakePasswordResetCache }
+
+func (c *failingLoginCleanupCache) Del(keys ...string) error {
+	return errors.New("cache delete unavailable")
+}
+
+func TestLoginSucceedsWhenProtectionCleanupIsTemporarilyUnavailable(t *testing.T) {
+	service, manager, _ := newSessionAuthService(t)
+	cache := &failingLoginCleanupCache{fakePasswordResetCache: newFakePasswordResetCache()}
+	service.loginLockCache = cache
+
+	response, err := service.LoginContext(context.Background(), &LoginRequest{
+		Username: "alice", Password: "Correct-Horse-9!",
+	}, SessionMetadata{ClientIP: "203.0.113.9"})
+	if err != nil {
+		t.Fatalf("LoginContext() error = %v", err)
+	}
+	if response.Token == "" {
+		t.Fatal("LoginContext() returned no access token")
+	}
+	if _, err := manager.ValidateToken(response.Token); err != nil {
+		t.Fatalf("issued token validation failed: %v", err)
+	}
 }
 
 func (c *fakePasswordResetCache) Del(keys ...string) error {
@@ -237,12 +330,15 @@ func TestAuthServiceResetPasswordCodeIsOneTime(t *testing.T) {
 }
 
 type sessionAuthUserRepo struct {
+	mu        sync.RWMutex
 	user      *models.User
 	createErr error
 	updateErr error
 }
 
 func (r *sessionAuthUserRepo) Create(user *models.User) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	if r.createErr != nil {
 		return r.createErr
 	}
@@ -253,6 +349,8 @@ func (r *sessionAuthUserRepo) Create(user *models.User) error {
 	return nil
 }
 func (r *sessionAuthUserRepo) FindByID(id uint) (*models.User, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	if r.user == nil || r.user.ID != id {
 		return nil, errors.New("not found")
 	}
@@ -260,6 +358,8 @@ func (r *sessionAuthUserRepo) FindByID(id uint) (*models.User, error) {
 	return &copy, nil
 }
 func (r *sessionAuthUserRepo) FindByUsername(username string) (*models.User, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	if r.user == nil || r.user.Username != username {
 		return nil, errors.New("not found")
 	}
@@ -267,6 +367,8 @@ func (r *sessionAuthUserRepo) FindByUsername(username string) (*models.User, err
 	return &copy, nil
 }
 func (r *sessionAuthUserRepo) Update(user *models.User) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	if r.updateErr != nil {
 		return r.updateErr
 	}
@@ -274,14 +376,23 @@ func (r *sessionAuthUserRepo) Update(user *models.User) error {
 	return nil
 }
 func (r *sessionAuthUserRepo) UpdatePasswordAndRevokeSessions(userID uint, hashedPassword string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.user == nil || r.user.ID != userID {
+		return errors.New("not found")
+	}
 	r.user.Password = hashedPassword
 	r.user.TokenVersion++
 	return nil
 }
 func (r *sessionAuthUserRepo) ExistsByUsername(username string) (bool, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	return r.user != nil && r.user.Username == username, nil
 }
 func (r *sessionAuthUserRepo) ExistsByEmail(email string) (bool, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	return r.user != nil && r.user.Email == email, nil
 }
 

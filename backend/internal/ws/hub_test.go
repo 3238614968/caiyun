@@ -13,11 +13,10 @@ import (
 type fakeEventTransport struct {
 	mu          sync.Mutex
 	subscribers map[string][]chan string
-	sequences   map[string]uint64
 }
 
 func newFakeEventTransport() *fakeEventTransport {
-	return &fakeEventTransport{subscribers: make(map[string][]chan string), sequences: make(map[string]uint64)}
+	return &fakeEventTransport{subscribers: make(map[string][]chan string)}
 }
 
 func (f *fakeEventTransport) Publish(_ context.Context, channel, payload string) error {
@@ -28,13 +27,6 @@ func (f *fakeEventTransport) Publish(_ context.Context, channel, payload string)
 		target <- payload
 	}
 	return nil
-}
-
-func (f *fakeEventTransport) NextSequence(_ context.Context, key string) (uint64, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.sequences[key]++
-	return f.sequences[key], nil
 }
 
 func (f *fakeEventTransport) Subscribe(_ context.Context, channel string) (*cache.PubSubSubscription, error) {
@@ -113,5 +105,56 @@ func TestPendingDeliveryRetriesAreBoundedAndAckRemovesEntry(t *testing.T) {
 	defer client.pendingMu.Unlock()
 	if len(client.pending) != 0 {
 		t.Fatalf("pending=%d", len(client.pending))
+	}
+}
+
+func TestHubSeenCacheHasHardBoundForLongLivedMessages(t *testing.T) {
+	hub := newHub()
+	expires := time.Now().Add(24 * time.Hour).UnixMilli()
+	for i := 0; i < maxSeenMessageIDs+100; i++ {
+		if !hub.markSeen(string(rune(i+1)), expires) {
+			t.Fatalf("message %d unexpectedly treated as duplicate", i)
+		}
+	}
+	hub.mu.RLock()
+	defer hub.mu.RUnlock()
+	if got := len(hub.seen); got != maxSeenMessageIDs {
+		t.Fatalf("seen cache size = %d, want hard cap %d", got, maxSeenMessageIDs)
+	}
+}
+
+func TestClientCloseMakesEnqueueNonBlockingWithoutClosingSend(t *testing.T) {
+	client := &Client{send: make(chan []byte, 1), done: make(chan struct{}), pending: make(map[string]*pendingDelivery)}
+	client.close()
+	if client.enqueue(Message{Type: "notification", MessageID: "after-close"}, []byte("payload")) {
+		t.Fatal("enqueue after close unexpectedly succeeded")
+	}
+	select {
+	case client.send <- []byte("still-open"):
+		// A producer that raced shutdown observes done through enqueue; the
+		// channel itself remains open, so no send-on-closed-channel panic occurs.
+	default:
+		t.Fatal("send channel was unexpectedly unavailable")
+	}
+}
+
+func TestHubStopContextHonorsDeadlineThenCompletes(t *testing.T) {
+	hub := newHub()
+	go hub.run()
+	hub.operationWG.Add(1)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	if err := hub.StopContext(ctx); err == nil {
+		t.Fatal("StopContext unexpectedly completed while an operation was still running")
+	} else if ctx.Err() == nil {
+		t.Fatalf("StopContext() error = %v, want context deadline", err)
+	}
+
+	hub.operationWG.Done()
+	finished, cancelFinished := context.WithTimeout(context.Background(), time.Second)
+	defer cancelFinished()
+	if err := hub.StopContext(finished); err != nil {
+		t.Fatalf("StopContext() after operation completion = %v", err)
 	}
 }

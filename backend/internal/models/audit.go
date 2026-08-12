@@ -7,7 +7,11 @@ import (
 // AuditLog 审计日志模型
 type AuditLog struct {
 	ID           uint      `gorm:"primarykey" json:"id"`
-	UserID       uint      `gorm:"not null;index" json:"user_id"`            // 用户ID
+	// UserID is zero for an unauthenticated security event (for example a
+	// failed login).  The database intentionally keeps this column nullable and
+	// without a user FK so evidence survives both anonymous requests and user
+	// lifecycle cleanup.
+	UserID       uint      `gorm:"index" json:"user_id"`                     // 用户ID（0 表示匿名）
 	Username     string    `gorm:"size:100" json:"username"`                 // 用户名
 	Action       string    `gorm:"size:50;not null;index" json:"action"`     // 操作类型
 	Resource     string    `gorm:"size:100;not null" json:"resource"`        // 资源类型

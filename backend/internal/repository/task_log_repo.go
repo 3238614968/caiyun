@@ -26,6 +26,11 @@ type AccountLogSummary struct {
 // 北京时间时区
 var cstZone = time.FixedZone("CST", 8*3600)
 
+// nowCST is the single clock source for repository date-based reporting.
+func nowCST() time.Time {
+	return time.Now().In(cstZone)
+}
+
 const (
 	defaultTaskLogPageLimit = 200
 	maxTaskLogPageLimit     = 1000
@@ -33,7 +38,7 @@ const (
 
 // todayStart 获取北京时间今天0点
 func todayStart() time.Time {
-	now := time.Now().In(cstZone)
+	now := nowCST()
 	return time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, cstZone)
 }
 

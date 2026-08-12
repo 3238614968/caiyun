@@ -1,9 +1,76 @@
 package monitor
 
 import (
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
+
+func TestMetricsDoesNotExposeWorkerGaugesBeforeWorkerLifecycleStarts(t *testing.T) {
+	metrics := NewMetrics()
+	families, err := metrics.Registry().Gather()
+	if err != nil {
+		t.Fatalf("gather metrics: %v", err)
+	}
+	for _, family := range families {
+		if strings.HasPrefix(family.GetName(), "caiyun_worker_") {
+			t.Fatalf("API-only registry exposed worker metric %q before worker startup", family.GetName())
+		}
+	}
+}
+
+func TestMetricsRegistryCoversAlertMetricContract(t *testing.T) {
+	metrics := NewMetrics()
+	metrics.SetWorkerState(true)
+	metrics.IncExchangeScheduleSkip("time_mismatch", "daily", "all")
+	metrics.RecordRateLimitRejection("/api/v1/test", "rate_limit", "ip")
+	metrics.ObserveHTTPRequest("GET", "/readyz", "200", 0.01)
+	metrics.RecordOperationTransition("queued")
+	metrics.RecordHistoryArchiveRun("success", time.Second, 0, 0, true)
+	families, err := metrics.Registry().Gather()
+	if err != nil {
+		t.Fatalf("gather metrics: %v", err)
+	}
+	registered := make(map[string]bool, len(families))
+	for _, family := range families {
+		registered[family.GetName()] = true
+	}
+	for _, name := range []string{
+		"caiyun_exchange_recent_total",
+		"caiyun_exchange_success_rate",
+		"caiyun_exchange_failed_total",
+		"caiyun_exchange_scheduler_skipped_total",
+		"caiyun_exchange_duration_seconds",
+		"caiyun_security_rate_limit_rejected_total",
+		"caiyun_audit_dropped_total",
+		"caiyun_http_request_duration_seconds",
+		"caiyun_http_requests_total",
+		"caiyun_queue_pending",
+		"caiyun_queue_dead_letter",
+		"caiyun_queue_delayed",
+		"caiyun_worker_up",
+		"caiyun_worker_heartbeat_unix",
+		"caiyun_operation_transitions_total",
+		"caiyun_history_archive_runs_total",
+		"caiyun_history_archive_hit_batch_limit_total",
+		"caiyun_history_archive_last_success_unix",
+	} {
+		if !registered[name] {
+			t.Errorf("alert contract metric %q is absent from the Prometheus registry", name)
+		}
+	}
+
+	rulesPath := filepath.Join("..", "..", "..", "deploy", "monitoring", "prometheus-rules.yml")
+	rules, err := os.ReadFile(rulesPath)
+	if err != nil {
+		t.Fatalf("read alert rules %s: %v", rulesPath, err)
+	}
+	if strings.Contains(string(rules), "caiyun_worker_running") {
+		t.Fatal("alert rules retain the stale caiyun_worker_running metric")
+	}
+}
 
 func TestMetricsWorkerHeartbeatAndState(t *testing.T) {
 	metrics := NewMetrics()
@@ -221,5 +288,33 @@ func TestMetricsRecordExchangeAttempt(t *testing.T) {
 	}
 	if !foundAttemptsSuccess || !foundAttemptsFailed || !foundSuccessTotal || !foundFailedTotal {
 		t.Fatalf("exchange attempt metrics missing: successAttempt=%t failedAttempt=%t successTotal=%t failedTotal=%t", foundAttemptsSuccess, foundAttemptsFailed, foundSuccessTotal, foundFailedTotal)
+	}
+}
+
+func TestMetricsRecordOperationTransition(t *testing.T) {
+	metrics := NewMetrics()
+	metrics.RecordOperationTransition("queued")
+	metrics.RecordOperationTransition("failed")
+	metrics.RecordOperationTransition("not-a-state")
+
+	families, err := metrics.Registry().Gather()
+	if err != nil {
+		t.Fatalf("gather metrics: %v", err)
+	}
+	got := map[string]float64{}
+	for _, family := range families {
+		if family.GetName() != "caiyun_operation_transitions_total" {
+			continue
+		}
+		for _, metric := range family.Metric {
+			if len(metric.Label) == 1 && metric.Counter != nil {
+				got[metric.Label[0].GetValue()] = metric.Counter.GetValue()
+			}
+		}
+	}
+	for status, want := range map[string]float64{"queued": 1, "failed": 1, "unknown": 1} {
+		if got[status] != want {
+			t.Fatalf("operation transition %s = %v, want %v; all=%v", status, got[status], want, got)
+		}
 	}
 }

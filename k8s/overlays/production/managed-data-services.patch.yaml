@@ -1,0 +1,37 @@
+# Production uses managed MySQL and Redis endpoints defined by config.patch.yaml.
+# Remove development StatefulSets, Services and PVCs from this environment.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: mysql
+$patch: delete
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mysql
+$patch: delete
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: mysql-data
+$patch: delete
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: redis
+$patch: delete
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis
+$patch: delete
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: redis-data
+$patch: delete

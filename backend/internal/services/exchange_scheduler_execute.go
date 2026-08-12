@@ -3,15 +3,19 @@ package services
 import (
 	"caiyun/internal/models"
 	"caiyun/internal/ws"
+	"context"
 	"fmt"
 	"log"
 	"runtime/debug"
-	"strings"
 	"sync"
-	"time"
 )
 
 func (s *ExchangeScheduler) executeExchangeWithAutoSwitch(tasks []*models.ExchangeTask, period string) {
+	ctx := s.executionContext()
+	if err := ctx.Err(); err != nil {
+		log.Printf("【抢兑调度器】%s时段抢兑已取消: %v", period, err)
+		return
+	}
 	// 按商品ID分组任务
 	taskGroups := s.groupTasksByProduct(tasks)
 
@@ -31,7 +35,7 @@ func (s *ExchangeScheduler) executeExchangeWithAutoSwitch(tasks []*models.Exchan
 					log.Printf("【抢兑调度器】商品组 %s 执行 panic: %v\n%s", prizeID, r, debug.Stack())
 				}
 			}()
-			s.executeProductGroup(prizeID, groupTasks, limiter)
+			s.executeProductGroup(ctx, prizeID, groupTasks, limiter)
 		}(prizeID, groupTasks)
 	}
 
@@ -40,7 +44,7 @@ func (s *ExchangeScheduler) executeExchangeWithAutoSwitch(tasks []*models.Exchan
 	log.Printf("【抢兑调度器】%s时段抢兑执行完成", period)
 
 	// 发送完成通知
-	s.hub.Broadcast(ws.Message{
+	s.broadcast(ws.Message{
 		Type: "exchange_completed",
 		Data: map[string]interface{}{
 			"period":  period,
@@ -63,7 +67,10 @@ func (s *ExchangeScheduler) groupTasksByProduct(tasks []*models.ExchangeTask) ma
 }
 
 // executeProductGroup 执行商品组的抢兑（自动切换账号）
-func (s *ExchangeScheduler) executeProductGroup(prizeID string, tasks []*models.ExchangeTask, limiter chan struct{}) {
+func (s *ExchangeScheduler) executeProductGroup(ctx context.Context, prizeID string, tasks []*models.ExchangeTask, limiter chan struct{}) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	log.Printf("【抢兑调度器】开始抢兑商品 %s，共 %d 个账号", prizeID, len(tasks))
 
 	successMap := make(map[uint]bool)
@@ -98,6 +105,10 @@ func (s *ExchangeScheduler) executeProductGroup(prizeID string, tasks []*models.
 	}
 
 	for _, task := range tasks {
+		if err := ctx.Err(); err != nil {
+			log.Printf("【抢兑调度器】商品 %s 执行已取消: %v", prizeID, err)
+			break
+		}
 		if task == nil {
 			continue
 		}
@@ -106,6 +117,7 @@ func (s *ExchangeScheduler) executeProductGroup(prizeID string, tasks []*models.
 		go func() {
 			defer wg.Done()
 			limiterAcquired := false
+			executionToken := ""
 			defer func() {
 				if limiterAcquired {
 					<-limiter
@@ -113,7 +125,7 @@ func (s *ExchangeScheduler) executeProductGroup(prizeID string, tasks []*models.
 				if r := recover(); r != nil {
 					message := fmt.Sprintf("任务执行异常，已自动标记失败: %v", r)
 					log.Printf("【抢兑调度器】任务 %d 执行 panic: %v\n%s", task.ID, r, debug.Stack())
-					s.finalizeTaskResult(task, false, message, 0)
+					s.finalizeTaskResult(task, executionToken, false, message, 0)
 				}
 			}()
 
@@ -129,7 +141,7 @@ func (s *ExchangeScheduler) executeProductGroup(prizeID string, tasks []*models.
 				}
 				log.Printf("【抢兑调度器】任务 %d 跳过执行，商品 %s 已停止抢兑，原因: %s", task.ID, prizeID, reason)
 				recordFailureReason(reason)
-				s.finalizeTaskResult(task, false, reason, 0)
+				s.finalizeTaskResult(task, executionToken, false, reason, 0)
 				return
 			}
 
@@ -168,19 +180,24 @@ func (s *ExchangeScheduler) executeProductGroup(prizeID string, tasks []*models.
 				)
 			}
 
-			limiter <- struct{}{}
-			limiterAcquired = true
+			select {
+			case limiter <- struct{}{}:
+				limiterAcquired = true
+			case <-ctx.Done():
+				log.Printf("【抢兑调度器】任务 %d 等待执行槽时已取消", task.ID)
+				return
+			}
 			if stopped, reason := getStopReason(); stopped {
 				if reason == "" {
 					reason = "商品已无库存，跳过抢兑"
 				}
 				log.Printf("【抢兑调度器】任务 %d 获取执行槽后跳过，商品 %s 已停止抢兑，原因: %s", task.ID, prizeID, reason)
 				recordFailureReason(reason)
-				s.finalizeTaskResult(task, false, reason, 0)
+				s.finalizeTaskResult(task, executionToken, false, reason, 0)
 				return
 			}
 
-			success, message, execTime := s.executeTask(task)
+			success, message, execTime, executionToken := s.executeTask(ctx, task)
 			<-limiter
 			limiterAcquired = false
 			if execTime < 0 {
@@ -230,7 +247,7 @@ func (s *ExchangeScheduler) executeProductGroup(prizeID string, tasks []*models.
 				}
 			}
 
-			s.finalizeTaskResult(task, success, message, execTime)
+			s.finalizeTaskResult(task, executionToken, success, message, execTime)
 		}()
 	}
 
@@ -250,210 +267,9 @@ func (s *ExchangeScheduler) executeProductGroup(prizeID string, tasks []*models.
 	}
 }
 
-func (s *ExchangeScheduler) executeTask(task *models.ExchangeTask) (bool, string, int) {
-	started, err := s.exchangeTaskRepo.TryMarkRunning(task.ID)
-	if err != nil {
-		return false, fmt.Sprintf("抢占任务执行权失败: %v", err), 0
+func (s *ExchangeScheduler) executionContext() context.Context {
+	if s == nil || s.executionCtx == nil {
+		return context.Background()
 	}
-	if !started {
-		return false, "任务已被其他实例执行或状态不再是待执行", -1
-	}
-
-	if skip, reason := s.monthlySeriesSkipReason(task); skip {
-		_ = s.exchangeTaskRepo.UpdateLastResult(task.ID, reason)
-		_ = s.exchangeTaskRepo.UpdateStatus(task.ID, string(models.ExchangeTaskPending))
-		return false, reason, -1
-	}
-
-	// Product snapshots loaded before the refresh window may be stale.
-	// Keep the snapshot for diagnostics, but always call the real exchange API.
-	if task.Product.ID > 0 && (!task.Product.IsActive || task.Product.StockStatus != "available" || task.Product.DailyRemainderCount <= 0) {
-		log.Printf(
-			"【抢兑调度器】任务 %d 本地商品快照显示可能不可抢兑: active=%t, stock=%s, remain=%d；仍继续请求，以实时接口结果为准",
-			task.ID,
-			task.Product.IsActive,
-			task.Product.StockStatus,
-			task.Product.DailyRemainderCount,
-		)
-	}
-
-	account, err := s.exchangeAccountRepo.GetByID(task.ExchangeAccountID)
-	if err != nil {
-		return false, fmt.Sprintf("获取兑换账号失败: %v", err), 0
-	}
-
-	if !account.IsActive {
-		return false, "账号已禁用", 0
-	}
-
-	if task.ExchangeAccount.Account.ID > 0 && !task.ExchangeAccount.Account.IsActive {
-		return false, "云盘账号已失效，请重新登录后再启用任务", 0
-	}
-
-	prizeID := s.resolveTaskPrizeID(task)
-	if !isUsableExchangePrizeID(prizeID) {
-		return false, "商品已下架或不存在，请更新商品列表后重新创建抢兑任务", 0
-	}
-
-	locked, release, reason := s.acquireMonthlySeriesLock(task, time.Now())
-	if !locked {
-		return false, reason, 0
-	}
-	success, message, execTime := performExchangeWithControls(account, prizeID, s.tokenMgr, s.leaseStore)
-	if !success {
-		release()
-	}
-	return success, message, execTime
-}
-
-func (s *ExchangeScheduler) resolveTaskPrizeID(task *models.ExchangeTask) string {
-	prizeID := taskExchangePrizeID(task)
-	if isUsableExchangePrizeID(prizeID) {
-		return prizeID
-	}
-	if s.productRepo == nil || task == nil || task.PrizeName == "" {
-		return prizeID
-	}
-	product, err := s.productRepo.FindExchangeableReplacement(task.PrizeName, task.PrizeID)
-	if err != nil {
-		log.Printf("【抢兑调度器】任务 %d 查询商品替换失败: %v", task.ID, err)
-		return prizeID
-	}
-	if product == nil || !isUsableExchangePrizeID(product.PrizeID) {
-		return prizeID
-	}
-	if task.PrizeID != product.PrizeID || task.ProductID != product.ID {
-		task.PrizeID = product.PrizeID
-		task.ProductID = product.ID
-		task.Product = *product
-		_ = s.exchangeTaskRepo.UpdatePrizeSnapshot(task.ID, product.ID, product.PrizeID, product.PrizeName)
-		log.Printf("【抢兑调度器】任务 %d 已自动修正商品ID为 %s，避免使用历史 memo 导致 404", task.ID, product.PrizeID)
-	}
-	return product.PrizeID
-}
-
-// reportSkippedTask 记录被调度层跳过的任务结果，避免重复入队时前端完全无感知。
-func (s *ExchangeScheduler) reportSkippedTask(task *models.ExchangeTask, message string) {
-	if task == nil {
-		return
-	}
-	_ = s.exchangeTaskRepo.UpdateLastResult(task.ID, message)
-	_ = s.exchangeTaskRepo.UpdateStatus(task.ID, string(models.ExchangeTaskPending))
-	createExchangeSystemLog(
-		s.taskLogRepo,
-		task.UserID,
-		task.ExchangeAccount.AccountID,
-		task.PrizeName,
-		exchangeAccountName(&task.ExchangeAccount),
-		false,
-		message,
-		0,
-	)
-	s.hub.SendToUser(task.UserID, ws.Message{
-		Type: "exchange_result",
-		Data: map[string]interface{}{
-			"task_id":      task.ID,
-			"prize_name":   task.PrizeName,
-			"success":      false,
-			"message":      message,
-			"execution_ms": 0,
-		},
-	})
-}
-
-func (s *ExchangeScheduler) shouldStopExchange(message string) bool {
-	// 以下商品级库存/上下架状态应该停止当前商品后续账号抢兑。
-	// 账号级结果（如当前账号已兑换、云朵不足）不停止其他账号。
-	stopPatterns := []string{
-		"无库存",
-		"库存不足",
-		"已兑完",
-		"已耗尽",
-		"已下架",
-		"奖品单日已耗尽",
-		"奖品已兑完",
-	}
-
-	for _, pattern := range stopPatterns {
-		if strings.Contains(message, pattern) {
-			return true
-		}
-	}
-
-	return false
-}
-
-// recordResult 记录抢兑结果，并与手动执行路径保持一致地更新尝试次数和最后结果。
-func (s *ExchangeScheduler) recordResult(task *models.ExchangeTask, success bool, message string, execTime int) {
-	status := "failed"
-	if success {
-		status = "success"
-	}
-
-	record := &models.ExchangeRecord{
-		UserID:            task.UserID,
-		ExchangeAccountID: task.ExchangeAccountID,
-		ExchangeTaskID:    &task.ID,
-		ProductID:         task.ProductID,
-		PrizeID:           task.PrizeID,
-		PrizeName:         task.PrizeName,
-		Status:            status,
-		Message:           message,
-		ExecutionTimeMs:   execTime,
-	}
-
-	if err := s.exchangeRecordRepo.Create(record); err != nil {
-		log.Printf("【抢兑调度器】记录抢兑结果失败: %v", err)
-	}
-	if s.metrics != nil {
-		s.metrics.RecordExchangeAttempt(success, exchangeFailureReasonLabel(message), time.Duration(execTime)*time.Millisecond)
-	}
-	s.exchangeTaskRepo.UpdateAttempt(task.ID, success, message)
-	createExchangeSystemLog(
-		s.taskLogRepo,
-		task.UserID,
-		task.ExchangeAccount.AccountID,
-		task.PrizeName,
-		exchangeAccountName(&task.ExchangeAccount),
-		success,
-		message,
-		execTime,
-	)
-
-	// 发送WebSocket通知
-	s.hub.SendToUser(task.UserID, ws.Message{
-		Type: "exchange_result",
-		Data: map[string]interface{}{
-			"task_id":      task.ID,
-			"prize_name":   task.PrizeName,
-			"success":      success,
-			"message":      message,
-			"execution_ms": execTime,
-		},
-	})
-}
-
-func (s *ExchangeScheduler) finalizeTaskResult(task *models.ExchangeTask, success bool, message string, execTime int) {
-	s.recordResult(task, success, message, execTime)
-
-	if success {
-		if isSingleRunExchangeTask(task.TaskType) {
-			if task.AttemptedCount+1 >= task.MaxAttempts {
-				s.exchangeTaskRepo.UpdateStatus(task.ID, string(models.ExchangeTaskCompleted))
-			} else {
-				s.exchangeTaskRepo.UpdateStatus(task.ID, string(models.ExchangeTaskPending))
-			}
-			return
-		}
-
-		s.exchangeTaskRepo.UpdateStatus(task.ID, string(models.ExchangeTaskPending))
-		return
-	}
-
-	if s.shouldStopExchange(message) || strings.Contains(message, "商品已下架或不存在") || strings.Contains(message, "商品ID不是可兑换 prizeId") {
-		s.exchangeTaskRepo.UpdateStatus(task.ID, string(models.ExchangeTaskCompleted))
-		return
-	}
-
-	s.exchangeTaskRepo.UpdateStatus(task.ID, string(models.ExchangeTaskPending))
+	return s.executionCtx
 }

@@ -39,6 +39,13 @@ var upgrader = websocket.Upgrader{
 	},
 }
 
+const maxSeenMessageIDs = 4096
+
+// defaultHubStopTimeout keeps compatibility callers bounded. Composition roots
+// should use StopContext so their process-level shutdown budget remains the
+// source of truth.
+const defaultHubStopTimeout = 10 * time.Second
+
 func sameOriginHost(origin, requestHost string) bool {
 	parsed, err := url.Parse(origin)
 	if err != nil || parsed.Host == "" || requestHost == "" {
@@ -101,6 +108,8 @@ type Client struct {
 	hub       *Hub
 	conn      *websocket.Conn
 	send      chan []byte
+	done      chan struct{}
+	closeOnce sync.Once
 	userID    uint
 	pendingMu sync.Mutex
 	pending   map[string]*pendingDelivery
@@ -114,6 +123,7 @@ type Hub struct {
 	unregister  chan *Client
 	stopCh      chan struct{}
 	runDone     chan struct{}
+	stopDone    chan struct{}
 	stopOnce    sync.Once
 	offlineSem  chan struct{}
 	offlineWG   sync.WaitGroup
@@ -123,24 +133,25 @@ type Hub struct {
 	wsRepo      *repository.WSMessageRepository
 	eventBus    *redisEventBus
 	seen        map[string]time.Time
-	fallbackSeq atomic.Uint64
+	// localSeq exists solely for isolated unit tests that intentionally build a
+	// Hub without persistence. API and Worker composition always inject the
+	// repository, so production replayable events receive a database sequence.
+	localSeq atomic.Uint64
 }
 
-var globalHub *Hub
-var hubOnce sync.Once
-
-func GetHub() *Hub {
-	hubOnce.Do(func() {
-		globalHub = newHub()
-		go globalHub.run()
-	})
-	return globalHub
+// NewHub creates a process-owned Hub and starts its event loop. Composition
+// roots inject this instance into routes and services; no runtime global Hub is
+// retained, keeping API and Worker lifecycles isolated in tests and production.
+func NewHub() *Hub {
+	hub := newHub()
+	go hub.run()
+	return hub
 }
 
 func newHub() *Hub {
 	return &Hub{
 		clients: make(map[uint]map[*Client]bool), sseClients: make(map[uint]map[*SSEClient]bool), register: make(chan *Client, 64),
-		unregister: make(chan *Client, 64), stopCh: make(chan struct{}), runDone: make(chan struct{}),
+		unregister: make(chan *Client, 64), stopCh: make(chan struct{}), runDone: make(chan struct{}), stopDone: make(chan struct{}),
 		offlineSem: make(chan struct{}, 4), seen: make(map[string]time.Time),
 	}
 }
@@ -170,8 +181,22 @@ func (h *Hub) ConfigureEventBus(parent context.Context, transport EventTransport
 }
 
 func (h *Hub) Stop() {
+	ctx, cancel := context.WithTimeout(context.Background(), defaultHubStopTimeout)
+	defer cancel()
+	if err := h.StopContext(ctx); err != nil {
+		log.Printf("WebSocket Hub stopped with unfinished background work: %v", err)
+	}
+}
+
+// StopContext starts the idempotent Hub shutdown and waits only until ctx is
+// done. It prevents a stuck client, event-bus unsubscribe, or background
+// persistence task from consuming an unbounded API/Worker termination window.
+func (h *Hub) StopContext(ctx context.Context) error {
 	if h == nil {
-		return
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
 	}
 	h.stopOnce.Do(func() {
 		h.mu.Lock()
@@ -179,38 +204,52 @@ func (h *Hub) Stop() {
 		bus := h.eventBus
 		h.eventBus = nil
 		h.mu.Unlock()
-		if bus != nil {
-			bus.Stop()
-		}
 		close(h.stopCh)
-		<-h.runDone
-		h.offlineWG.Wait()
-		h.operationWG.Wait()
-
-		h.mu.Lock()
-		all := make(map[*Client]struct{})
-		for _, conns := range h.clients {
-			for client := range conns {
-				all[client] = struct{}{}
-			}
-		}
-		for {
-			select {
-			case client := <-h.register:
-				all[client] = struct{}{}
-			default:
-				goto drained
-			}
-		}
-	drained:
-		h.clients = make(map[uint]map[*Client]bool)
-		h.mu.Unlock()
-		for client := range all {
-			close(client.send)
-			_ = client.conn.Close()
-		}
-		h.clientWG.Wait()
+		go h.finishStop(bus)
 	})
+
+	select {
+	case <-h.stopDone:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (h *Hub) finishStop(bus *redisEventBus) {
+	defer close(h.stopDone)
+	if bus != nil {
+		bus.Stop()
+	}
+	<-h.runDone
+
+	h.mu.Lock()
+	all := make(map[*Client]struct{})
+	for _, conns := range h.clients {
+		for client := range conns {
+			all[client] = struct{}{}
+		}
+	}
+	for {
+		select {
+		case client := <-h.register:
+			all[client] = struct{}{}
+		default:
+			goto drained
+		}
+	}
+drained:
+	h.clients = make(map[uint]map[*Client]bool)
+	h.sseClients = make(map[uint]map[*SSEClient]bool)
+	h.mu.Unlock()
+	for client := range all {
+		client.close()
+	}
+
+	// No new tasks can be admitted after stopped is set while holding mu.
+	h.offlineWG.Wait()
+	h.operationWG.Wait()
+	h.clientWG.Wait()
 }
 
 func (h *Hub) SetWSMessageRepository(repo *repository.WSMessageRepository) {
@@ -227,7 +266,7 @@ func (h *Hub) run() {
 			h.mu.Lock()
 			if h.stopped {
 				h.mu.Unlock()
-				_ = client.conn.Close()
+				client.close()
 				continue
 			}
 			if h.clients[client.userID] == nil {
@@ -241,17 +280,21 @@ func (h *Hub) run() {
 				h.scheduleOfflineDelivery(client, repo)
 			}
 		case client := <-h.unregister:
+			registered := false
 			h.mu.Lock()
 			if conns := h.clients[client.userID]; conns != nil {
 				if _, ok := conns[client]; ok {
 					delete(conns, client)
-					close(client.send)
+					registered = true
 				}
 				if len(conns) == 0 {
 					delete(h.clients, client.userID)
 				}
 			}
 			h.mu.Unlock()
+			if registered {
+				client.close()
+			}
 		case <-h.stopCh:
 			return
 		}
@@ -340,18 +383,10 @@ func (h *Hub) prepareMessage(userID uint, msg Message) Message {
 	h.mu.RLock()
 	bus := h.eventBus
 	h.mu.RUnlock()
-	if msg.Sequence == 0 && userID != 0 {
-		if bus != nil {
-			if seq, err := bus.nextSequence(userID); err == nil {
-				msg.Sequence = seq
-			} else {
-				log.Printf("[WS] 分配用户序号失败: %v", err)
-			}
-		}
-		if msg.Sequence == 0 {
-			msg.Sequence = h.fallbackSeq.Add(1)
-		}
-	}
+	// A configured repository assigns the durable sequence atomically with the
+	// message insert below. Never fall back to a Redis or process-local counter
+	// after a persistence failure: doing so could make Last-Event-ID advance
+	// past a missing envelope on another node.
 	if bus != nil {
 		msg.PublisherID = bus.nodeID
 	}
@@ -369,11 +404,15 @@ func (h *Hub) SendToUser(userID uint, msg Message) {
 	h.mu.RUnlock()
 	if repo != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		err := repo.WithContext(ctx).SaveMessageEnvelope(userID, msg.Type, msg.Data, msg.MessageID, msg.Sequence, time.UnixMilli(msg.ExpiresAtMS))
+		sequence, err := repo.WithContext(ctx).PersistMessageEnvelope(userID, msg.Type, msg.Data, msg.MessageID, time.UnixMilli(msg.ExpiresAtMS))
 		cancel()
 		if err != nil {
 			log.Printf("[WS] 持久化消息失败 message_id=%s: %v", msg.MessageID, err)
+			return
 		}
+		msg.Sequence = sequence
+	} else if msg.Sequence == 0 {
+		msg.Sequence = h.localSeq.Add(1)
 	}
 	h.deliverNewEnvelope(msg)
 	if bus != nil {
@@ -474,11 +513,24 @@ func (h *Hub) markSeen(messageID string, expiresAtMS int64) bool {
 		return false
 	}
 	h.seen[messageID] = expiry
-	if len(h.seen) > 4096 {
+	if len(h.seen) > maxSeenMessageIDs {
 		for id, exp := range h.seen {
 			if !exp.After(now) {
 				delete(h.seen, id)
 			}
+		}
+		// Long-lived messages can otherwise keep the map growing forever.  Keep
+		// the entries that expire last so duplicate suppression remains useful
+		// for the full delivery TTL while preserving a hard memory bound.
+		for len(h.seen) > maxSeenMessageIDs {
+			var oldestID string
+			var oldestExpiry time.Time
+			for id, exp := range h.seen {
+				if oldestID == "" || exp.Before(oldestExpiry) {
+					oldestID, oldestExpiry = id, exp
+				}
+			}
+			delete(h.seen, oldestID)
 		}
 	}
 	return true
@@ -527,14 +579,14 @@ func (h *Hub) HandleWebSocket(w http.ResponseWriter, r *http.Request, userID uin
 		log.Printf("[WS] 升级失败: %v", err)
 		return
 	}
-	client := &Client{hub: h, conn: conn, send: make(chan []byte, 256), userID: userID, pending: make(map[string]*pendingDelivery)}
+	client := &Client{hub: h, conn: conn, send: make(chan []byte, 256), done: make(chan struct{}), userID: userID, pending: make(map[string]*pendingDelivery)}
 	select {
 	case h.register <- client:
 	case <-h.stopCh:
-		_ = conn.Close()
+		client.close()
 		return
 	default:
-		_ = conn.Close()
+		client.close()
 		return
 	}
 	h.clientWG.Add(2)
@@ -543,6 +595,11 @@ func (h *Hub) HandleWebSocket(w http.ResponseWriter, r *http.Request, userID uin
 }
 
 func (c *Client) enqueue(msg Message, data []byte) bool {
+	select {
+	case <-c.done:
+		return false
+	default:
+	}
 	if msg.MessageID != "" && msg.Type != "pong" {
 		timeout := envutil.Duration("WS_ACK_TIMEOUT", 5*time.Second)
 		if timeout <= 0 {
@@ -557,12 +614,32 @@ func (c *Client) enqueue(msg Message, data []byte) bool {
 		c.pendingMu.Unlock()
 	}
 	select {
+	case <-c.done:
+		c.ack(msg.MessageID)
+		return false
 	case c.send <- data:
 		return true
 	default:
 		c.ack(msg.MessageID)
 		return false
 	}
+}
+
+// close unblocks both pumps without ever closing send.  Producers may still
+// hold a Client snapshot while shutdown is in progress; closing a shared send
+// channel in that situation races with enqueue and can panic.
+func (c *Client) close() {
+	if c == nil {
+		return
+	}
+	c.closeOnce.Do(func() {
+		if c.done != nil {
+			close(c.done)
+		}
+		if c.conn != nil {
+			_ = c.conn.Close()
+		}
+	})
 }
 
 func (c *Client) ack(messageID string) {
@@ -603,7 +680,7 @@ func (c *Client) retryDue(now time.Time) [][]byte {
 }
 
 func (c *Client) readPump() {
-	defer func() { c.hub.tryUnregister(c); _ = c.conn.Close() }()
+	defer func() { c.hub.tryUnregister(c); c.close() }()
 	c.conn.SetReadLimit(4096)
 	_ = c.conn.SetReadDeadline(time.Now().Add(60 * time.Second))
 	c.conn.SetPongHandler(func(string) error { return c.conn.SetReadDeadline(time.Now().Add(60 * time.Second)) })
@@ -624,6 +701,8 @@ func (c *Client) readPump() {
 		if isApplicationPing(payload) {
 			pong, _ := json.Marshal(Message{Type: "pong", Data: map[string]interface{}{"ts": time.Now().UnixMilli()}})
 			select {
+			case <-c.done:
+				return
 			case c.send <- pong:
 			default:
 				return
@@ -650,13 +729,15 @@ func (c *Client) writePump() {
 		retryEvery = 500 * time.Millisecond
 	}
 	retry := time.NewTicker(retryEvery)
-	defer func() { heartbeat.Stop(); retry.Stop(); _ = c.conn.Close() }()
+	defer func() { heartbeat.Stop(); retry.Stop(); c.close() }()
 	write := func(kind int, data []byte) error {
 		_ = c.conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
 		return c.conn.WriteMessage(kind, data)
 	}
 	for {
 		select {
+		case <-c.done:
+			return
 		case message, ok := <-c.send:
 			if !ok {
 				_ = write(websocket.CloseMessage, nil)

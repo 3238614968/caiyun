@@ -5,6 +5,7 @@ import (
 
 	"caiyun/internal/queue"
 	"caiyun/internal/services"
+	"caiyun/internal/ws"
 )
 
 // SharedServices 汇总 API 与 Worker 都会使用的核心业务服务。
@@ -24,11 +25,15 @@ type SharedServices struct {
 	TaskQueue    queue.ReliableTaskQueue
 }
 
-func InitSharedServices(core *Core) (*SharedServices, error) {
+func InitSharedServices(core *Core, eventHubs ...*ws.Hub) (*SharedServices, error) {
 	if core == nil {
 		return nil, fmt.Errorf("core is nil")
 	}
 	repos := core.Repository
+	var eventHub *ws.Hub
+	if len(eventHubs) > 0 {
+		eventHub = eventHubs[0]
+	}
 
 	taskQueue, err := queue.NewConfiguredTaskQueue(core.Redis)
 	if err != nil {
@@ -39,6 +44,7 @@ func InitSharedServices(core *Core) (*SharedServices, error) {
 	accountService.SetTaskQueue(taskQueue)
 
 	taskService := services.NewTaskService(repos.Account, repos.TaskLog, core.TaskStore, core.Auth, repos.TaskConfig, repos.CloudStats)
+	taskService.SetEventHub(eventHub)
 	cloudService := services.NewCloudService(repos.Account, repos.CloudStats, repos.TaskLog)
 
 	tokenManager := services.NewTokenManager(repos.Account, repos.ExchangeAccount, core.Auth)
@@ -56,6 +62,7 @@ func InitSharedServices(core *Core) (*SharedServices, error) {
 		repos.TaskLog,
 		core.Auth,
 		tokenManager,
+		eventHub,
 	)
 	exchangeService.SetLockStore(core.Redis)
 	operationService := services.NewOperationService(repos.Operation, taskQueue)

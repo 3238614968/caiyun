@@ -163,6 +163,7 @@ import { ElMessage, ElMessageBox, type TabPaneName } from 'element-plus'
 import {
   type Account,
   type AccountSummary,
+  type AdminRole,
   type AdminUser,
   type TaskConfig,
   getAllUsers,
@@ -258,7 +259,7 @@ const statsOverview = ref([
 
 // Role dialog
 const roleDialogVisible = ref(false)
-const roleForm = reactive({ id: 0, role: 'user' })
+const roleForm = reactive<{ id: number; role: AdminRole }>({ id: 0, role: 'user' })
 const passwordDialogVisible = ref(false)
 const passwordForm = reactive({ id: 0, username: '', password: '' })
 
@@ -480,8 +481,8 @@ const handleResetUserPassword = (row: AdminUser) => {
 }
 
 const handlePasswordSubmit = async () => {
-  if (passwordForm.password.length < 6 || !/[a-zA-Z]/.test(passwordForm.password) || !/\d/.test(passwordForm.password)) {
-    ElMessage.warning('新密码至少6位，且需同时包含字母和数字')
+  if (passwordForm.password.length < 8 || !/[a-zA-Z]/.test(passwordForm.password) || !/\d/.test(passwordForm.password)) {
+    ElMessage.warning('新密码至少8位，且需同时包含字母和数字')
     return
   }
   try {

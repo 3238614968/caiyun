@@ -19,6 +19,15 @@ func TestPreRefreshExpiredTokensCapsScanBatch(t *testing.T) {
 	}
 }
 
+func TestTokenRefreshLockRenewIntervalIsBounded(t *testing.T) {
+	if got := tokenRefreshLockRenewInterval(30 * time.Second); got != 10*time.Second {
+		t.Fatalf("renew interval = %s, want 10s", got)
+	}
+	if got := tokenRefreshLockRenewInterval(500 * time.Millisecond); got != time.Second {
+		t.Fatalf("small TTL renew interval = %s, want lower bound 1s", got)
+	}
+}
+
 func TestTokenPreRefreshMaxScanFromEnvFallsBackToDefault(t *testing.T) {
 	t.Run("invalid", func(t *testing.T) {
 		t.Setenv("TOKEN_PREREFRESH_MAX_SCAN", "invalid")

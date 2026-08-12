@@ -2,8 +2,10 @@ package dbmigrate
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"embed"
+	"encoding/hex"
 	"fmt"
 	"log"
 	"path/filepath"
@@ -20,9 +22,19 @@ import (
 var migrationFS embed.FS
 
 type schemaMigrationRecord struct {
-	Version     string    `gorm:"primaryKey;size:64"`
-	Description string    `gorm:"size:255;not null;default:''"`
-	AppliedAt   time.Time `gorm:"autoCreateTime"`
+	Version     string `gorm:"primaryKey;size:64"`
+	Description string `gorm:"size:255;not null;default:''"`
+	// Checksum is the SHA-256 of the embedded migration file.  It prevents an
+	// already deployed migration from being silently changed in a later build.
+	// Empty values are only expected on installations created before checksum
+	// tracking was introduced and are backfilled once on the next successful
+	// migration run.
+	Checksum string `gorm:"size:64;not null;default:''"`
+	// Dirty is set before executing a migration and cleared only after every
+	// statement succeeds.  This is required because MySQL DDL implicitly
+	// commits, so a failed migration can leave a partially changed schema.
+	Dirty     bool      `gorm:"not null;default:false"`
+	AppliedAt time.Time `gorm:"autoCreateTime"`
 }
 
 func (schemaMigrationRecord) TableName() string {
@@ -70,21 +82,26 @@ func RunEmbedded(ctx context.Context, db *gorm.DB, logger *log.Logger) error {
 
 	for _, name := range names {
 		version := strings.TrimSuffix(name, filepath.Ext(name))
-		applied, err := migrationApplied(ctx, db, version)
-		if err != nil {
-			return err
-		}
-		if applied {
-			continue
-		}
-
 		content, err := migrationFS.ReadFile("sql/" + name)
 		if err != nil {
 			return fmt.Errorf("read migration %s: %w", name, err)
 		}
+		checksum := migrationChecksum(content)
+
+		record, err := findMigrationRecord(ctx, db, version)
+		if err != nil {
+			return err
+		}
+		if record != nil {
+			if err := validateAppliedMigration(ctx, db, record, version, migrationDescription(name), checksum); err != nil {
+				return err
+			}
+			continue
+		}
+
 		statements := splitSQLStatements(string(content))
 		logger.Printf("数据库迁移开始: %s (%d statements)", version, len(statements))
-		if err := applyMigrationStatements(ctx, db, version, migrationDescription(name), statements); err != nil {
+		if err := applyMigrationStatementsWithChecksum(ctx, db, version, migrationDescription(name), checksum, statements); err != nil {
 			return err
 		}
 		logger.Printf("数据库迁移完成: %s", version)
@@ -94,6 +111,10 @@ func RunEmbedded(ctx context.Context, db *gorm.DB, logger *log.Logger) error {
 }
 
 func applyMigrationStatements(ctx context.Context, db *gorm.DB, version, description string, statements []string) error {
+	return applyMigrationStatementsWithChecksum(ctx, db, version, description, migrationChecksum([]byte(strings.Join(statements, "\n"))), statements)
+}
+
+func applyMigrationStatementsWithChecksum(ctx context.Context, db *gorm.DB, version, description, checksum string, statements []string) error {
 	if db == nil {
 		return fmt.Errorf("db is nil")
 	}
@@ -103,10 +124,10 @@ func applyMigrationStatements(ctx context.Context, db *gorm.DB, version, descrip
 
 	// MySQL implicitly commits around most DDL. Wrapping a migration in a
 	// transaction therefore gives a false rollback guarantee: earlier schema
-	// changes survive even when a later statement fails. Execute the migration's
-	// idempotent statements in order and record its version only after every
-	// statement succeeds. A failed partial migration remains unrecorded and is
-	// safe to retry after the underlying problem is fixed.
+	// changes survive even when a later statement fails.  Record a dirty state
+	// before the first statement and clear it only after every statement
+	// succeeds, so a subsequent deployment stops instead of re-running a
+	// partially applied schema change.
 	//
 	// Migrations may create or remove stored procedures. MySQL rejects those
 	// statements through the binary prepared-statement protocol (Error 1295),
@@ -115,6 +136,9 @@ func applyMigrationStatements(ctx context.Context, db *gorm.DB, version, descrip
 	sqlDB, err := db.DB()
 	if err != nil {
 		return fmt.Errorf("get migration database handle: %w", err)
+	}
+	if err := markMigrationDirty(ctx, db, version, description, checksum); err != nil {
+		return err
 	}
 	for idx, stmt := range statements {
 		stmt = strings.TrimSpace(stmt)
@@ -125,7 +149,7 @@ func applyMigrationStatements(ctx context.Context, db *gorm.DB, version, descrip
 			return fmt.Errorf("apply migration %s statement %d failed: %w; sql=%s", version, idx+1, err, abbreviateSQL(stmt, 240))
 		}
 	}
-	if err := recordMigration(ctx, db, version, description); err != nil {
+	if err := markMigrationComplete(ctx, db, version, description, checksum); err != nil {
 		return err
 	}
 	return nil
@@ -186,22 +210,99 @@ func ensureSchemaMigrations(ctx context.Context, db *gorm.DB) error {
 	return db.WithContext(ctx).AutoMigrate(&schemaMigrationRecord{})
 }
 
-func migrationApplied(ctx context.Context, db *gorm.DB, version string) (bool, error) {
-	var count int64
-	if err := db.WithContext(ctx).Model(&schemaMigrationRecord{}).Where("version = ?", version).Count(&count).Error; err != nil {
-		return false, fmt.Errorf("check migration %s: %w", version, err)
+func findMigrationRecord(ctx context.Context, db *gorm.DB, version string) (*schemaMigrationRecord, error) {
+	var record schemaMigrationRecord
+	err := db.WithContext(ctx).Where("version = ?", version).Take(&record).Error
+	if err == nil {
+		return &record, nil
 	}
-	return count > 0, nil
+	if err == gorm.ErrRecordNotFound {
+		return nil, nil
+	}
+	return nil, fmt.Errorf("check migration %s: %w", version, err)
 }
 
-func recordMigration(ctx context.Context, db *gorm.DB, version, description string) error {
-	record := &schemaMigrationRecord{Version: version, Description: description}
-	if err := db.WithContext(ctx).
-		Clauses(clause.OnConflict{DoNothing: true}).
-		Create(record).Error; err != nil {
-		return fmt.Errorf("record migration %s: %w", version, err)
+func migrationApplied(ctx context.Context, db *gorm.DB, version string) (bool, error) {
+	record, err := findMigrationRecord(ctx, db, version)
+	if err != nil {
+		return false, err
+	}
+	return record != nil && !record.Dirty, nil
+}
+
+func validateAppliedMigration(ctx context.Context, db *gorm.DB, record *schemaMigrationRecord, version, description, checksum string) error {
+	if record == nil {
+		return fmt.Errorf("migration %s record is nil", version)
+	}
+	if record.Dirty {
+		return fmt.Errorf("migration %s is marked dirty; inspect and repair the partial schema change before retrying", version)
+	}
+	if record.Checksum == "" {
+		// Existing deployments predate migration content tracking.  Preserve
+		// their applied history and establish a checksum baseline now; all
+		// later runs will reject content changes deterministically.
+		if err := db.WithContext(ctx).Model(&schemaMigrationRecord{}).
+			Where("version = ? AND checksum = '' AND dirty = ?", version, false).
+			Updates(map[string]interface{}{"checksum": checksum, "description": description}).Error; err != nil {
+			return fmt.Errorf("backfill migration %s checksum: %w", version, err)
+		}
+		return nil
+	}
+	if record.Checksum != checksum {
+		return fmt.Errorf("migration %s checksum mismatch: applied=%s embedded=%s; do not modify an applied migration", version, record.Checksum, checksum)
 	}
 	return nil
+}
+
+func markMigrationDirty(ctx context.Context, db *gorm.DB, version, description, checksum string) error {
+	record := &schemaMigrationRecord{
+		Version:     version,
+		Description: description,
+		Checksum:    checksum,
+		Dirty:       true,
+	}
+	result := db.WithContext(ctx).Clauses(clause.OnConflict{DoNothing: true}).Create(record)
+	if result.Error != nil {
+		return fmt.Errorf("mark migration %s dirty: %w", version, result.Error)
+	}
+	if result.RowsAffected == 1 {
+		return nil
+	}
+
+	existing, err := findMigrationRecord(ctx, db, version)
+	if err != nil {
+		return err
+	}
+	if existing == nil {
+		return fmt.Errorf("mark migration %s dirty: record was not persisted", version)
+	}
+	if existing.Dirty {
+		return fmt.Errorf("migration %s is already marked dirty; inspect and repair the partial schema change before retrying", version)
+	}
+	return fmt.Errorf("migration %s is already recorded as applied", version)
+}
+
+func markMigrationComplete(ctx context.Context, db *gorm.DB, version, description, checksum string) error {
+	result := db.WithContext(ctx).Model(&schemaMigrationRecord{}).
+		Where("version = ? AND dirty = ?", version, true).
+		Updates(map[string]interface{}{
+			"description": description,
+			"checksum":    checksum,
+			"dirty":       false,
+			"applied_at":  time.Now().UTC(),
+		})
+	if result.Error != nil {
+		return fmt.Errorf("complete migration %s: %w", version, result.Error)
+	}
+	if result.RowsAffected != 1 {
+		return fmt.Errorf("complete migration %s: dirty migration record was not found", version)
+	}
+	return nil
+}
+
+func migrationChecksum(content []byte) string {
+	sum := sha256.Sum256(content)
+	return hex.EncodeToString(sum[:])
 }
 
 func migrationDescription(name string) string {

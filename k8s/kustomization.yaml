@@ -1,0 +1,7 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# The canonical base remains caiyun.yaml. Environments can now use
+# `kubectl apply -k k8s` and add reviewed overlays without duplicating it.
+resources:
+  - caiyun.yaml

@@ -1,4 +1,5 @@
 import { ref, type Ref } from 'vue'
+import { operationStatuses, type OperationUpdatedEvent } from './generated/operation-contract'
 
 export interface WsMessage {
   type: string
@@ -11,14 +12,56 @@ export interface WsMessage {
 
 type MessageHandler = (msg: WsMessage) => void
 
+export type OperationUpdatedMessage = OperationUpdatedEvent
+
+export function isOperationUpdatedMessage(message: WsMessage): message is OperationUpdatedMessage {
+	if (message.type !== 'operation.updated' || !message.data || typeof message.data !== 'object') {
+		return false
+  }
+  const data = message.data as Record<string, unknown>
+  return typeof message.message_id === 'string' &&
+    typeof message.sequence === 'number' &&
+    typeof data.operation_id === 'string' &&
+    typeof data.type === 'string' &&
+    typeof data.attempt_count === 'number' &&
+    typeof data.queued_at === 'string' &&
+    typeof data.updated_at === 'string' &&
+    typeof data.status === 'string' &&
+		(operationStatuses as readonly string[]).includes(data.status)
+}
+
+// isValidInboundMessage deliberately validates only the envelope fields shared
+// by all realtime events. Unknown event types remain dispatchable so a newer
+// server can add events without requiring an immediate client release. Events
+// with a known generated contract receive the stricter contract guard.
+function isValidInboundMessage(value: unknown): value is WsMessage {
+	if (!value || typeof value !== 'object' || Array.isArray(value)) {
+		return false
+	}
+	const message = value as Record<string, unknown>
+	if (typeof message.type !== 'string' || message.type.trim() === '') {
+		return false
+	}
+	if (!Object.prototype.hasOwnProperty.call(message, 'data') || message.data === null || message.data === undefined) {
+		return false
+	}
+	return message.type !== 'operation.updated' || isOperationUpdatedMessage(message as unknown as WsMessage)
+}
+
+function isDurableMessage(message: WsMessage): message is WsMessage & { message_id: string } {
+	return typeof message.message_id === 'string' && message.message_id.trim() !== ''
+}
+
 export class WebSocketClient {
   private ws: WebSocket | null = null
   private sse: EventSource | null = null
   private url = ''
   private handlers: Map<string, Set<MessageHandler>> = new Map()
   private reconnectTimer: number | null = null
+  private autoWebSocketProbeTimer: number | null = null
   private reconnectDelay = 3000
   private maxReconnectDelay = 30000
+  private autoWebSocketProbeInterval = 60000
   private currentDelay = 3000
   private heartbeatInterval = 30000
   private heartbeatTimeout = 10000
@@ -29,6 +72,7 @@ export class WebSocketClient {
   private suppressNextReconnect = false
   private globalListenersBound = false
   private autoFallbackToSSE = false
+  private sseLastEventID = ''
 
   private seenMessageIds = new Set<string>()
   private readonly maxSeenMessageIds = 2048
@@ -48,6 +92,11 @@ export class WebSocketClient {
       return
     }
 
+    this.connectWebSocket()
+  }
+
+  private connectWebSocket() {
+    if (this.manualClose) return
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
     const wsUrl = import.meta.env.VITE_WS_URL || '/ws'
 
@@ -88,6 +137,7 @@ export class WebSocketClient {
 
   private readonly handleOffline = () => {
     this.connected.value = false
+    this.clearAutoWebSocketProbe()
     this.sse?.close()
     this.sse = null
     this.closeStaleSocket()
@@ -128,22 +178,56 @@ export class WebSocketClient {
     if (this.manualClose || (this.sse && this.sse.readyState !== EventSource.CLOSED)) return
     this.clearReconnectTimer()
     this.stopHeartbeat()
-    const url = import.meta.env.VITE_SSE_URL || '/events'
+    const url = this.sseURL()
     const source = new EventSource(url, { withCredentials: true })
     this.sse = source
     source.onopen = () => {
       this.connected.value = true
       this.transport.value = 'sse'
       this.currentDelay = this.reconnectDelay
+      if (this.preferredTransport() === 'auto' && this.autoFallbackToSSE) {
+        this.scheduleAutoWebSocketProbe()
+      }
     }
     source.onmessage = (event) => {
       try {
-        const msg: WsMessage = JSON.parse(event.data)
-        if (msg.message_id && this.seenMessageIds.has(msg.message_id)) return
-        if (this.dispatch(msg) && msg.message_id) this.rememberMessage(msg.message_id)
+        const parsed: unknown = JSON.parse(event.data)
+        if (!isValidInboundMessage(parsed)) {
+          console.warn('[SSE] 丢弃无效消息')
+          return
+        }
+        const msg = parsed
+        if (isDurableMessage(msg) && this.seenMessageIds.has(msg.message_id)) return
+        // dispatch isolates handler failures by design. Reaching this point
+        // means all handlers have completed, so the replay cursor can safely
+        // advance without dropping an event merely because JSON parsed.
+        if (this.dispatch(msg)) {
+          if (isDurableMessage(msg)) this.rememberMessage(msg.message_id)
+          this.rememberSSESequence(msg.sequence)
+        }
       } catch (error) { console.warn('[SSE] 解析消息失败:', error) }
     }
-    source.onerror = () => { this.connected.value = false }
+    source.onerror = () => {
+      if (this.sse !== source) return
+      this.connected.value = false
+      source.close()
+      this.sse = null
+      if (!this.manualClose) this.scheduleReconnect()
+    }
+  }
+
+  private sseURL() {
+    const configured = import.meta.env.VITE_SSE_URL || '/events'
+    if (!this.sseLastEventID) return configured
+    const url = new URL(configured, window.location.origin)
+    url.searchParams.set('last_event_id', this.sseLastEventID)
+    return configured.startsWith('/') ? `${url.pathname}${url.search}` : url.toString()
+  }
+
+  private rememberSSESequence(sequence?: number) {
+    if (typeof sequence === 'number' && Number.isFinite(sequence) && sequence > 0) {
+      this.sseLastEventID = String(Math.trunc(sequence))
+    }
   }
 
   private doConnect() {
@@ -162,6 +246,9 @@ export class WebSocketClient {
         this.connected.value = true
         this.transport.value = 'ws'
         this.autoFallbackToSSE = false
+        this.clearAutoWebSocketProbe()
+        this.sse?.close()
+        this.sse = null
         this.currentDelay = this.reconnectDelay
         this.clearReconnectTimer()
         this.startHeartbeat()
@@ -170,16 +257,21 @@ export class WebSocketClient {
 
       socket.onmessage = (event) => {
         try {
-          const msg: WsMessage = JSON.parse(event.data)
+          const parsed: unknown = JSON.parse(event.data)
+          if (!isValidInboundMessage(parsed)) {
+            console.warn('[WS] 丢弃无效消息')
+            return
+          }
+          const msg = parsed
           if (msg.type === 'pong') {
             this.markHeartbeatAlive()
           }
-          if (msg.message_id && this.seenMessageIds.has(msg.message_id)) {
+          if (isDurableMessage(msg) && this.seenMessageIds.has(msg.message_id)) {
             this.acknowledge(socket, msg)
             return
           }
           const handled = this.dispatch(msg)
-          if (handled && msg.message_id) {
+          if (handled && isDurableMessage(msg)) {
             this.rememberMessage(msg.message_id)
             this.acknowledge(socket, msg)
           }
@@ -211,6 +303,10 @@ export class WebSocketClient {
             this.autoFallbackToSSE = true
             console.info('[Push] WebSocket 不可用，自动切换到 SSE')
             this.connectSSE()
+            return
+          }
+          if (this.preferredTransport() === 'auto' && this.autoFallbackToSSE) {
+            this.scheduleAutoWebSocketProbe()
             return
           }
           this.scheduleReconnect()
@@ -303,9 +399,32 @@ export class WebSocketClient {
     console.log(`[WS] ${Math.round(delay / 100) / 10}秒后重连...`)
     this.reconnectTimer = window.setTimeout(() => {
       this.reconnectTimer = null
-      this.doConnect()
+      if (this.usesSSE()) {
+        this.connectSSE()
+      } else {
+        this.doConnect()
+      }
       this.currentDelay = Math.min(Math.round(this.currentDelay * 1.6), this.maxReconnectDelay)
     }, delay)
+  }
+
+  private scheduleAutoWebSocketProbe() {
+    if (this.manualClose || this.preferredTransport() !== 'auto' || !this.autoFallbackToSSE || this.autoWebSocketProbeTimer) {
+      return
+    }
+    this.autoWebSocketProbeTimer = window.setTimeout(() => {
+      this.autoWebSocketProbeTimer = null
+      if (this.manualClose || this.preferredTransport() !== 'auto' || !this.autoFallbackToSSE) return
+      this.connectWebSocket()
+      this.scheduleAutoWebSocketProbe()
+    }, this.autoWebSocketProbeInterval)
+  }
+
+  private clearAutoWebSocketProbe() {
+    if (this.autoWebSocketProbeTimer) {
+      clearTimeout(this.autoWebSocketProbeTimer)
+      this.autoWebSocketProbeTimer = null
+    }
   }
 
   private reconnectNow() {
@@ -359,20 +478,21 @@ export class WebSocketClient {
   }
 
   private dispatch(msg: WsMessage) {
-    let handled = true
     const invoke = (handlers?: Set<MessageHandler>) => {
       handlers?.forEach(fn => {
         try {
           fn(msg)
         } catch (e) {
-          handled = false
-          console.error('[WS] handler error:', e)
+          // The durable message is already available through replay/REST. A
+          // UI callback failure must be observable but must not cause an ACK
+          // loop and repeated user-visible notifications.
+          console.error('[Push] handler error; acknowledging message:', e)
         }
       })
     }
     invoke(this.handlers.get(msg.type))
     invoke(this.handlers.get('*'))
-    return handled
+    return true
   }
 
   private rememberMessage(messageId: string) {
@@ -414,11 +534,13 @@ export class WebSocketClient {
   disconnect() {
     this.manualClose = true
     this.clearReconnectTimer()
+    this.clearAutoWebSocketProbe()
     this.stopHeartbeat()
     this.ws?.close()
     this.ws = null
     this.sse?.close()
     this.sse = null
+    this.sseLastEventID = ''
     this.transport.value = 'none'
     this.connected.value = false
   }

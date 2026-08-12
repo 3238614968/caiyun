@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"caiyun/internal/dto"
 	"caiyun/internal/services"
 	appErrors "caiyun/pkg/errors"
 	apiresponse "caiyun/pkg/response"
@@ -72,7 +73,7 @@ func (h *AdminHandler) GetAllAccounts(c *gin.Context) {
 	}
 
 	apiresponse.Success(c, gin.H{
-		"accounts":  accounts,
+		"accounts":  dto.ToAccountResponses(accounts),
 		"total":     total,
 		"page":      page,
 		"page_size": pageSize,

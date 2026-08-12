@@ -157,8 +157,8 @@ const validateConfirmPassword = (_rule: unknown, value: string, callback: (error
 
 
 const validatePassword = (_rule: unknown, value: string, callback: (error?: Error) => void) => {
-  if (value.length < 6) {
-    callback(new Error('密码长度不能少于6个字符'))
+  if (value.length < 8) {
+    callback(new Error('密码长度不能少于8个字符'))
   } else if (!/[a-zA-Z]/.test(value) || !/\d/.test(value)) {
     callback(new Error('密码需同时包含字母和数字'))
   } else {

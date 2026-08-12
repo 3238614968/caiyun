@@ -3,6 +3,7 @@ package queue
 import (
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -44,6 +45,15 @@ type fakeStreamQueueStore struct {
 	promoteMoved          bool
 	readMessages          []cache.StreamMessage
 	autoClaimMessages     []cache.StreamMessage
+	renewCalls            int
+	renewStream           string
+	renewGroup            string
+	renewConsumer         string
+	renewID               string
+	renewed               bool
+	rangeMessages         []cache.StreamMessage
+	moveEntryMoved        bool
+	deletedEntries        int64
 	dueItems              []string
 }
 
@@ -101,6 +111,20 @@ func (f *fakeStreamQueueStore) XAckAndDelete(stream, group string, ids ...string
 	return int64(len(ids)), nil
 }
 
+func (f *fakeStreamQueueStore) XRange(string, string, string, int64) ([]cache.StreamMessage, error) {
+	return append([]cache.StreamMessage(nil), f.rangeMessages...), nil
+}
+
+func (f *fakeStreamQueueStore) XMoveEntryToStream(source, id, destination string, maxLen int64, values map[string]interface{}) (string, bool, error) {
+	f.moveStreamCalls = append(f.moveStreamCalls, streamMoveCall{source: source, id: id, destination: destination, maxLen: maxLen, values: values})
+	if !f.moveEntryMoved {
+		return "", false, nil
+	}
+	return "dead-replay-1", true, nil
+}
+
+func (f *fakeStreamQueueStore) XDel(string, ...string) (int64, error) { return f.deletedEntries, nil }
+
 func (f *fakeStreamQueueStore) XMoveToStream(source, group, id, destination string, maxLen int64, values map[string]interface{}) (string, bool, error) {
 	f.moveStreamCalls = append(f.moveStreamCalls, streamMoveCall{
 		source: source, group: group, id: id, destination: destination, maxLen: maxLen, values: values,
@@ -130,6 +154,12 @@ func (f *fakeStreamQueueStore) XPromoteZSetToStream(source, destination, member 
 
 func (f *fakeStreamQueueStore) XAutoClaim(string, string, string, time.Duration, string, int64) ([]cache.StreamMessage, string, error) {
 	return append([]cache.StreamMessage(nil), f.autoClaimMessages...), "0-0", nil
+}
+
+func (f *fakeStreamQueueStore) XRenewPending(stream, group, consumer, id string) (bool, error) {
+	f.renewCalls++
+	f.renewStream, f.renewGroup, f.renewConsumer, f.renewID = stream, group, consumer, id
+	return f.renewed, nil
 }
 
 func (f *fakeStreamQueueStore) XPendingCount(string, string) (int64, error) { return 0, nil }
@@ -243,6 +273,26 @@ func TestStreamTaskQueueAckReportsMissingPendingConflict(t *testing.T) {
 	err := q.Ack(&TaskMessage{StreamID: "already-acked-0"})
 	if err == nil || !strings.Contains(err.Error(), "冲突") || !strings.Contains(err.Error(), "acked=0") {
 		t.Fatalf("Ack() error = %v, want explicit zero-ack conflict", err)
+	}
+}
+
+func TestStreamTaskQueueRenewVisibilityUsesCurrentConsumerOnly(t *testing.T) {
+	store := &fakeStreamQueueStore{renewed: true}
+	q := newStreamTaskQueueWithStore(store, StreamTaskQueueOptions{
+		StreamKey: "stream", ConsumerGroup: "group", ConsumerName: "worker-a",
+	})
+	renewed, err := q.RenewVisibility(&TaskMessage{StreamID: "1-0"})
+	if err != nil || !renewed {
+		t.Fatalf("RenewVisibility() = (%t, %v), want true/nil", renewed, err)
+	}
+	if store.renewCalls != 1 || store.renewStream != "stream" || store.renewGroup != "group" || store.renewConsumer != "worker-a" || store.renewID != "1-0" {
+		t.Fatalf("renew call=%+v", store)
+	}
+
+	store.renewed = false
+	renewed, err = q.RenewVisibility(&TaskMessage{StreamID: "already-recovered"})
+	if err != nil || renewed {
+		t.Fatalf("missing current pending delivery = (%t, %v), want false/nil", renewed, err)
 	}
 }
 
@@ -401,5 +451,44 @@ func TestStreamTaskQueueRecoveryMovesMalformedClaimToDeadLetter(t *testing.T) {
 	}
 	if len(store.moveStreamCalls) != 1 || store.moveStreamCalls[0].destination != "dead" {
 		t.Fatalf("move calls = %+v", store.moveStreamCalls)
+	}
+}
+
+func TestStreamTaskQueueDeadLetterReplayUsesAtomicMoveAndGuardsOperations(t *testing.T) {
+	payload, err := encodeTaskMessage(&TaskMessage{AccountID: 10, UserID: 20, TaskType: "signin", RetryCount: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := &fakeStreamQueueStore{
+		moveEntryMoved: true,
+		rangeMessages: []cache.StreamMessage{{
+			ID: "dead-1",
+			Values: map[string]interface{}{
+				streamDeadReasonField:       "upstream unavailable",
+				streamDeadFailedAtField:     "1700000000",
+				streamDeadOriginalDataField: payload,
+			},
+		}},
+	}
+	q := newStreamTaskQueueWithStore(store, StreamTaskQueueOptions{StreamKey: "stream", DeadLetterKey: "dead"})
+	items, err := q.ListDeadLetters(10)
+	if err != nil || len(items) != 1 || items[0].Task == nil || items[0].ID != "dead-1" {
+		t.Fatalf("ListDeadLetters() items=%+v err=%v", items, err)
+	}
+	replayed, err := q.ReplayDeadLetter("dead-1")
+	if err != nil || replayed.RetryCount != 0 || len(store.moveStreamCalls) != 1 {
+		t.Fatalf("ReplayDeadLetter() message=%+v calls=%d err=%v", replayed, len(store.moveStreamCalls), err)
+	}
+	if call := store.moveStreamCalls[0]; call.source != "dead" || call.destination != "stream" || call.maxLen != mainTaskStreamMaxLenApprox {
+		t.Fatalf("atomic replay call = %+v", call)
+	}
+
+	operationPayload, err := encodeTaskMessage(&TaskMessage{OperationID: "operation-1", UserID: 20})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.rangeMessages = []cache.StreamMessage{{ID: "dead-operation", Values: map[string]interface{}{streamDeadOriginalDataField: operationPayload}}}
+	if _, err := q.ReplayDeadLetter("dead-operation"); !errors.Is(err, ErrOperationDeadLetterReplay) {
+		t.Fatalf("operation replay error = %v, want ErrOperationDeadLetterReplay", err)
 	}
 }

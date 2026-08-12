@@ -78,7 +78,14 @@ func Run(ctx context.Context, args []string) error {
 	}
 	log.Println("数据库关键结构校验通过")
 
-	if *skipTaskConfigSync {
+	// validate-only is a read-only release gate.  Task definition sync performs
+	// upserts, therefore it must never run in this mode even when its separate
+	// flag keeps the default value.
+	if !shouldSyncTaskConfig(*validateOnly, *skipTaskConfigSync) {
+		if *validateOnly {
+			log.Println("validate-only 模式：已跳过所有任务配置写入")
+			return nil
+		}
 		log.Println("已跳过任务配置定义同步")
 		return nil
 	}
@@ -89,4 +96,8 @@ func Run(ctx context.Context, args []string) error {
 	}
 	log.Println("数据库迁移与任务配置同步完成")
 	return nil
+}
+
+func shouldSyncTaskConfig(validateOnly, skipRequested bool) bool {
+	return !validateOnly && !skipRequested
 }

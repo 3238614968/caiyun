@@ -135,8 +135,8 @@ const validatePassword = (_rule: unknown, value: string, callback: FormCallback)
     callback(new Error('请输入密码'))
     return
   }
-  if (value.length < 6) {
-    callback(new Error('密码长度不能少于6个字符'))
+  if (value.length < 8) {
+    callback(new Error('密码长度不能少于8个字符'))
     return
   }
   if (!/[a-zA-Z]/.test(value) || !/\d/.test(value)) {

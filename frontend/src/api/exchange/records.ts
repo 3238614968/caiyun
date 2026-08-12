@@ -6,7 +6,7 @@ import { normalizeExchangeRecord } from './normalizers'
 export function getExchangeRecords(params: GetExchangeRecordsParams): Promise<GetExchangeRecordsResponse> {
   const fallback: GetExchangeRecordsResponse = { records: [], total: 0, stats: { success: 0, failed: 0 } }
   return request<GetExchangeRecordsResponse | ApiResponse<GetExchangeRecordsResponse>>({
-    url: '/api/exchange/records',
+    url: '/api/v1/exchange/records',
     method: 'get',
     params
   }).then((res) => {
@@ -17,7 +17,7 @@ export function getExchangeRecords(params: GetExchangeRecordsParams): Promise<Ge
 
 export function exportExchangeRecords(params: ExportExchangeRecordsParams): Promise<Blob> {
   return request<Blob>({
-    url: '/api/exchange/records/export',
+    url: '/api/v1/exchange/records/export',
     method: 'get',
     params,
     responseType: 'blob'

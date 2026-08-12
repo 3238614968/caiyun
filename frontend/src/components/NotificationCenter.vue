@@ -165,7 +165,7 @@
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { Bell, CircleCheck, Warning, InfoFilled, Close } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
-import { wsClient, type WsMessage } from '../api/websocket'
+import { isOperationUpdatedMessage, wsClient, type WsMessage } from '../api/websocket'
 import { useAuthStore } from '../store/auth'
 
 interface Notification {
@@ -249,10 +249,14 @@ const viewAllNotifications = () => {
 }
 
 const appendNotification = (notification: Notification) => {
+  if (notifications.value.some((existing) => existing.id === notification.id)) {
+    return false
+  }
   notifications.value.unshift(sanitizeNotification(notification))
   if (notifications.value.length > 50) {
     notifications.value = notifications.value.slice(0, 50)
   }
+  return true
 }
 
 const handleExchangeNotification = (msg: WsMessage) => {
@@ -268,7 +272,7 @@ const handleExchangeNotification = (msg: WsMessage) => {
   const detail = completed ? message : `${accountName ? `${accountName} · ` : ''}${productName}：${message}`
   const safeDetail = maskPhoneNumbers(detail)
 
-  appendNotification({
+  const appended = appendNotification({
     id: `exchange_${msg.type}_${msg.message_id || Date.now()}_${data.task_id || ''}`,
     level,
     title,
@@ -277,8 +281,8 @@ const handleExchangeNotification = (msg: WsMessage) => {
     read: false
   })
 
-  if (level === 'warning') ElMessage.warning(safeDetail)
-  if (level === 'error') ElMessage.error(safeDetail)
+  if (appended && level === 'warning') ElMessage.warning(safeDetail)
+  if (appended && level === 'error') ElMessage.error(safeDetail)
 }
 
 const handleTaskSummary = (msg: WsMessage) => {
@@ -287,7 +291,7 @@ const handleTaskSummary = (msg: WsMessage) => {
   const gained = data.total_gained > 0 ? `，获得 ${data.total_gained} 云朵` : ''
 
   appendNotification({
-    id: `summary_${Date.now()}_${data.account_id}`,
+    id: `summary_${msg.message_id || `${data.account_id}_${msg.sequence || Date.now()}`}`,
     level: 'info',
     title: `任务汇总${phone}`,
     message: `共执行 ${data.task_count} 个任务${gained}，当前云朵: ${data.cloud_count}`,
@@ -295,6 +299,32 @@ const handleTaskSummary = (msg: WsMessage) => {
     read: false,
     account_id: data.account_id
   })
+}
+
+const handleOperationUpdate = (msg: WsMessage) => {
+  if (!isOperationUpdatedMessage(msg)) return
+  const { data } = msg
+  const operationID = data.operation_id
+  const status = data.status
+  const labels: Record<typeof status, { title: string; level: Notification['level']; message: string }> = {
+    queued: { title: '操作已加入队列', level: 'info', message: '操作正在等待执行' },
+    running: { title: '操作执行中', level: 'info', message: '操作已由 Worker 接管执行' },
+    succeeded: { title: '操作执行成功', level: 'success', message: '操作已完成' },
+    failed: { title: '操作执行失败', level: 'error', message: '操作执行失败，请稍后重试' },
+    canceled: { title: '操作已取消', level: 'warning', message: '排队中的操作已取消' }
+  }
+  const presentation = labels[status]
+  const detail = operationID ? `${presentation.message}（${operationID.slice(0, 8)}）` : presentation.message
+  const appended = appendNotification({
+    id: `operation_${msg.message_id || `${operationID}_${status}_${Date.now()}`}`,
+    level: presentation.level,
+    title: presentation.title,
+    message: detail,
+    timestamp: new Date().toISOString(),
+    read: false
+  })
+
+  if (appended && presentation.level === 'error') ElMessage.error(detail)
 }
 
 const loadNotifications = () => {
@@ -317,6 +347,7 @@ onMounted(() => {
   loadNotifications()
 
   wsClient.on('task_summary', handleTaskSummary)
+  wsClient.on('operation.updated', handleOperationUpdate)
   for (const type of ['exchange_result', 'exchange_complete', 'exchange_skipped', 'exchange_completed', 'monthly_exchange_complete']) {
     wsClient.on(type, handleExchangeNotification)
   }
@@ -324,6 +355,7 @@ onMounted(() => {
 
 onUnmounted(() => {
   wsClient.off('task_summary', handleTaskSummary)
+  wsClient.off('operation.updated', handleOperationUpdate)
   for (const type of ['exchange_result', 'exchange_complete', 'exchange_skipped', 'exchange_completed', 'monthly_exchange_complete']) {
     wsClient.off(type, handleExchangeNotification)
   }

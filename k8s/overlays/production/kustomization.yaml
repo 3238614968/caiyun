@@ -1,0 +1,31 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ../../
+  - ../../observability-otel-collector.yaml
+
+namespace: caiyun-production
+
+commonLabels:
+  app.kubernetes.io/part-of: caiyun
+  app.kubernetes.io/environment: production
+
+# Release automation replaces the image names and immutable digests before
+# applying this overlay. The source tree deliberately carries no registry or
+# environment credential.
+images:
+  - name: caiyun-backend
+    newName: registry.example.invalid/caiyun-backend
+    newTag: release-placeholder
+  - name: caiyun-frontend
+    newName: registry.example.invalid/caiyun-frontend
+    newTag: release-placeholder
+  - name: otel/opentelemetry-collector-contrib
+    newName: otel/opentelemetry-collector-contrib
+    newTag: 0.113.0
+
+patches:
+  - path: config.patch.yaml
+  - path: workloads.patch.yaml
+  - path: managed-data-services.patch.yaml

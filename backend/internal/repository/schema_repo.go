@@ -38,23 +38,36 @@ func (r *SchemaRepository) ValidateCriticalSchema() error {
 		"task_configs":     {"task_type", "task_name", "description", "is_enabled", "sort_order", "run_in_batch", "updated_at", "deleted_at"},
 		"accounts":         {"is_active", "jwt_error_count"},
 		"products":         {"prize_id", "prize_name", "image_url", "stock_status", "is_active", "is_deleted"},
-		"exchange_rules":   {"exchange_time_1", "exchange_time_2", "is_active"},
-		"exchange_tasks":   {"source_operation_id", "exchange_rule_id", "task_type", "status", "scheduled_exchange_time", "restock_cycle", "restock_weekday", "restock_day_of_month", "restock_times", "custom_cron", "calendar_policy", "holiday_dates", "workday_dates", "skip_reason", "priority", "task_group", "timeout_seconds", "max_retries", "retry_count", "last_retry_at", "last_result", "success_count", "fail_count", "active_dedupe_key", "deleted_at"},
+		"exchange_rules":   {"exchange_time_1", "exchange_time_2", "is_active", "active_account_id"},
+		"exchange_tasks":   {"source_operation_id", "exchange_rule_id", "task_type", "status", "scheduled_exchange_time", "restock_cycle", "restock_weekday", "restock_day_of_month", "restock_times", "custom_cron", "calendar_policy", "holiday_dates", "workday_dates", "skip_reason", "priority", "task_group", "timeout_seconds", "max_retries", "retry_count", "last_retry_at", "last_result", "success_count", "fail_count", "active_dedupe_key", "execution_token", "deleted_at"},
 		"exchange_records": {"exchange_rule_id"},
+		"task_logs_archive": {
+			"id", "user_id", "account_id", "task_type", "status", "message", "cloud_gained", "execution_time", "created_at", "deleted_at",
+		},
+		"exchange_records_archive": {
+			"id", "user_id", "exchange_account_id", "exchange_rule_id", "exchange_task_id", "product_id", "prize_id", "prize_name", "status", "message", "execution_time_ms", "created_at",
+		},
 		"calendar_dates":   {"date", "day_type", "name", "source"},
 		"audit_logs":       {"request_id"},
-		"operations":       {"id", "user_id", "operation_type", "status", "account_id", "resource_id", "payload", "idempotency_key", "attempt_count", "error_summary", "queued_at", "started_at", "completed_at", "created_at", "updated_at"},
+		"operations":       {"id", "user_id", "operation_type", "status", "account_id", "resource_id", "payload", "idempotency_key", "attempt_count", "execution_token", "error_summary", "queued_at", "started_at", "completed_at", "created_at", "updated_at"},
 		"refresh_sessions": {"id", "user_id", "refresh_token_hash", "token_version", "device_info", "expires_at", "revoked_at", "replaced_by_session_id", "last_used_at", "created_at", "updated_at"},
 		"web_socket_messages": {
 			"id", "user_id", "message_id", "sequence", "type", "data", "is_read", "is_delivered",
 			"created_at", "expires_at", "read_at", "delivered_at", "acked_at",
 		},
+		"web_socket_sequences": {"user_id", "sequence", "updated_at"},
 	}
 
 	for table, requiredCols := range checks {
 		if err := r.validateColumns(table, requiredCols); err != nil {
 			return err
 		}
+	}
+	if err := r.validateUniqueIndex("cloud_stats", "uk_cloud_stats_account_date", []string{"account_id", "date"}); err != nil {
+		return err
+	}
+	if err := r.validateUniqueIndex("exchange_rules", "uk_exchange_rules_active_account", []string{"active_account_id"}); err != nil {
+		return err
 	}
 
 	return nil
@@ -67,7 +80,7 @@ func (r *SchemaRepository) EnsureUserSessionSchema() error {
 		return err
 	}
 	if !exists {
-		return fmt.Errorf("缺少 users 表，请先执行 backend/migrations/init.sql")
+		return fmt.Errorf("缺少 users 表，请先执行 caiyun migrate")
 	}
 	return nil
 }
@@ -79,7 +92,7 @@ func (r *SchemaRepository) EnsureTaskConfigSchema() error {
 		return err
 	}
 	if !exists {
-		return fmt.Errorf("缺少 task_configs 表，请先执行 backend/migrations/init.sql")
+		return fmt.Errorf("缺少 task_configs 表，请先执行 caiyun migrate")
 	}
 	return nil
 }
@@ -101,7 +114,7 @@ func (r *SchemaRepository) validateColumns(table string, requiredCols []string) 
 	}
 
 	sort.Strings(missing)
-	return fmt.Errorf("表 %s 缺少字段: %s，请执行 backend/migrations/init.sql 或 backend/migrations/00x_*.sql 补齐迁移", table, strings.Join(missing, ", "))
+	return fmt.Errorf("表 %s 缺少字段: %s，请执行 caiyun migrate 补齐版本化迁移", table, strings.Join(missing, ", "))
 }
 
 func (r *SchemaRepository) tableExists(table string) (bool, error) {
@@ -120,7 +133,7 @@ func (r *SchemaRepository) getColumnSet(table string) (map[string]bool, error) {
 		return nil, err
 	}
 	if !exists {
-		return nil, fmt.Errorf("缺少数据表 %s，请先执行 backend/migrations/init.sql", table)
+		return nil, fmt.Errorf("缺少数据表 %s，请先执行 caiyun migrate", table)
 	}
 
 	var rows []struct {
@@ -139,4 +152,28 @@ func (r *SchemaRepository) getColumnSet(table string) (map[string]bool, error) {
 		columns[row.ColumnName] = true
 	}
 	return columns, nil
+}
+
+func (r *SchemaRepository) validateUniqueIndex(table, index string, expectedColumns []string) error {
+	var rows []struct {
+		ColumnName string `gorm:"column:COLUMN_NAME"`
+		NonUnique  int    `gorm:"column:NON_UNIQUE"`
+	}
+	if err := r.db.Raw(`
+		SELECT COLUMN_NAME, NON_UNIQUE
+		FROM information_schema.statistics
+		WHERE table_schema = DATABASE() AND table_name = ? AND index_name = ?
+		ORDER BY SEQ_IN_INDEX ASC
+	`, table, index).Scan(&rows).Error; err != nil {
+		return err
+	}
+	if len(rows) != len(expectedColumns) {
+		return fmt.Errorf("表 %s 缺少唯一索引 %s，请执行 caiyun migrate", table, index)
+	}
+	for i, row := range rows {
+		if row.NonUnique != 0 || row.ColumnName != expectedColumns[i] {
+			return fmt.Errorf("表 %s 的索引 %s 不符合预期，请执行 caiyun migrate", table, index)
+		}
+	}
+	return nil
 }

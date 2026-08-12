@@ -7,8 +7,8 @@ EMBEDDED_MIGRATIONS_DIR="$ROOT/backend/internal/dbmigrate/sql"
 
 mapfile -t versioned_migrations < <(cd "$MIGRATIONS_DIR" && find . -maxdepth 1 -type f -name '[0-9][0-9][0-9]_*.sql' -printf '%f\n' | sort)
 mapfile -t embedded_migrations < <(cd "$EMBEDDED_MIGRATIONS_DIR" && find . -maxdepth 1 -type f -name '[0-9][0-9][0-9]_*.sql' -printf '%f\n' | sort)
-[[ "${#versioned_migrations[@]}" -eq 14 ]] || { echo "Expected exactly 14 versioned migrations (001-014), found ${#versioned_migrations[@]}" >&2; exit 1; }
-[[ "${versioned_migrations[0]}" == "001_init.sql" && "${versioned_migrations[13]}" == "014_exchange_task_operation_id.sql" ]] || { echo "Migration range must be exactly 001_init.sql through 014_exchange_task_operation_id.sql" >&2; exit 1; }
+[[ "${#versioned_migrations[@]}" -gt 0 ]] || { echo "No versioned migrations found" >&2; exit 1; }
+[[ "${versioned_migrations[0]}" == "001_init.sql" ]] || { echo "Migration sequence must begin with 001_init.sql" >&2; exit 1; }
 [[ "${versioned_migrations[*]}" == "${embedded_migrations[*]}" ]] || { echo "External and embedded migration file sets differ" >&2; exit 1; }
 
 previous_number=0
@@ -41,14 +41,14 @@ if grep -R -n -E 'CREATE TABLE.*schema_migrations|INSERT INTO.*schema_migrations
 fi
 
 grep -q "func ensureSchemaMigrations" "$ROOT/backend/internal/dbmigrate/runner.go"
-grep -q "restock_times" "$MIGRATIONS_DIR/init.sql"
-grep -q "custom_cron" "$MIGRATIONS_DIR/init.sql"
-grep -q "calendar_policy" "$MIGRATIONS_DIR/init.sql"
-grep -q "skip_reason" "$MIGRATIONS_DIR/init.sql"
+grep -q "restock_times" "$MIGRATIONS_DIR/001_init.sql"
+grep -q "custom_cron" "$MIGRATIONS_DIR/001_init.sql"
+grep -q "calendar_policy" "$MIGRATIONS_DIR/001_init.sql"
+grep -q "skip_reason" "$MIGRATIONS_DIR/001_init.sql"
 grep -q "active_dedupe_key" "$MIGRATIONS_DIR/008_exchange_task_idempotency.sql"
 
-cmp -s "$MIGRATIONS_DIR/init.sql" "$MIGRATIONS_DIR/001_init.sql" || {
-  echo "migrations/init.sql must remain identical to 001_init.sql" >&2
+[[ ! -e "$MIGRATIONS_DIR/init.sql" ]] || {
+  echo "Non-versioned migrations/init.sql is forbidden; use 001_init.sql" >&2
   exit 1
 }
 for token in account_id resource_id idempotency_key attempt_count queued_at completed_at; do
@@ -65,6 +65,16 @@ for token in message_id sequence expires_at acked_at uidx_ws_message_id idx_ws_u
 done
 for token in source_operation_id uk_exchange_tasks_source_operation; do
   grep -q "$token" "$MIGRATIONS_DIR/014_exchange_task_operation_id.sql"
+done
+grep -q "exchange_records" "$MIGRATIONS_DIR/017_exchange_record_rule_fk.sql"
+for token in operations exchange_tasks execution_token AddColumnIfMissing; do
+  grep -q "$token" "$MIGRATIONS_DIR/018_execution_fencing_tokens.sql"
+done
+for token in web_socket_sequences 'MAX(`sequence`)' 'ON DUPLICATE KEY UPDATE'; do
+  grep -q "$token" "$MIGRATIONS_DIR/019_websocket_sequence_allocator.sql"
+done
+for token in 'DELETE older' uk_cloud_stats_account_date CreateUniqueIndexIfMissing; do
+  grep -q "$token" "$MIGRATIONS_DIR/020_cloud_stats_account_date_unique.sql"
 done
 
 echo "migration smoke test passed (${#versioned_migrations[@]} versioned migrations checked)"

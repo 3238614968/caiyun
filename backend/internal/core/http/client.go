@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math/rand"
@@ -17,13 +18,125 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 )
 
 const (
-	defaultMaxRetries   = 3
-	defaultRetryDelay   = time.Second
-	retryDrainBodyLimit = 64 << 10
+	defaultMaxRetries              = 3
+	defaultRetryDelay              = time.Second
+	retryDrainBodyLimit            = 64 << 10
+	defaultCircuitFailureThreshold = 10
+	defaultCircuitOpenTimeout      = 30 * time.Second
+	defaultCircuitHalfOpenRequests = 5
 )
+
+// ErrUpstreamCircuitOpen indicates that the upstream protection circuit is
+// open. Callers can surface a retryable operation failure without issuing more
+// traffic to a known-unhealthy upstream.
+var ErrUpstreamCircuitOpen = errors.New("upstream circuit is open")
+
+// CircuitBreakerConfig controls the per-client upstream circuit breaker.
+type CircuitBreakerConfig struct {
+	FailureThreshold int
+	OpenTimeout      time.Duration
+	HalfOpenRequests int
+}
+
+func defaultCircuitBreakerConfig() CircuitBreakerConfig {
+	return CircuitBreakerConfig{
+		FailureThreshold: defaultCircuitFailureThreshold,
+		OpenTimeout:      defaultCircuitOpenTimeout,
+		HalfOpenRequests: defaultCircuitHalfOpenRequests,
+	}
+}
+
+func normalizeCircuitBreakerConfig(config CircuitBreakerConfig) CircuitBreakerConfig {
+	defaults := defaultCircuitBreakerConfig()
+	if config.FailureThreshold <= 0 {
+		config.FailureThreshold = defaults.FailureThreshold
+	}
+	if config.OpenTimeout <= 0 {
+		config.OpenTimeout = defaults.OpenTimeout
+	}
+	if config.HalfOpenRequests <= 0 {
+		config.HalfOpenRequests = defaults.HalfOpenRequests
+	}
+	return config
+}
+
+// circuitBreaker is deliberately small and dependency-free. It tracks complete
+// logical requests, so a retry sequence counts at most one upstream failure.
+type circuitBreaker struct {
+	mu               sync.Mutex
+	config           CircuitBreakerConfig
+	consecutiveFails int
+	openUntil        time.Time
+	halfOpenInFlight int
+}
+
+func newCircuitBreaker(config CircuitBreakerConfig) *circuitBreaker {
+	return &circuitBreaker{config: normalizeCircuitBreakerConfig(config)}
+}
+
+func (b *circuitBreaker) allow(now time.Time) error {
+	if b == nil {
+		return nil
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.openUntil.IsZero() {
+		return nil
+	}
+	if now.Before(b.openUntil) {
+		return ErrUpstreamCircuitOpen
+	}
+	if b.halfOpenInFlight >= b.config.HalfOpenRequests {
+		return ErrUpstreamCircuitOpen
+	}
+	b.halfOpenInFlight++
+	return nil
+}
+
+func (b *circuitBreaker) recordSuccess() {
+	if b == nil {
+		return
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.consecutiveFails = 0
+	b.openUntil = time.Time{}
+	b.halfOpenInFlight = 0
+}
+
+func (b *circuitBreaker) recordFailure(now time.Time) {
+	if b == nil {
+		return
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if !b.openUntil.IsZero() {
+		b.openUntil = now.Add(b.config.OpenTimeout)
+		b.halfOpenInFlight = 0
+		return
+	}
+	b.consecutiveFails++
+	if b.consecutiveFails >= b.config.FailureThreshold {
+		b.openUntil = now.Add(b.config.OpenTimeout)
+		b.halfOpenInFlight = 0
+	}
+}
+
+// ClientOption configures a Client without expanding global mutable state.
+type ClientOption func(*Client)
+
+// WithCircuitBreakerConfig configures upstream fault protection. It is useful
+// for tests and for deployments that need a stricter recovery budget.
+func WithCircuitBreakerConfig(config CircuitBreakerConfig) ClientOption {
+	return func(client *Client) {
+		client.breaker = newCircuitBreaker(config)
+	}
+}
 
 // RequestOption controls opt-in retry behavior for a single request.
 // Safe methods (GET, HEAD and OPTIONS) retry by default; all other methods
@@ -67,20 +180,22 @@ type Client struct {
 	netType    string
 	channelSrc string
 	cookieJar  *cookiejar.Jar
+	breaker    *circuitBreaker
 }
 
 // NewClient 创建 HTTP 客户端
-func NewClient() *Client {
+func NewClient(options ...ClientOption) *Client {
 	jar, _ := cookiejar.New(nil)
 
 	// 使用新版 Android 客户端信息（与最新版移动云盘脚本一致）
 	androidClientInfo := "6|127.0.0.1|1|12.5.4|realme|RMX5060|BCFF2BBA6881DD8E4971803C63DDB5E4|02-00-00-00-00-00|android 15|1264X2592|zh||||032|0|"
 	deviceID := "BCFF2BBA6881DD8E4971803C63DDB5E4"
 
-	return &Client{
+	client := &Client{
 		client: &http.Client{
-			Timeout: 30 * time.Second,
-			Jar:     jar,
+			Timeout:   30 * time.Second,
+			Jar:       jar,
+			Transport: otelhttp.NewTransport(http.DefaultTransport),
 		},
 		maxRetries: defaultMaxRetries,
 		retryDelay: defaultRetryDelay,
@@ -91,7 +206,14 @@ func NewClient() *Client {
 		netType:    "1",
 		channelSrc: "10000023",
 		cookieJar:  jar,
+		breaker:    newCircuitBreaker(defaultCircuitBreakerConfig()),
 	}
+	for _, option := range options {
+		if option != nil {
+			option(client)
+		}
+	}
+	return client
 }
 
 // SetAuth 设置认证信息（只存储base64部分，不包含"Basic "前缀）
@@ -361,6 +483,9 @@ func (c *Client) RequestWithContextOptions(ctx context.Context, method, reqURL s
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	if err := c.breaker.allow(time.Now()); err != nil {
+		return nil, fmt.Errorf("upstream request rejected: %w", err)
+	}
 
 	requestOptions := requestOptions{}
 	for _, apply := range optionFns {
@@ -459,12 +584,17 @@ func (c *Client) RequestWithContextOptions(ctx context.Context, method, reqURL s
 			continue
 		}
 
-		// 成功或 4xx 响应均立即返回。
+		// 成功或 4xx 响应均立即返回，并关闭/复位断路器。
+		c.breaker.recordSuccess()
 		return resp, nil
 	}
 
 	if lastResp != nil {
+		c.breaker.recordFailure(time.Now())
 		return lastResp, nil
+	}
+	if lastErr != nil {
+		c.breaker.recordFailure(time.Now())
 	}
 	return nil, lastErr
 }

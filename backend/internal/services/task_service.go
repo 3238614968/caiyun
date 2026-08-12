@@ -34,6 +34,7 @@ type TaskService struct {
 	authMgr        *auth.Auth
 	taskConfigRepo *repository.TaskConfigRepository
 	tokenMgr       *TokenManager
+	eventHub       *ws.Hub
 }
 
 func NewTaskService(
@@ -60,6 +61,13 @@ func NewTaskService(
 // SetTokenManager 设置 TokenManager
 func (s *TaskService) SetTokenManager(tokenMgr *TokenManager) {
 	s.tokenMgr = tokenMgr
+}
+
+// SetEventHub attaches the Hub owned by API or Worker assembly.
+func (s *TaskService) SetEventHub(eventHub *ws.Hub) {
+	if s != nil {
+		s.eventHub = eventHub
+	}
 }
 
 // TaskRunner 任务运行器
@@ -182,7 +190,7 @@ func buildTaskRunner(svc *TaskService, account *models.Account, storage tasks.St
 			account.IsActive = false
 			lg.Error(fmt.Sprintf("账号 %s JWT获取失败超过3次，已自动禁用", utils.MaskPhone(account.Phone)))
 			// 发送WebSocket通知
-			if wsHub := ws.GetHub(); wsHub != nil {
+			if wsHub := svc.eventHub; wsHub != nil {
 				wsHub.SendToUser(account.UserID, ws.Message{
 					Type: "account_disabled",
 					Data: map[string]interface{}{

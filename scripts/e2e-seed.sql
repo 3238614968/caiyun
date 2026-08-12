@@ -12,7 +12,7 @@ ON DUPLICATE KEY UPDATE
   updated_at = NOW();
 
 INSERT INTO accounts (id, user_id, phone, auth, token, jwt_token, platform, expire_at, cloud_count, remark, is_active, created_at, updated_at, deleted_at) VALUES
-  (900001, 900001, '13900009001', 'enc:v1:AAECAwQFBgcICQoLSNfeUbhtpsSFrB3fEqq5a4psZvXWKs51lsxJOkmdYso1RQbC', 'enc:v1:EBESExQVFhcYGRobSD4TfnPzD4OtTk8yQeJ1a/9XZPsM/OvZudNoIm2ae0AcOI7C+Q', 'enc:v1:ICEiIyQlJicoKSory1viOrJgRpSEklu7Dk50eU9nxtfSPS++FWQY6Zr0r38IxhE', 'pc', 4102415999000, 6666, 'E2E 主账号', TRUE, NOW(), NOW(), NULL)
+  (900001, 900001, '13900009001', 'enc:v1:AAECAwQFBgcICQoLSNfeUbhtpsSFrB3fEqq5a4psZvVjavutQYWWvHOUR+6zwNwB', 'enc:v1:EBESExQVFhcYGRobSD4TfnPzD4OtTk8yQeJ1a/9XZPsMSavsYQQh/eugcmU4vgsYOg', 'enc:v1:ICEiIyQlJicoKSory1viOrJgRpSEklu7Dk50eU9nxmKSCPdpXLue05PRi/mNHNI', 'pc', 4102415999000, 6666, 'E2E 主账号', TRUE, NOW(), NOW(), NULL)
 ON DUPLICATE KEY UPDATE
   auth = VALUES(auth),
   token = VALUES(token),
@@ -68,4 +68,16 @@ ON DUPLICATE KEY UPDATE
   is_top = VALUES(is_top),
   is_published = VALUES(is_published),
   updated_at = NOW();
+
+-- SSE replay fixture: the E2E check connects with Last-Event-ID=41 and must
+-- receive this persisted sequence-42 message through the frontend proxy.
+INSERT INTO web_socket_messages (user_id, message_id, sequence, type, data, is_read, is_delivered, created_at, expires_at) VALUES
+  (900001, 'e2e-sse-42', 42, 'operation.updated', '{"operation_id":"e2e-seed","status":"succeeded"}', FALSE, FALSE, NOW(), NULL)
+ON DUPLICATE KEY UPDATE
+  sequence = VALUES(sequence),
+  type = VALUES(type),
+  data = VALUES(data),
+  is_delivered = FALSE,
+  delivered_at = NULL,
+  expires_at = NULL;
 

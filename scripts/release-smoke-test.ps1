@@ -81,6 +81,7 @@ $frontendArchive = Resolve-ReleaseArtifactName -Prefix 'caiyun-frontend' -Suffix
 $migrationsArchive = Resolve-ReleaseArtifactName -Prefix 'caiyun-migrations' -Suffix '.tar.gz'
 $monitoringArchive = Resolve-ReleaseArtifactName -Prefix 'caiyun-monitoring' -Suffix '.tar.gz'
 $calendarArchive = Resolve-ReleaseArtifactName -Prefix 'caiyun-calendar' -Suffix '.tar.gz'
+$k8sArchive = Resolve-ReleaseArtifactName -Prefix 'caiyun-k8s' -Suffix '.tar.gz'
 $sbomFile = Resolve-ReleaseArtifactName -Prefix 'caiyun-sbom' -Suffix '.json'
 
 $expectedFiles = @(
@@ -89,6 +90,7 @@ $expectedFiles = @(
     $migrationsArchive,
     $monitoringArchive,
     $calendarArchive,
+    $k8sArchive,
     $sbomFile,
     'deploy-linux.sh',
     'rollback-linux.sh',
@@ -96,6 +98,15 @@ $expectedFiles = @(
     'import-calendar.sh',
     'archive-history.sh',
     'rotate-encryption.sh',
+    'collect-slo-snapshot.sh',
+    'append-quarterly-slo-report.py',
+    'deploy-k8s.sh',
+    'verify-compose-runtime.sh',
+    'verify-k8s-runtime.sh',
+    'verify-otel-runtime.sh',
+    'verify-legacy-list-drain.sh',
+    'chaos-drill.sh',
+    'capacity-drill.sh',
     'nginx-server.conf',
     'SHA256SUMS'
 )
@@ -125,8 +136,13 @@ Assert-True (($monitoringEntries | Where-Object { $_ -like 'monitoring/*' }).Cou
 $calendarEntries = Get-TarEntries (Join-Path $ReleaseDir $calendarArchive)
 Assert-True (($calendarEntries | Where-Object { $_ -like 'calendar/*' }).Count -gt 0) 'calendar archive missing calendar/*'
 
+$k8sEntries = Get-TarEntries (Join-Path $ReleaseDir $k8sArchive)
+Assert-True ($k8sEntries -contains 'k8s/overlays/production/kustomization.yaml') 'Kubernetes archive missing production overlay'
+Assert-True ($k8sEntries -contains 'k8s/overlays/production/managed-data-services.patch.yaml') 'Kubernetes archive missing managed-data overlay'
+Assert-True ($k8sEntries -contains 'k8s/observability-otel-collector.yaml') 'Kubernetes archive missing OTel Collector manifest'
+
 $sbomRaw = Get-Content -LiteralPath (Join-Path $ReleaseDir $sbomFile) -Raw | ConvertFrom-Json
 Assert-True ($sbomRaw.bomFormat -eq 'CycloneDX') 'SBOM bomFormat must be CycloneDX'
-Assert-True ($sbomRaw.components.Count -ge 12) 'SBOM components unexpectedly small'
+Assert-True ($sbomRaw.components.Count -ge 17) 'SBOM components unexpectedly small'
 
 Write-Host "release smoke test passed: $ReleaseDir"

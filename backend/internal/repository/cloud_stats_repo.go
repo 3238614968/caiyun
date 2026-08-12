@@ -3,9 +3,11 @@ package repository
 import (
 	"caiyun/internal/models"
 	"context"
+	"fmt"
 	"time"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 type CloudStatsRepository struct {
@@ -25,6 +27,26 @@ func normalizeCloudStatsPage(offset, limit int) (int, int) {
 		limit = defaultCloudStatsPageLimit
 	}
 	return offset, limit
+}
+
+// normalizeCloudStatsDate keeps the API contract for DATE columns stable when
+// the SQL driver returns an RFC3339 value (as SQLite does for GORM's date type).
+func normalizeCloudStatsDate(stats *models.CloudStats) {
+	if stats == nil || len(stats.Date) == len("2006-01-02") {
+		return
+	}
+	for _, layout := range []string{time.RFC3339Nano, time.RFC3339, "2006-01-02 15:04:05"} {
+		if date, err := time.Parse(layout, stats.Date); err == nil {
+			stats.Date = date.Format("2006-01-02")
+			return
+		}
+	}
+}
+
+func normalizeCloudStatsDates(stats []*models.CloudStats) {
+	for _, stat := range stats {
+		normalizeCloudStatsDate(stat)
+	}
 }
 
 func NewCloudStatsRepository(db *gorm.DB) *CloudStatsRepository {
@@ -51,6 +73,7 @@ func (r *CloudStatsRepository) FindByID(id uint) (*models.CloudStats, error) {
 	if err != nil {
 		return nil, err
 	}
+	normalizeCloudStatsDate(&stats)
 	return &stats, nil
 }
 
@@ -65,6 +88,7 @@ func (r *CloudStatsRepository) FindByUserID(userID uint, offset, limit int) ([]*
 	}
 
 	err := query.Preload("Account").Order("date DESC").Offset(offset).Limit(limit).Find(&stats).Error
+	normalizeCloudStatsDates(stats)
 	return stats, total, err
 }
 
@@ -79,6 +103,7 @@ func (r *CloudStatsRepository) FindByAccountID(accountID uint, offset, limit int
 	}
 
 	err := query.Order("date DESC").Offset(offset).Limit(limit).Find(&stats).Error
+	normalizeCloudStatsDates(stats)
 	return stats, total, err
 }
 
@@ -86,6 +111,7 @@ func (r *CloudStatsRepository) FindByAccountID(accountID uint, offset, limit int
 func (r *CloudStatsRepository) FindByDate(date string) ([]*models.CloudStats, error) {
 	var stats []*models.CloudStats
 	err := r.db.Preload("Account").Where("date = ?", date).Find(&stats).Error
+	normalizeCloudStatsDates(stats)
 	return stats, err
 }
 
@@ -93,6 +119,7 @@ func (r *CloudStatsRepository) FindByDate(date string) ([]*models.CloudStats, er
 func (r *CloudStatsRepository) FindByUserIDAndDate(userID uint, date string) ([]*models.CloudStats, error) {
 	var stats []*models.CloudStats
 	err := r.db.Preload("Account").Where("user_id = ? AND date = ?", userID, date).Find(&stats).Error
+	normalizeCloudStatsDates(stats)
 	return stats, err
 }
 
@@ -103,6 +130,7 @@ func (r *CloudStatsRepository) FindByAccountIDAndDate(accountID uint, date strin
 	if err != nil {
 		return nil, err
 	}
+	normalizeCloudStatsDate(&stats)
 	return &stats, nil
 }
 
@@ -117,6 +145,7 @@ func (r *CloudStatsRepository) FindByDateRange(startDate, endDate string, offset
 		return nil, 0, err
 	}
 	err := query.Preload("Account").Order("date DESC").Offset(offset).Limit(limit).Find(&stats).Error
+	normalizeCloudStatsDates(stats)
 	return stats, total, err
 }
 
@@ -124,6 +153,7 @@ func (r *CloudStatsRepository) FindByDateRange(startDate, endDate string, offset
 func (r *CloudStatsRepository) FindByDateRangeAll(startDate, endDate string) ([]*models.CloudStats, error) {
 	var stats []*models.CloudStats
 	err := r.db.Preload("Account").Where("date BETWEEN ? AND ?", startDate, endDate).Order("date DESC").Find(&stats).Error
+	normalizeCloudStatsDates(stats)
 	return stats, err
 }
 
@@ -139,6 +169,7 @@ func (r *CloudStatsRepository) FindByUserIDAndDateRange(userID uint, startDate, 
 	}
 
 	err := query.Preload("Account").Order("date DESC").Offset(offset).Limit(limit).Find(&stats).Error
+	normalizeCloudStatsDates(stats)
 	return stats, total, err
 }
 
@@ -154,54 +185,53 @@ func (r *CloudStatsRepository) Delete(id uint) error {
 
 // UpsertByAccountIDAndDate 插入或更新账号某日的统计数据
 func (r *CloudStatsRepository) UpsertByAccountIDAndDate(stats *models.CloudStats) error {
-	var existing models.CloudStats
-	err := r.db.Where("account_id = ? AND date = ?", stats.AccountID, stats.Date).First(&existing).Error
-
-	if err == nil {
-		// 记录存在，更新
-		stats.ID = existing.ID
-		return r.db.Save(stats).Error
+	if stats == nil {
+		return fmt.Errorf("cloud stats is nil")
 	}
-
-	if err == gorm.ErrRecordNotFound {
-		// 记录不存在，创建
-		return r.db.Create(stats).Error
-	}
-
-	return err
+	normalizeCloudStatsDate(stats)
+	return r.db.Clauses(clause.OnConflict{
+		Columns: []clause.Column{{Name: "account_id"}, {Name: "date"}},
+		DoUpdates: clause.AssignmentColumns([]string{
+			"user_id", "cloud_count", "cloud_diff", "cloud_diff_week", "updated_at", "deleted_at",
+		}),
+	}).Create(stats).Error
 }
 
 // GetTodayStatsByUserID 获取用户今日的所有统计记录
 func (r *CloudStatsRepository) GetTodayStatsByUserID(userID uint) ([]*models.CloudStats, error) {
-	today := time.Now().In(cstZone).Format("2006-01-02")
+	today := nowCST().Format("2006-01-02")
 	var stats []*models.CloudStats
 	err := r.db.Preload("Account").Where("user_id = ? AND date = ?", userID, today).Find(&stats).Error
+	normalizeCloudStatsDates(stats)
 	return stats, err
 }
 
 // GetYesterdayStatsByUserID 获取用户昨日的统计记录
 func (r *CloudStatsRepository) GetYesterdayStatsByUserID(userID uint) ([]*models.CloudStats, error) {
-	yesterday := time.Now().In(cstZone).AddDate(0, 0, -1).Format("2006-01-02")
+	yesterday := nowCST().AddDate(0, 0, -1).Format("2006-01-02")
 	var stats []*models.CloudStats
 	err := r.db.Preload("Account").Where("user_id = ? AND date = ?", userID, yesterday).Find(&stats).Error
+	normalizeCloudStatsDates(stats)
 	return stats, err
 }
 
 // GetLastWeekStatsByUserID 获取用户上周同期的统计记录
 func (r *CloudStatsRepository) GetLastWeekStatsByUserID(userID uint) ([]*models.CloudStats, error) {
-	lastWeek := time.Now().In(cstZone).AddDate(0, 0, -7).Format("2006-01-02")
+	lastWeek := nowCST().AddDate(0, 0, -7).Format("2006-01-02")
 	var stats []*models.CloudStats
 	err := r.db.Preload("Account").Where("user_id = ? AND date = ?", userID, lastWeek).Find(&stats).Error
+	normalizeCloudStatsDates(stats)
 	return stats, err
 }
 
 // GetTotalCloudCountByUserID 获取用户所有账号的总云朵数（最近一天）
 func (r *CloudStatsRepository) GetTotalCloudCountByUserID(userID uint) (int, error) {
 	var total int
+	latestDate := r.db.Model(&models.CloudStats{}).
+		Select("MAX(date)").
+		Where("user_id = ?", userID)
 	err := r.db.Model(&models.CloudStats{}).
-		Where("user_id = ?", userID).
-		Order("date DESC").
-		Limit(1).
+		Where("user_id = ? AND date = (?)", userID, latestDate).
 		Select("COALESCE(SUM(cloud_count), 0)").
 		Scan(&total).Error
 	return total, err
@@ -210,32 +240,37 @@ func (r *CloudStatsRepository) GetTotalCloudCountByUserID(userID uint) (int, err
 // GetTrendDataByUserID 获取用户最近N天的趋势数据
 func (r *CloudStatsRepository) GetTrendDataByUserID(userID uint, days int) ([]*models.CloudStats, error) {
 	var stats []*models.CloudStats
-	now := time.Now().In(cstZone)
+	now := nowCST()
 	endDate := now.Format("2006-01-02")
 	startDate := now.AddDate(0, 0, -days+1).Format("2006-01-02")
 
 	err := r.db.Model(&models.CloudStats{}).
 		Where("user_id = ? AND date BETWEEN ? AND ?", userID, startDate, endDate).
 		Group("date").
-		Select("date, SUM(cloud_count) as cloud_count, 0 as cloud_diff, 0 as cloud_diff_week, created_at, updated_at").
+		// Trend points intentionally contain only grouped/aggregated fields.
+		// Timestamps from individual account snapshots are not meaningful here
+		// and selecting them violates MySQL ONLY_FULL_GROUP_BY.
+		Select("date, SUM(cloud_count) as cloud_count, 0 as cloud_diff, 0 as cloud_diff_week").
 		Order("date ASC").
 		Find(&stats).Error
+	normalizeCloudStatsDates(stats)
 	return stats, err
 }
 
 // GetTrendDataGlobal 获取全局最近N天的趋势数据
 func (r *CloudStatsRepository) GetTrendDataGlobal(days int) ([]*models.CloudStats, error) {
 	var stats []*models.CloudStats
-	now := time.Now().In(cstZone)
+	now := nowCST()
 	endDate := now.Format("2006-01-02")
 	startDate := now.AddDate(0, 0, -days+1).Format("2006-01-02")
 
 	err := r.db.Model(&models.CloudStats{}).
 		Where("date BETWEEN ? AND ?", startDate, endDate).
 		Group("date").
-		Select("date, SUM(cloud_count) as cloud_count, 0 as cloud_diff, 0 as cloud_diff_week, created_at, updated_at").
+		Select("date, SUM(cloud_count) as cloud_count, 0 as cloud_diff, 0 as cloud_diff_week").
 		Order("date ASC").
 		Find(&stats).Error
+	normalizeCloudStatsDates(stats)
 	return stats, err
 }
 
@@ -244,7 +279,7 @@ func (r *CloudStatsRepository) GetDashboardStats(userID uint) (map[string]interf
 	result := make(map[string]interface{})
 
 	// 获取今日统计数据
-	today := time.Now().Format("2006-01-02")
+	today := nowCST().Format("2006-01-02")
 	var todayStats []*models.CloudStats
 	err := r.db.Where("user_id = ? AND date = ?", userID, today).Find(&todayStats).Error
 	if err != nil {
@@ -309,10 +344,11 @@ func (r *CloudStatsRepository) GetDashboardStats(userID uint) (map[string]interf
 // CalculateDailyDiff 计算对比昨日的变化
 func (r *CloudStatsRepository) CalculateDailyDiff(userID uint) error {
 	// 获取昨日的数据
-	yesterdayDate := time.Now().AddDate(0, 0, -1).Format("2006-01-02")
+	now := nowCST()
+	yesterdayDate := now.AddDate(0, 0, -1).Format("2006-01-02")
 	yesterdayStats, err := r.FindByUserIDAndDate(userID, yesterdayDate)
 	if err != nil {
-		return nil
+		return fmt.Errorf("load yesterday cloud stats: %w", err)
 	}
 
 	// 创建昨日的云朵数量映射
@@ -322,10 +358,10 @@ func (r *CloudStatsRepository) CalculateDailyDiff(userID uint) error {
 	}
 
 	// 获取今日的数据
-	todayDate := time.Now().Format("2006-01-02")
+	todayDate := now.Format("2006-01-02")
 	todayStats, err := r.FindByUserIDAndDate(userID, todayDate)
 	if err != nil {
-		return nil
+		return fmt.Errorf("load today cloud stats: %w", err)
 	}
 
 	// 更新今日数据的差异
@@ -333,7 +369,9 @@ func (r *CloudStatsRepository) CalculateDailyDiff(userID uint) error {
 		if yesterdayCount, ok := yesterdayMap[stat.AccountID]; ok {
 			stat.CloudDiff = stat.CloudCount - yesterdayCount
 		}
-		r.db.Save(stat)
+		if err := r.db.Save(stat).Error; err != nil {
+			return fmt.Errorf("save daily cloud diff for account %d: %w", stat.AccountID, err)
+		}
 	}
 
 	return nil
@@ -342,10 +380,11 @@ func (r *CloudStatsRepository) CalculateDailyDiff(userID uint) error {
 // CalculateWeeklyDiff 计算对比上周的变化
 func (r *CloudStatsRepository) CalculateWeeklyDiff(userID uint) error {
 	// 获取上周同期的数据
-	lastWeekDate := time.Now().AddDate(0, 0, -7).Format("2006-01-02")
+	now := nowCST()
+	lastWeekDate := now.AddDate(0, 0, -7).Format("2006-01-02")
 	lastWeekStats, err := r.FindByUserIDAndDate(userID, lastWeekDate)
 	if err != nil {
-		return nil
+		return fmt.Errorf("load last-week cloud stats: %w", err)
 	}
 
 	// 创建上周的云朵数量映射
@@ -355,10 +394,10 @@ func (r *CloudStatsRepository) CalculateWeeklyDiff(userID uint) error {
 	}
 
 	// 获取今日的数据
-	todayDate := time.Now().Format("2006-01-02")
+	todayDate := now.Format("2006-01-02")
 	todayStats, err := r.FindByUserIDAndDate(userID, todayDate)
 	if err != nil {
-		return nil
+		return fmt.Errorf("load today cloud stats: %w", err)
 	}
 
 	// 更新今日数据的周差异
@@ -366,7 +405,9 @@ func (r *CloudStatsRepository) CalculateWeeklyDiff(userID uint) error {
 		if lastWeekCount, ok := lastWeekMap[stat.AccountID]; ok {
 			stat.CloudDiffWeek = stat.CloudCount - lastWeekCount
 		}
-		r.db.Save(stat)
+		if err := r.db.Save(stat).Error; err != nil {
+			return fmt.Errorf("save weekly cloud diff for account %d: %w", stat.AccountID, err)
+		}
 	}
 
 	return nil

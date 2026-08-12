@@ -5,7 +5,6 @@ import (
 	"flag"
 	"fmt"
 	"log"
-	"strconv"
 	"strings"
 	"time"
 
@@ -13,6 +12,7 @@ import (
 	"caiyun/internal/concurrency"
 	"caiyun/internal/monitor"
 	"caiyun/internal/notification"
+	"caiyun/internal/observability"
 	"caiyun/internal/repository"
 	"caiyun/internal/scheduler"
 	"caiyun/internal/security"
@@ -43,7 +43,26 @@ func Run(ctx context.Context, args []string) error {
 	defer closeLogger()
 	log.Printf("启动 caiyun-worker: %+v", version.Get())
 
-	core, err := bootstrap.InitCore()
+	config, err := LoadConfig()
+	if err != nil {
+		return fmt.Errorf("Worker 配置校验失败: %w", err)
+	}
+	shutdownTracing, err := observability.StartTracing(ctx, config.Tracing)
+	if err != nil {
+		return fmt.Errorf("Worker OTel 初始化失败: %w", err)
+	}
+	defer func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := shutdownTracing(shutdownCtx); err != nil {
+			log.Printf("关闭 Worker OTel 失败: %v", err)
+		}
+	}()
+	coreConfig, err := bootstrap.LoadCoreConfig()
+	if err != nil {
+		return fmt.Errorf("基础设施配置校验失败: %w", err)
+	}
+	core, err := bootstrap.InitCoreWithConfig(coreConfig)
 	if err != nil {
 		return fmt.Errorf("基础依赖初始化失败: %w", err)
 	}
@@ -53,15 +72,15 @@ func Run(ctx context.Context, args []string) error {
 		}
 	}()
 	repos := core.Repository
-	wsHub := ws.GetHub()
+	wsHub := ws.NewHub()
+	defer wsHub.Stop()
 	wsHub.SetWSMessageRepository(repos.WSMessage)
-	if err := wsHub.ConfigureEventBus(ctx, core.Redis, bootstrap.GetEnv("WS_EVENT_CHANNEL", "caiyun:ws:events"), bootstrap.GetEnv("INSTANCE_ID", "worker")); err != nil {
+	if err := wsHub.ConfigureEventBus(ctx, core.Redis, config.Realtime.EventChannel, config.Realtime.InstanceID); err != nil {
 		return err
 	}
-	defer wsHub.Stop()
 
 	// 初始化 API/Worker 共用业务服务，避免两个进程复制依赖装配逻辑。
-	sharedServices, err := bootstrap.InitSharedServices(core)
+	sharedServices, err := bootstrap.InitSharedServices(core, wsHub)
 	if err != nil {
 		return fmt.Errorf("初始化共享业务服务失败: %w", err)
 	}
@@ -74,15 +93,8 @@ func Run(ctx context.Context, args []string) error {
 	exchangeService := sharedServices.Exchange
 	operationService := sharedServices.Operation
 	taskQueue := sharedServices.TaskQueue
+	operationService.SetEventPublisher(ws.NewOperationEventPublisher(wsHub))
 	log.Printf("任务队列后端: %s", bootstrap.TaskQueueBackendName())
-
-	// 获取并发数配置
-	concurrencyLimit := 10
-	if concurrencyStr := bootstrap.GetEnv("TASK_CONCURRENCY", "10"); concurrencyStr != "" {
-		if n, err := strconv.Atoi(concurrencyStr); err == nil && n > 0 {
-			concurrencyLimit = n
-		}
-	}
 
 	// 初始化任务监控器
 	taskMonitor := monitor.NewTaskMonitor(monitor.Config{
@@ -91,13 +103,13 @@ func Run(ctx context.Context, args []string) error {
 	})
 
 	// 初始化任务管理器
-	taskManager := concurrency.NewTaskManager(taskService, concurrencyLimit)
+	taskManager := concurrency.NewTaskManager(taskService, config.TaskConcurrency)
 
 	// 初始化重试管理器
 	retryManager := monitor.NewRetryManager(
 		taskMonitor,
-		bootstrap.GetIntEnv("WORKER_RETRY_MAX_ATTEMPTS", 3),
-		bootstrap.GetDurationEnv("WORKER_RETRY_DELAY", 5*time.Second),
+		config.Retry.MaxAttempts,
+		config.Retry.Delay,
 	)
 
 	// 初始化定时任务调度器
@@ -107,10 +119,12 @@ func Run(ctx context.Context, args []string) error {
 	})
 
 	metricsCollector := monitor.NewMetrics()
+	operationService.SetMetrics(metricsCollector)
 
 	// 初始化抢兑调度器（用于定时抢兑任务）
 	exchangeScheduler := services.NewExchangeScheduler(
 		repos.ExchangeTask, repos.ExchangeAccount, repos.ExchangeRecord, repos.Product, repos.SystemConfig, repos.TaskLog, tokenManager,
+		wsHub,
 	)
 	exchangeScheduler.SetLeaseStore(core.Redis)
 	exchangeScheduler.SetMetrics(metricsCollector)
@@ -132,13 +146,13 @@ func Run(ctx context.Context, args []string) error {
 		taskQueue,
 		multiNotifier,
 		metricsCollector,
-		concurrencyLimit,
+		config.TaskConcurrency,
 	)
 	workerInstance.SetOperationServices(operationService, exchangeService)
 
 	// 核心日常任务的配置错误必须阻止 Worker 启动；静默跳过会让进程
 	// 看似健康但永远不执行主要业务任务。
-	taskSchedule := bootstrap.GetEnv("TASK_SCHEDULE", "0 8 * * *")
+	taskSchedule := config.TaskSchedule
 	if err := addDailyTaskExecutionJob(jobScheduler, taskSchedule, func() error {
 		return runWithWorkerJobLease(core.Redis, "daily_task_execution", 12*time.Hour, func() error {
 			log.Println("定时任务开始执行...")
@@ -174,7 +188,7 @@ func Run(ctx context.Context, args []string) error {
 	// 监控 API 由 Worker 跟踪，Stop 会取消并等待其 HTTP 服务、ticker
 	// 和 shutdown goroutine 全部退出。
 	workerInstance.startBackground(func() {
-		startMonitoringAPI(workerInstance, core)
+		startMonitoringAPI(workerInstance, core, config.Monitoring)
 	})
 
 	log.Println("Worker 服务已启动")
@@ -184,19 +198,19 @@ func Run(ctx context.Context, args []string) error {
 }
 
 func addDailyTaskExecutionJob(jobScheduler *scheduler.Scheduler, schedule string, job func() error) error {
-	if jobScheduler == nil {
-		return fmt.Errorf("注册 daily_task_execution 失败: scheduler 未初始化")
-	}
-	if job == nil {
-		return fmt.Errorf("注册 daily_task_execution 失败: job 不能为空")
-	}
-	if _, err := jobScheduler.AddJobWithName(
+	registered, err := registerWorkerJob(
+		jobScheduler,
 		"daily_task_execution",
 		schedule,
-		job,
+		JobCritical,
 		"每日定时执行所有账号任务",
-	); err != nil {
+		job,
+	)
+	if err != nil {
 		return fmt.Errorf("TASK_SCHEDULE=%q 无效，Worker 拒绝启动: %w", schedule, err)
+	}
+	if !registered {
+		return fmt.Errorf("TASK_SCHEDULE=%q 未注册关键 daily_task_execution", schedule)
 	}
 	return nil
 }

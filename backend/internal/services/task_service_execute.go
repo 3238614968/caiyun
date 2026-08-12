@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"log"
 	"strings"
-	"time"
 )
 
 // ExecuteTaskForAccount 为指定账号执行所有已配置批量任务。
@@ -134,15 +133,12 @@ func (s *TaskService) executeTaskCodesForAccount(ctx context.Context, account *m
 		}
 	}
 
-	// 通过WebSocket推送任务完成通知给用户
-	hub := ws.GetHub()
-
 	// 推送每个任务的结果（跳过已下架的任务）
 	for _, result := range results {
 		if result.Status == "skipped" {
 			continue
 		}
-		hub.SendToUser(account.UserID, ws.Message{
+		s.sendToUser(account.UserID, ws.Message{
 			Type: "task_complete",
 			Data: map[string]interface{}{
 				"account_id":     account.ID,
@@ -157,7 +153,7 @@ func (s *TaskService) executeTaskCodesForAccount(ctx context.Context, account *m
 	}
 
 	// 推送汇总信息
-	hub.SendToUser(account.UserID, ws.Message{
+	s.sendToUser(account.UserID, ws.Message{
 		Type: "task_summary",
 		Data: map[string]interface{}{
 			"account_id":   account.ID,
@@ -165,13 +161,13 @@ func (s *TaskService) executeTaskCodesForAccount(ctx context.Context, account *m
 			"total_gained": totalGained,
 			"cloud_count":  finalCloudCount,
 			"task_count":   len(results),
-			"completed_at": time.Now().Format("2006-01-02 15:04:05"),
+			"completed_at": nowCST().Format("2006-01-02 15:04:05"),
 		},
 	})
 
 	// 保存云朵统计数据（确保趋势图有数据）
 	if finalCloudCount > 0 && s.cloudStatsRepo != nil {
-		today := time.Now().Format("2006-01-02")
+		today := nowCST().Format("2006-01-02")
 		stats := &models.CloudStats{
 			UserID:     account.UserID,
 			AccountID:  account.ID,

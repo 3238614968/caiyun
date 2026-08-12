@@ -6,7 +6,7 @@ import { normalizeExchangeRule, normalizeExchangeRulesResponse } from './normali
 export function getExchangeRules(): Promise<GetExchangeRulesResponse> {
   const fallback: GetExchangeRulesResponse = { rules: [], accounts: [], total: 0 }
   return request<GetExchangeRulesResponse | ApiResponse<GetExchangeRulesResponse>>({
-    url: '/api/exchange/rules',
+    url: '/api/v1/exchange/rules',
     method: 'get'
   }).then((res) => normalizeExchangeRulesResponse(unwrapApiData(res, fallback)))
 }
@@ -16,7 +16,7 @@ export const getExchangeAccounts = getExchangeRules
 export function getAdminExchangeRules(): Promise<GetExchangeRulesResponse> {
   const fallback: GetExchangeRulesResponse = { rules: [], accounts: [], total: 0 }
   return request<GetExchangeRulesResponse | ApiResponse<GetExchangeRulesResponse>>({
-    url: '/api/admin/exchange/rules',
+    url: '/api/v1/admin/exchange/rules',
     method: 'get'
   }).then((res) => normalizeExchangeRulesResponse(unwrapApiData(res, fallback)))
 }
@@ -24,7 +24,7 @@ export function getAdminExchangeRules(): Promise<GetExchangeRulesResponse> {
 export function addExchangeRule(data: AddExchangeRuleRequest): Promise<AddExchangeRuleResponse> {
   const fallback: AddExchangeRuleResponse = { rule: {} as ExchangeRule, account: {} as ExchangeRule }
   return request<AddExchangeRuleResponse | ApiResponse<AddExchangeRuleResponse>>({
-    url: '/api/exchange/rules',
+    url: '/api/v1/exchange/rules',
     method: 'post',
     data
   }).then((res) => {
@@ -38,7 +38,7 @@ export const addExchangeAccount = addExchangeRule
 
 export function updateExchangeRule(id: number, data: UpdateExchangeRuleRequest): Promise<SuccessResponse> {
   return request<SuccessResponse>({
-    url: `/api/exchange/rules/${id}`,
+    url: `/api/v1/exchange/rules/${id}`,
     method: 'put',
     data
   })
@@ -48,7 +48,7 @@ export const updateExchangeAccount = updateExchangeRule
 
 export function deleteExchangeRule(id: number): Promise<SuccessResponse> {
   return request<SuccessResponse>({
-    url: `/api/exchange/rules/${id}`,
+    url: `/api/v1/exchange/rules/${id}`,
     method: 'delete'
   })
 }

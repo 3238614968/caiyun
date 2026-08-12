@@ -1,0 +1,49 @@
+# Apply only when the KEDA CRDs are installed. deploy-k8s.sh detects the CRD
+# and removes the fallback backend-worker HPA before applying this ScaledObject.
+# Redis 7 is required for lagCount; the base StatefulSet uses redis:7.0.
+apiVersion: keda.sh/v1alpha1
+kind: TriggerAuthentication
+metadata:
+  name: caiyun-redis-streams-auth
+  namespace: caiyun
+spec:
+  secretTargetRef:
+    - parameter: password
+      name: caiyun-secrets
+      key: redis-password
+---
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: backend-worker-redis-streams
+  namespace: caiyun
+spec:
+  scaleTargetRef:
+    name: backend-worker
+    envSourceContainerName: worker
+  pollingInterval: 15
+  cooldownPeriod: 300
+  initialCooldownPeriod: 60
+  minReplicaCount: 2
+  maxReplicaCount: 20
+  advanced:
+    horizontalPodAutoscalerConfig:
+      behavior:
+        scaleDown:
+          stabilizationWindowSeconds: 300
+          policies:
+            - type: Percent
+              value: 20
+              periodSeconds: 60
+  triggers:
+    - type: redis-streams
+      metadata:
+        addressFromEnv: REDIS_ADDRESS
+        stream: task:queue:stream
+        consumerGroup: caiyun-workers
+        # Redis 7 XINFO GROUPS lag scales both queued and pending work.
+        lagCount: "25"
+        activationLagCount: "1"
+        databaseIndex: "0"
+      authenticationRef:
+        name: caiyun-redis-streams-auth

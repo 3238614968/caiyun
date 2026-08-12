@@ -1,7 +1,7 @@
 package handlers
 
 import (
-	"caiyun/internal/models"
+	"caiyun/internal/dto"
 	apiresponse "caiyun/pkg/response"
 	"fmt"
 	"net/http"
@@ -12,11 +12,9 @@ import (
 
 // SearchProductsResponse 搜索商品响应
 type SearchProductsResponse struct {
-	Products []*models.Product `json:"products"`
-	Total    int64             `json:"total"`
+	Products []*dto.ProductResponse `json:"products"`
+	Total    int64                  `json:"total"`
 }
-
-// SearchProducts 搜索商品
 
 // SearchProducts 搜索商品
 func (h *ExchangeHandler) SearchProducts(c *gin.Context) {
@@ -39,19 +37,15 @@ func (h *ExchangeHandler) SearchProducts(c *gin.Context) {
 	}
 
 	apiresponse.Success(c, SearchProductsResponse{
-		Products: products,
+		Products: dto.ToProductResponses(products),
 		Total:    int64(len(products)),
 	})
 }
 
 // GetCategoriesResponse 获取分类响应
-
-// GetCategoriesResponse 获取分类响应
 type GetCategoriesResponse struct {
 	Categories []string `json:"categories"`
 }
-
-// GetCategories 获取商品分类
 
 // GetCategories 获取商品分类
 func (h *ExchangeHandler) GetCategories(c *gin.Context) {
@@ -67,13 +61,9 @@ func (h *ExchangeHandler) GetCategories(c *gin.Context) {
 }
 
 // UpdateProductsRequest 更新商品请求
-
-// UpdateProductsRequest 更新商品请求
 type UpdateProductsRequest struct {
 	AccountID uint `json:"account_id"`
 }
-
-// UpdateProducts 手动更新商品
 
 // UpdateProducts 手动更新商品
 func (h *ExchangeHandler) UpdateProducts(c *gin.Context) {

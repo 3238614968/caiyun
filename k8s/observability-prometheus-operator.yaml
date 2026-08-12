@@ -1,0 +1,47 @@
+# Apply this manifest only in clusters with the Prometheus Operator CRDs.
+# deploy-k8s.sh discovers the CRD and applies it after the base rollout.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: caiyun-api
+  namespace: caiyun
+  labels:
+    app: caiyun
+spec:
+  jobLabel: monitoring-job
+  selector:
+    matchLabels:
+      app: backend-api
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 30s
+      scrapeTimeout: 10s
+      authorization:
+        type: Bearer
+        credentials:
+          name: caiyun-secrets
+          key: api-monitor-token
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: caiyun-worker
+  namespace: caiyun
+  labels:
+    app: caiyun
+spec:
+  jobLabel: monitoring-job
+  selector:
+    matchLabels:
+      app: backend-worker
+  endpoints:
+    - port: metrics
+      path: /metrics
+      interval: 30s
+      scrapeTimeout: 10s
+      authorization:
+        type: Bearer
+        credentials:
+          name: caiyun-secrets
+          key: worker-monitor-token

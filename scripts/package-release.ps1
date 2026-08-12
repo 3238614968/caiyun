@@ -38,8 +38,11 @@ $nginxConf = Join-Path $root "nginx-server.conf"
 $migrationsDir = Join-Path $root "backend\migrations"
 $monitoringDir = Join-Path $root "deploy\monitoring"
 $calendarDir = Join-Path $root "deploy\calendar"
+$systemdDir = Join-Path $root "deploy\systemd"
+$k8sDir = Join-Path $root "k8s"
+$composeFile = Join-Path $root "docker-compose.yml"
 
-foreach ($path in @($caiyunBin, $frontendDist, $nginxConf, $migrationsDir, $monitoringDir, $calendarDir)) {
+foreach ($path in @($caiyunBin, $frontendDist, $nginxConf, $migrationsDir, $monitoringDir, $calendarDir, $systemdDir, $k8sDir, $composeFile)) {
     if (-not (Test-Path $path)) {
         throw "Missing required path: $path"
     }
@@ -86,13 +89,32 @@ try {
     & $tarCmd.Source -czf $archive -C (Join-Path $root "deploy") "calendar"
     if ($LASTEXITCODE -ne 0) { throw "tar failed for $archive" }
 
+    $archive = Join-Path $stageDir ("caiyun-systemd-{0}.tar.gz" -f $Version)
+    & $tarCmd.Source -czf $archive -C (Join-Path $root "deploy") "systemd"
+    if ($LASTEXITCODE -ne 0) { throw "tar failed for $archive" }
+
+    Copy-Item -LiteralPath $composeFile -Destination (Join-Path $stageDir "docker-compose.yml") -Force
+
+    $archive = Join-Path $stageDir ("caiyun-k8s-{0}.tar.gz" -f $Version)
+    & $tarCmd.Source -czf $archive -C $root "k8s"
+    if ($LASTEXITCODE -ne 0) { throw "tar failed for $archive" }
+
     $copyFiles = @(
         "scripts\deploy-linux.sh",
         "scripts\rollback-linux.sh",
         "scripts\health-check.sh",
         "scripts\import-calendar.sh",
         "scripts\archive-history.sh",
-        "scripts\rotate-encryption.sh"
+        "scripts\rotate-encryption.sh",
+        "scripts\collect-slo-snapshot.sh",
+        "scripts\append-quarterly-slo-report.py",
+        "scripts\deploy-k8s.sh",
+		"scripts\verify-compose-runtime.sh",
+        "scripts\verify-k8s-runtime.sh",
+		"scripts\verify-otel-runtime.sh",
+		"scripts\verify-legacy-list-drain.sh",
+        "scripts\chaos-drill.sh",
+        "scripts\capacity-drill.sh"
     )
     foreach ($relative in $copyFiles) {
         $source = Join-Path $root $relative

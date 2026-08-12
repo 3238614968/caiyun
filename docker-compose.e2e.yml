@@ -16,11 +16,16 @@ services:
   backend-api:
     container_name: caiyun-e2e-api
     restart: "no"
+    stop_grace_period: 60s
     ports: !reset []
+    environment:
+      # The E2E runner reaches the frontend over plain HTTP inside Docker.
+      COOKIE_SECURE: "false"
 
   backend-worker:
     container_name: caiyun-e2e-worker
     restart: "no"
+    stop_grace_period: 75s
     ports: !reset []
 
   frontend:

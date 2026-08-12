@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strconv"
 
+	"caiyun/internal/dto"
 	"caiyun/internal/services"
 	"caiyun/internal/utils"
 	apiresponse "caiyun/pkg/response"
@@ -38,20 +39,8 @@ func (h *AccountHandler) CreateAccount(c *gin.Context) {
 		return
 	}
 
-	apiresponse.Success(c, account)
+	apiresponse.Success(c, dto.ToAccountResponse(account))
 }
-
-// ListAccounts 获取账号列表
-// @Summary 获取账号列表
-// @Tags 账号管理
-// @Accept json
-// @Produce json
-// @Param page query int false "页码" default(1)
-// @Param page_size query int false "每页数量" default(10)
-// @Param phone query string false "手机号搜索"
-// @Success 200 {object} ListAccountsResponse
-// @Failure 401 {object} ErrorResponse
-// @Router /api/accounts [get]
 
 // ListAccounts 获取账号列表
 // @Summary 获取账号列表
@@ -89,7 +78,7 @@ func (h *AccountHandler) ListAccounts(c *gin.Context) {
 	}
 
 	apiresponse.Success(c, ListAccountsResponse{
-		Accounts: accounts,
+		Accounts: dto.ToAccountResponses(accounts),
 		Total:    total,
 		Page:     page,
 		PageSize: pageSize,
@@ -102,18 +91,7 @@ func (h *AccountHandler) ListAccounts(c *gin.Context) {
 // @Accept json
 // @Produce json
 // @Param id path int true "账号ID"
-// @Success 200 {object} models.Account
-// @Failure 401 {object} ErrorResponse
-// @Failure 404 {object} ErrorResponse
-// @Router /api/accounts/{id} [get]
-
-// GetAccount 获取账号详情
-// @Summary 获取账号详情
-// @Tags 账号管理
-// @Accept json
-// @Produce json
-// @Param id path int true "账号ID"
-// @Success 200 {object} models.Account
+// @Success 200 {object} dto.AccountResponse
 // @Failure 401 {object} ErrorResponse
 // @Failure 404 {object} ErrorResponse
 // @Router /api/accounts/{id} [get]
@@ -140,7 +118,7 @@ func (h *AccountHandler) GetAccount(c *gin.Context) {
 		return
 	}
 
-	apiresponse.Success(c, account)
+	apiresponse.Success(c, dto.ToAccountResponse(account))
 }
 
 // UpdateAccount 更新账号
@@ -150,20 +128,7 @@ func (h *AccountHandler) GetAccount(c *gin.Context) {
 // @Produce json
 // @Param id path int true "账号ID"
 // @Param request body UpdateAccountRequest true "更新账号请求"
-// @Success 200 {object} models.Account
-// @Failure 400 {object} ErrorResponse
-// @Failure 401 {object} ErrorResponse
-// @Failure 404 {object} ErrorResponse
-// @Router /api/accounts/{id} [put]
-
-// UpdateAccount 更新账号
-// @Summary 更新账号
-// @Tags 账号管理
-// @Accept json
-// @Produce json
-// @Param id path int true "账号ID"
-// @Param request body UpdateAccountRequest true "更新账号请求"
-// @Success 200 {object} models.Account
+// @Success 200 {object} dto.AccountResponse
 // @Failure 400 {object} ErrorResponse
 // @Failure 401 {object} ErrorResponse
 // @Failure 404 {object} ErrorResponse
@@ -205,19 +170,8 @@ func (h *AccountHandler) UpdateAccount(c *gin.Context) {
 		return
 	}
 
-	apiresponse.Success(c, account)
+	apiresponse.Success(c, dto.ToAccountResponse(account))
 }
-
-// DeleteAccount 删除账号
-// @Summary 删除账号
-// @Tags 账号管理
-// @Accept json
-// @Produce json
-// @Param id path int true "账号ID"
-// @Success 200 {object} SuccessResponse
-// @Failure 401 {object} ErrorResponse
-// @Failure 404 {object} ErrorResponse
-// @Router /api/accounts/{id} [delete]
 
 // DeleteAccount 删除账号
 // @Summary 删除账号
@@ -253,19 +207,6 @@ func (h *AccountHandler) DeleteAccount(c *gin.Context) {
 
 	apiresponse.Message(c, "删除成功")
 }
-
-// SetAccountStatus 设置账号状态
-// @Summary 设置账号状态
-// @Tags 账号管理
-// @Accept json
-// @Produce json
-// @Param id path int true "账号ID"
-// @Param is_active query bool true "是否激活"
-// @Success 200 {object} SuccessResponse
-// @Failure 400 {object} ErrorResponse
-// @Failure 401 {object} ErrorResponse
-// @Failure 404 {object} ErrorResponse
-// @Router /api/accounts/{id}/status [put]
 
 // SetAccountStatus 设置账号状态
 // @Summary 设置账号状态
@@ -322,18 +263,7 @@ func (h *AccountHandler) SetAccountStatus(c *gin.Context) {
 // @Accept json
 // @Produce json
 // @Param id path int true "账号ID"
-// @Success 200 {object} models.Account
-// @Failure 401 {object} ErrorResponse
-// @Failure 404 {object} ErrorResponse
-// @Router /api/accounts/{id}/refresh [post]
-
-// RefreshToken 刷新账号Token
-// @Summary 刷新账号Token
-// @Tags 账号管理
-// @Accept json
-// @Produce json
-// @Param id path int true "账号ID"
-// @Success 200 {object} models.Account
+// @Success 200 {object} dto.AccountResponse
 // @Failure 401 {object} ErrorResponse
 // @Failure 404 {object} ErrorResponse
 // @Router /api/accounts/{id}/refresh [post]
@@ -376,7 +306,7 @@ func (h *AccountHandler) RefreshToken(c *gin.Context) {
 		return
 	}
 
-	apiresponse.Success(c, updatedAccount)
+	apiresponse.Success(c, dto.ToAccountResponse(updatedAccount))
 }
 
 // TriggerTask 手动触发任务执行

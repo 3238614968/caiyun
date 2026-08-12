@@ -117,3 +117,13 @@ func TestAccountServiceContextCancellation(t *testing.T) {
 		t.Fatalf("RefreshTokenContext() error = %v, want context.Canceled", err)
 	}
 }
+
+func TestAccountServiceEnqueueTaskRequiresReliableQueue(t *testing.T) {
+	service := NewAccountService(
+		&stubAccountRepository{account: &models.Account{ID: 9, UserID: 7}},
+		&stubAccountUserRepository{}, nil, nil,
+	)
+	if err := service.EnqueueTask(9, "daily"); err == nil || err.Error() != "reliable task queue is not configured" {
+		t.Fatalf("EnqueueTask without configured reliable queue = %v", err)
+	}
+}

@@ -1,7 +1,7 @@
 package handlers
 
 import (
-	"caiyun/internal/models"
+	"caiyun/internal/dto"
 	apiresponse "caiyun/pkg/response"
 	"net/http"
 	"strconv"
@@ -16,8 +16,6 @@ type AddExchangeAccountRequest struct {
 	ExchangeTime1 string `json:"exchange_time_1"`
 	ExchangeTime2 string `json:"exchange_time_2"`
 }
-
-// AddExchangeAccount 添加抢兑规则（历史命名保留）
 
 // AddExchangeAccount 添加抢兑规则（历史命名保留）
 func (h *ExchangeHandler) AddExchangeAccount(c *gin.Context) {
@@ -59,20 +57,16 @@ func (h *ExchangeHandler) AddExchangeAccount(c *gin.Context) {
 	}
 
 	apiresponse.Success(c, gin.H{
-		"account": account,
-		"rule":    account,
+		"account": dto.ToExchangeRuleResponse(account),
+		"rule":    dto.ToExchangeRuleResponse(account),
 	})
 }
 
 // ExchangeAccountWithProduct 兑换账号及当前商品信息
-
-// ExchangeAccountWithProduct 兑换账号及当前商品信息
 type ExchangeAccountWithProduct struct {
-	*models.ExchangeAccount
-	CurrentProduct *models.Product `json:"current_product,omitempty"`
+	*dto.ExchangeRuleResponse
+	CurrentProduct *dto.ProductResponse `json:"current_product,omitempty"`
 }
-
-// GetExchangeAccountsResponse 获取账号规则列表响应。accounts 为兼容旧前端保留，rules 是新语义字段。
 
 // GetExchangeAccountsResponse 获取账号规则列表响应。accounts 为兼容旧前端保留，rules 是新语义字段。
 type GetExchangeAccountsResponse struct {
@@ -82,13 +76,9 @@ type GetExchangeAccountsResponse struct {
 }
 
 // GetExchangeAccounts 获取用户的兑换账号列表
-
-// GetExchangeAccounts 获取用户的兑换账号列表
 func (h *ExchangeHandler) GetExchangeAccounts(c *gin.Context) {
 	h.getExchangeAccounts(c, false)
 }
-
-// GetAdminExchangeAccounts 获取全站兑换账号列表（管理员路由专用）。
 
 // GetAdminExchangeAccounts 获取全站兑换账号列表（管理员路由专用）。
 func (h *ExchangeHandler) GetAdminExchangeAccounts(c *gin.Context) {
@@ -111,12 +101,12 @@ func (h *ExchangeHandler) getExchangeAccounts(c *gin.Context, isAdmin bool) {
 	var accountsWithProduct []*ExchangeAccountWithProduct
 	for _, acc := range accounts {
 		accWithProd := &ExchangeAccountWithProduct{
-			ExchangeAccount: acc,
+			ExchangeRuleResponse: dto.ToExchangeRuleResponse(acc),
 		}
 		// 查找该账号的待执行或进行中的任务，获取商品信息
 		for _, task := range acc.Tasks {
 			if (task.Status == "pending" || task.Status == "running") && task.Product.ID > 0 {
-				accWithProd.CurrentProduct = &task.Product
+				accWithProd.CurrentProduct = dto.ToProductResponse(&task.Product)
 				break
 			}
 		}
@@ -131,8 +121,6 @@ func (h *ExchangeHandler) getExchangeAccounts(c *gin.Context, isAdmin bool) {
 }
 
 // UpdateExchangeAccountRequest 更新兑换账号请求
-
-// UpdateExchangeAccountRequest 更新兑换账号请求
 type UpdateExchangeAccountRequest struct {
 	Remark        string `json:"remark"`
 	ExchangeTime1 string `json:"exchange_time_1"`
@@ -142,13 +130,9 @@ type UpdateExchangeAccountRequest struct {
 }
 
 // UpdateExchangeAccount 更新兑换账号配置
-
-// UpdateExchangeAccount 更新兑换账号配置
 func (h *ExchangeHandler) UpdateExchangeAccount(c *gin.Context) {
 	h.updateExchangeAccount(c, false)
 }
-
-// UpdateAdminExchangeAccount 更新任意兑换账号配置（管理员路由专用）。
 
 // UpdateAdminExchangeAccount 更新任意兑换账号配置（管理员路由专用）。
 func (h *ExchangeHandler) UpdateAdminExchangeAccount(c *gin.Context) {
@@ -205,8 +189,6 @@ func (h *ExchangeHandler) updateExchangeAccount(c *gin.Context, isAdmin bool) {
 }
 
 // DeleteExchangeAccount 删除兑换账号
-
-// DeleteExchangeAccount 删除兑换账号
 func (h *ExchangeHandler) DeleteExchangeAccount(c *gin.Context) {
 	userID, ok := getUserID(c)
 	if !ok {
@@ -230,21 +212,13 @@ func (h *ExchangeHandler) DeleteExchangeAccount(c *gin.Context) {
 }
 
 // AddExchangeRule 是 AddExchangeAccount 的新语义别名，旧 /accounts 路由仍保留。
-
-// AddExchangeRule 是 AddExchangeAccount 的新语义别名，旧 /accounts 路由仍保留。
 func (h *ExchangeHandler) AddExchangeRule(c *gin.Context) { h.AddExchangeAccount(c) }
-
-// GetExchangeRules 是 GetExchangeAccounts 的新语义别名。
 
 // GetExchangeRules 是 GetExchangeAccounts 的新语义别名。
 func (h *ExchangeHandler) GetExchangeRules(c *gin.Context) { h.GetExchangeAccounts(c) }
 
 // UpdateExchangeRule 是 UpdateExchangeAccount 的新语义别名。
-
-// UpdateExchangeRule 是 UpdateExchangeAccount 的新语义别名。
 func (h *ExchangeHandler) UpdateExchangeRule(c *gin.Context) { h.UpdateExchangeAccount(c) }
-
-// DeleteExchangeRule 是 DeleteExchangeAccount 的新语义别名。
 
 // DeleteExchangeRule 是 DeleteExchangeAccount 的新语义别名。
 func (h *ExchangeHandler) DeleteExchangeRule(c *gin.Context) { h.DeleteExchangeAccount(c) }

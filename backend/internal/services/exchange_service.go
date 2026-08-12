@@ -6,7 +6,6 @@ import (
 	"caiyun/internal/repository"
 	"caiyun/internal/ws"
 	"context"
-	"time"
 )
 
 // ExchangeService 抢兑服务
@@ -25,10 +24,10 @@ type ExchangeService struct {
 	unitOfWork          repository.UnitOfWork
 }
 
-type exchangeLockStore interface {
-	SetNX(key string, value interface{}, expiration time.Duration) (bool, error)
-	Del(keys ...string) error
-}
+// exchangeLockStore and schedulerLeaseStore share the same fencing-safe Redis
+// primitive. Keeping this alias avoids divergent lock semantics between the
+// API/Worker execution paths.
+type exchangeLockStore = schedulerLeaseStore
 
 func NewExchangeService(
 	productRepo *repository.ProductRepository,
@@ -40,7 +39,12 @@ func NewExchangeService(
 	taskLogRepo *repository.TaskLogRepository,
 	authMgr *auth.Auth,
 	tokenMgr *TokenManager,
+	eventHubs ...*ws.Hub,
 ) *ExchangeService {
+	var eventHub *ws.Hub
+	if len(eventHubs) > 0 {
+		eventHub = eventHubs[0]
+	}
 	return &ExchangeService{
 		productRepo:         productRepo,
 		exchangeAccountRepo: exchangeAccountRepo,
@@ -51,8 +55,17 @@ func NewExchangeService(
 		taskLogRepo:         taskLogRepo,
 		authMgr:             authMgr,
 		tokenMgr:            tokenMgr,
-		hub:                 ws.GetHub(),
+		hub:                 eventHub,
 		unitOfWork:          repository.NewUnitOfWorkFromExchangeAccountRepository(exchangeAccountRepo),
+	}
+}
+
+// SetEventHub attaches the Hub owned by the current process. It is optional
+// for focused service tests, where business persistence remains independent
+// from realtime delivery.
+func (s *ExchangeService) SetEventHub(eventHub *ws.Hub) {
+	if s != nil {
+		s.hub = eventHub
 	}
 }
 

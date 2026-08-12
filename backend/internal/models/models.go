@@ -62,8 +62,8 @@ type TaskLog struct {
 type CloudStats struct {
 	ID            uint           `gorm:"primarykey" json:"id"`
 	UserID        uint           `gorm:"not null;index" json:"user_id"`
-	AccountID     uint           `gorm:"not null;index" json:"account_id"`
-	Date          string         `gorm:"type:date;not null" json:"date"`
+	AccountID     uint           `gorm:"not null;index;uniqueIndex:uk_cloud_stats_account_date" json:"account_id"`
+	Date          string         `gorm:"type:date;not null;uniqueIndex:uk_cloud_stats_account_date" json:"date"`
 	CloudCount    int            `gorm:"not null" json:"cloud_count"`
 	CloudDiff     int            `gorm:"default:0" json:"cloud_diff"`      // 对比昨日
 	CloudDiffWeek int            `gorm:"default:0" json:"cloud_diff_week"` // 对比上周

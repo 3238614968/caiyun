@@ -1,5 +1,7 @@
 {
-  "annotations": {"list": []},
+  "annotations": {
+    "list": []
+  },
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 1,
@@ -8,90 +10,314 @@
   "liveNow": false,
   "panels": [
     {
-      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
-      "fieldConfig": {"defaults": {"unit": "percentunit", "min": 0, "max": 1}, "overrides": []},
-      "gridPos": {"h": 6, "w": 8, "x": 0, "y": 0},
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 8,
+        "x": 0,
+        "y": 0
+      },
       "id": 1,
-      "options": {"reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}},
-      "targets": [{"expr": "caiyun_exchange_success_rate", "legendFormat": "成功率", "refId": "A"}],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "targets": [
+        {
+          "expr": "caiyun_exchange_success_rate",
+          "legendFormat": "成功率",
+          "refId": "A"
+        }
+      ],
       "title": "抢兑成功率",
       "type": "stat"
     },
     {
-      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
-      "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []},
-      "gridPos": {"h": 6, "w": 8, "x": 8, "y": 0},
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 8,
+        "x": 8,
+        "y": 0
+      },
       "id": 2,
       "targets": [
-        {"expr": "increase(caiyun_exchange_success_total[$__range])", "legendFormat": "成功", "refId": "A"},
-        {"expr": "increase(caiyun_exchange_failed_total[$__range])", "legendFormat": "失败", "refId": "B"}
+        {
+          "expr": "increase(caiyun_exchange_success_total[$__range])",
+          "legendFormat": "成功",
+          "refId": "A"
+        },
+        {
+          "expr": "increase(caiyun_exchange_failed_total[$__range])",
+          "legendFormat": "失败",
+          "refId": "B"
+        }
       ],
       "title": "抢兑成功/失败增量",
       "type": "timeseries"
     },
     {
-      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
-      "fieldConfig": {"defaults": {"unit": "s"}, "overrides": []},
-      "gridPos": {"h": 6, "w": 8, "x": 16, "y": 0},
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 8,
+        "x": 16,
+        "y": 0
+      },
       "id": 3,
-      "targets": [{"expr": "histogram_quantile(0.95, sum(rate(caiyun_exchange_duration_seconds_bucket[5m])) by (le))", "legendFormat": "P95", "refId": "A"}],
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(caiyun_exchange_duration_seconds_bucket[5m])) by (le))",
+          "legendFormat": "P95",
+          "refId": "A"
+        }
+      ],
       "title": "抢兑耗时 P95",
       "type": "timeseries"
     },
     {
-      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
-      "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []},
-      "gridPos": {"h": 7, "w": 12, "x": 0, "y": 6},
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 0,
+        "y": 6
+      },
       "id": 4,
-      "targets": [{"expr": "topk(10, caiyun_exchange_failure_reason_total)", "legendFormat": "{{reason}}", "refId": "A"}],
+      "targets": [
+        {
+          "expr": "topk(10, caiyun_exchange_failure_reason_total)",
+          "legendFormat": "{{reason}}",
+          "refId": "A"
+        }
+      ],
       "title": "失败原因 Top10",
       "type": "barchart"
     },
     {
-      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
-      "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []},
-      "gridPos": {"h": 7, "w": 12, "x": 12, "y": 6},
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 12,
+        "y": 6
+      },
       "id": 5,
       "targets": [
-        {"expr": "sum(increase(caiyun_exchange_scheduler_matched_tasks_total[5m])) by (restock_cycle, calendar_policy)", "legendFormat": "命中 {{restock_cycle}}/{{calendar_policy}}", "refId": "A"},
-        {"expr": "sum(increase(caiyun_exchange_scheduler_skipped_total[5m])) by (reason)", "legendFormat": "跳过 {{reason}}", "refId": "B"}
+        {
+          "expr": "sum(increase(caiyun_exchange_scheduler_matched_tasks_total[5m])) by (restock_cycle, calendar_policy)",
+          "legendFormat": "命中 {{restock_cycle}}/{{calendar_policy}}",
+          "refId": "A"
+        },
+        {
+          "expr": "sum(increase(caiyun_exchange_scheduler_skipped_total[5m])) by (reason)",
+          "legendFormat": "跳过 {{reason}}",
+          "refId": "B"
+        }
       ],
       "title": "调度命中/跳过",
       "type": "timeseries"
     },
     {
-      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
-      "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []},
-      "gridPos": {"h": 6, "w": 12, "x": 0, "y": 13},
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 12,
+        "x": 0,
+        "y": 13
+      },
       "id": 6,
       "targets": [
-        {"expr": "caiyun_queue_pending", "legendFormat": "pending", "refId": "A"},
-        {"expr": "caiyun_queue_processing", "legendFormat": "processing", "refId": "B"},
-        {"expr": "caiyun_queue_delayed", "legendFormat": "delayed", "refId": "C"},
-        {"expr": "caiyun_queue_dead_letter", "legendFormat": "dead", "refId": "D"}
+        {
+          "expr": "caiyun_queue_pending",
+          "legendFormat": "pending",
+          "refId": "A"
+        },
+        {
+          "expr": "caiyun_queue_processing",
+          "legendFormat": "processing",
+          "refId": "B"
+        },
+        {
+          "expr": "caiyun_queue_delayed",
+          "legendFormat": "delayed",
+          "refId": "C"
+        },
+        {
+          "expr": "caiyun_queue_dead_letter",
+          "legendFormat": "dead",
+          "refId": "D"
+        }
       ],
       "title": "队列长度",
       "type": "timeseries"
     },
     {
-      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
-      "fieldConfig": {"defaults": {"unit": "s"}, "overrides": []},
-      "gridPos": {"h": 6, "w": 12, "x": 12, "y": 13},
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 12,
+        "x": 12,
+        "y": 13
+      },
       "id": 7,
-      "targets": [{"expr": "histogram_quantile(0.95, sum(rate(caiyun_http_request_duration_seconds_bucket[5m])) by (le, route))", "legendFormat": "{{route}}", "refId": "A"}],
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(caiyun_http_request_duration_seconds_bucket[5m])) by (le, route))",
+          "legendFormat": "{{route}}",
+          "refId": "A"
+        }
+      ],
       "title": "API 延迟 P95 by route",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 0,
+        "y": 19
+      },
+      "id": 8,
+      "targets": [
+        {
+          "expr": "sum(increase(caiyun_operation_transitions_total[$__range])) by (status)",
+          "legendFormat": "{{status}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Operation 生命周期转换",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 12,
+        "y": 19
+      },
+      "id": 9,
+      "targets": [
+        {
+          "expr": "max(time() - caiyun_worker_heartbeat_unix)",
+          "legendFormat": "最旧 Worker 心跳年龄",
+          "refId": "A"
+        }
+      ],
+      "title": "Worker 心跳年龄",
       "type": "timeseries"
     }
   ],
   "refresh": "30s",
   "schemaVersion": 39,
   "style": "dark",
-  "tags": ["caiyun", "exchange"],
-  "templating": {"list": []},
-  "time": {"from": "now-6h", "to": "now"},
+  "tags": [
+    "caiyun",
+    "exchange",
+    "operation",
+    "slo"
+  ],
+  "templating": {
+    "list": []
+  },
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
   "timezone": "browser",
   "title": "Caiyun Exchange Operations",
   "uid": "caiyun-exchange-ops",
-  "version": 1,
+  "version": 2,
   "weekStart": ""
 }

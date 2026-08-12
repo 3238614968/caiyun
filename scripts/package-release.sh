@@ -28,12 +28,24 @@ cp "$ROOT/nginx-server.conf" "$STAGE_DIR/nginx-server.conf"
 tar -czf "$STAGE_DIR/caiyun-migrations-${VERSION}.tar.gz" -C "$ROOT/backend" migrations
 tar -czf "$STAGE_DIR/caiyun-monitoring-${VERSION}.tar.gz" -C "$ROOT/deploy" monitoring
 tar -czf "$STAGE_DIR/caiyun-calendar-${VERSION}.tar.gz" -C "$ROOT/deploy" calendar
+tar -czf "$STAGE_DIR/caiyun-systemd-${VERSION}.tar.gz" -C "$ROOT/deploy" systemd
+tar -czf "$STAGE_DIR/caiyun-k8s-${VERSION}.tar.gz" -C "$ROOT" k8s
+cp "$ROOT/docker-compose.yml" "$STAGE_DIR/docker-compose.yml"
 install -m 0755 "$ROOT/scripts/deploy-linux.sh" "$STAGE_DIR/deploy-linux.sh"
 install -m 0755 "$ROOT/scripts/rollback-linux.sh" "$STAGE_DIR/rollback-linux.sh"
 install -m 0755 "$ROOT/scripts/health-check.sh" "$STAGE_DIR/health-check.sh"
 install -m 0755 "$ROOT/scripts/import-calendar.sh" "$STAGE_DIR/import-calendar.sh"
 install -m 0755 "$ROOT/scripts/archive-history.sh" "$STAGE_DIR/archive-history.sh"
 install -m 0755 "$ROOT/scripts/rotate-encryption.sh" "$STAGE_DIR/rotate-encryption.sh"
+install -m 0755 "$ROOT/scripts/collect-slo-snapshot.sh" "$STAGE_DIR/collect-slo-snapshot.sh"
+install -m 0755 "$ROOT/scripts/deploy-k8s.sh" "$STAGE_DIR/deploy-k8s.sh"
+install -m 0755 "$ROOT/scripts/verify-compose-runtime.sh" "$STAGE_DIR/verify-compose-runtime.sh"
+install -m 0755 "$ROOT/scripts/verify-k8s-runtime.sh" "$STAGE_DIR/verify-k8s-runtime.sh"
+install -m 0755 "$ROOT/scripts/verify-otel-runtime.sh" "$STAGE_DIR/verify-otel-runtime.sh"
+install -m 0755 "$ROOT/scripts/verify-legacy-list-drain.sh" "$STAGE_DIR/verify-legacy-list-drain.sh"
+install -m 0755 "$ROOT/scripts/chaos-drill.sh" "$STAGE_DIR/chaos-drill.sh"
+install -m 0755 "$ROOT/scripts/capacity-drill.sh" "$STAGE_DIR/capacity-drill.sh"
+install -m 0644 "$ROOT/scripts/append-quarterly-slo-report.py" "$STAGE_DIR/append-quarterly-slo-report.py"
 
 SBOM_FILE="$STAGE_DIR/caiyun-sbom-${VERSION}.json" bash "$ROOT/scripts/generate-sbom.sh" "$STAGE_DIR/caiyun-sbom-${VERSION}.json"
 (

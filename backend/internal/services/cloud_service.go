@@ -4,6 +4,7 @@ import (
 	"caiyun/internal/models"
 	"caiyun/internal/repository"
 	"context"
+	"fmt"
 	"sort"
 	"time"
 )
@@ -57,7 +58,7 @@ type AccountRank struct {
 // GetDashboard 获取仪表盘数据
 func (s *CloudService) GetDashboard(userID uint) (*DashboardData, error) {
 	data := &DashboardData{}
-	now := time.Now().In(cstZone)
+	now := nowCST()
 	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, cstZone)
 	tomorrow := today.Add(24 * time.Hour)
 
@@ -184,7 +185,7 @@ func (s *CloudService) CalculateDailyStatsByUserID(userID uint) error {
 
 func (s *CloudService) calculateDailyStatsForAccounts(accounts []*models.Account) error {
 	// 获取今天的日期
-	now := time.Now().In(cstZone)
+	now := nowCST()
 	today := now.Format("2006-01-02")
 
 	// 为每个账号创建/更新统计数据
@@ -212,8 +213,7 @@ func (s *CloudService) calculateDailyStatsForAccounts(accounts []*models.Account
 
 		// 插入或更新
 		if err := s.cloudStatsRepo.UpsertByAccountIDAndDate(stats); err != nil {
-			// 继续处理其他账号
-			continue
+			return fmt.Errorf("upsert cloud stats for account %d: %w", account.ID, err)
 		}
 	}
 

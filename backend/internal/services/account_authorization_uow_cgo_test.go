@@ -17,7 +17,7 @@ func TestAccountAuthorizationRefreshRollsBackBothCredentialTables(t *testing.T) 
 	service := NewAccountService(accountRepo, repository.NewUserRepository(f.db), nil, nil, exchangeRepo)
 
 	trigger := fmt.Sprintf(
-		"CREATE TRIGGER fail_exchange_auth_update BEFORE UPDATE OF auth ON exchange_accounts WHEN OLD.account_id = %d BEGIN SELECT RAISE(ABORT, 'forced exchange auth failure'); END",
+		"CREATE TRIGGER fail_exchange_auth_update BEFORE UPDATE OF auth ON exchange_rules WHEN OLD.account_id = %d BEGIN SELECT RAISE(ABORT, 'forced exchange auth failure'); END",
 		f.account.ID,
 	)
 	if err := f.db.Exec(trigger).Error; err != nil {

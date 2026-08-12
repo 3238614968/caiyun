@@ -20,7 +20,7 @@ PrivateTmp=true
 ProtectSystem=full
 ReadWritePaths=/www/wwwroot/caiyun /www/wwwroot/caiyun/logs
 LimitNOFILE=65535
-TimeoutStopSec=30s
+TimeoutStopSec=75s
 KillSignal=SIGTERM
 
 [Install]

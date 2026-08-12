@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"caiyun/internal/core/sms"
+	"caiyun/internal/dto"
 	"caiyun/internal/services"
 	"caiyun/internal/utils"
 	apiresponse "caiyun/pkg/response"
@@ -88,15 +89,6 @@ func (h *AccountHandler) SendSmsCode(c *gin.Context) {
 // @Failure 400 {object} ErrorResponse
 // @Router /api/accounts/sms/status/{task_id} [get]
 
-// GetSmsStatus 查询验证码发送状态
-// @Summary 查询验证码发送状态
-// @Tags 账号管理
-// @Accept json
-// @Produce json
-// @Param phone path string true "手机号"
-// @Success 200 {object} map[string]interface{}
-// @Failure 400 {object} ErrorResponse
-// @Router /api/accounts/sms/status/{phone} [get]
 func (h *AccountHandler) GetSmsStatus(c *gin.Context) {
 	userID, ok := getUserID(c)
 	if !ok {
@@ -163,17 +155,7 @@ func (h *AccountHandler) GetSmsStatus(c *gin.Context) {
 // @Accept json
 // @Produce json
 // @Param request body SmsLoginRequest true "短信登录请求"
-// @Success 200 {object} models.Account
-// @Failure 400 {object} ErrorResponse
-// @Router /api/accounts/sms/verify [post]
-
-// SmsLogin 短信验证码登录并创建账号
-// @Summary 短信验证码登录
-// @Tags 账号管理
-// @Accept json
-// @Produce json
-// @Param request body SmsLoginRequest true "短信登录请求"
-// @Success 200 {object} models.Account
+// @Success 200 {object} dto.AccountResponse
 // @Failure 400 {object} ErrorResponse
 // @Router /api/accounts/sms/verify [post]
 func (h *AccountHandler) SmsLogin(c *gin.Context) {
@@ -250,5 +232,5 @@ func (h *AccountHandler) SmsLogin(c *gin.Context) {
 	}
 	_ = h.deleteSMSSession(userID, req.TaskID)
 
-	apiresponse.Success(c, account)
+	apiresponse.Success(c, dto.ToAccountResponse(account))
 }

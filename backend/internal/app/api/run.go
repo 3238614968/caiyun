@@ -14,6 +14,7 @@ import (
 	"caiyun/internal/handlers"
 	"caiyun/internal/middleware"
 	"caiyun/internal/monitor"
+	"caiyun/internal/observability"
 	"caiyun/internal/security"
 	"caiyun/internal/services"
 	"caiyun/internal/version"
@@ -21,6 +22,7 @@ import (
 	"caiyun/pkg/jwt"
 
 	"github.com/gin-gonic/gin"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 )
 
 // Run starts the HTTP API and blocks until ctx is cancelled or the server
@@ -45,7 +47,26 @@ func Run(ctx context.Context, args []string) error {
 	defer closeLogger()
 	log.Printf("启动 caiyun-api: %+v", version.Get())
 
-	core, err := bootstrap.InitCore()
+	config, err := LoadConfig()
+	if err != nil {
+		return fmt.Errorf("API 配置校验失败: %w", err)
+	}
+	shutdownTracing, err := observability.StartTracing(ctx, config.Tracing)
+	if err != nil {
+		return fmt.Errorf("API OTel 初始化失败: %w", err)
+	}
+	defer func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := shutdownTracing(shutdownCtx); err != nil {
+			log.Printf("关闭 API OTel 失败: %v", err)
+		}
+	}()
+	coreConfig, err := bootstrap.LoadCoreConfig()
+	if err != nil {
+		return fmt.Errorf("基础设施配置校验失败: %w", err)
+	}
+	core, err := bootstrap.InitCoreWithConfig(coreConfig)
 	if err != nil {
 		return fmt.Errorf("基础依赖初始化失败: %w", err)
 	}
@@ -55,40 +76,32 @@ func Run(ctx context.Context, args []string) error {
 		}
 	}()
 
-	// Access JWT 保持短时效；长期登录由可撤销、每次轮换的 refresh session 提供。
-	jwtExpiry := bootstrap.GetDurationEnv("JWT_ACCESS_TTL", 15*time.Minute)
-	refreshExpiry := bootstrap.GetDurationEnv("JWT_REFRESH_TTL", 30*24*time.Hour)
-	if jwtExpiry > time.Hour || refreshExpiry <= jwtExpiry {
-		return fmt.Errorf("JWT TTL 配置无效：JWT_ACCESS_TTL 必须不超过 1h，JWT_REFRESH_TTL 必须大于 access TTL")
-	}
-	jwtManager, err := newJWTManagerFromEnv()
+	jwtManager, err := newJWTManager(config.JWT)
 	if err != nil {
 		return err
 	}
 	repos := core.Repository
+	wsHub := ws.NewHub()
+	defer wsHub.Stop()
+	wsHub.SetWSMessageRepository(repos.WSMessage)
+	if err := wsHub.ConfigureEventBus(ctx, core.Redis, config.Realtime.EventChannel, config.Realtime.InstanceID); err != nil {
+		return err
+	}
 
 	// 初始化服务层。
 	passwordResetConfig := services.PasswordResetConfig{
-		SMTP: services.SMTPConfig{
-			Host:     bootstrap.GetEnv("SMTP_HOST", ""),
-			Port:     bootstrap.GetEnv("SMTP_PORT", "587"),
-			Username: bootstrap.GetEnv("SMTP_USERNAME", ""),
-			Password: bootstrap.GetEnv("SMTP_PASSWORD", ""),
-			From:     bootstrap.GetEnv("SMTP_FROM", ""),
-			FromName: bootstrap.GetEnv("SMTP_FROM_NAME", "移动云盘"),
-			UseTLS:   bootstrap.GetBoolEnv("SMTP_USE_TLS", false),
-		},
+		SMTP: config.SMTP,
 	}
 	authService := services.NewAuthServiceWithPasswordResetCache(
 		repos.User,
 		jwtManager,
-		jwtExpiry,
+		config.JWT.AccessTTL,
 		passwordResetConfig,
 		core.Redis,
-		services.WithRefreshSessionRepository(repos.RefreshSession, refreshExpiry),
+		services.WithRefreshSessionRepository(repos.RefreshSession, config.JWT.RefreshTTL),
 	)
 
-	sharedServices, err := bootstrap.InitSharedServices(core)
+	sharedServices, err := bootstrap.InitSharedServices(core, wsHub)
 	if err != nil {
 		return fmt.Errorf("初始化共享业务服务失败: %w", err)
 	}
@@ -111,8 +124,8 @@ func Run(ctx context.Context, args []string) error {
 	taskMonitor := monitor.NewTaskMonitor(monitor.Config{Logger: log.Default(), MaxHistory: 1000})
 	taskMonitor.StartCleanupJob(5*time.Minute, 30*time.Minute)
 	defer taskMonitor.Stop()
-	monitor.SetGlobalTaskMonitor(taskMonitor)
 	metricsCollector := monitor.NewMetrics()
+	operationService.SetMetrics(metricsCollector)
 
 	// 定时同步基础监控指标到 Prometheus。
 	metricsCtx, stopMetrics := context.WithCancel(ctx)
@@ -185,8 +198,8 @@ func Run(ctx context.Context, args []string) error {
 	authHandler := handlers.NewAuthHandler(authService, jwtManager)
 	accountHandler := handlers.NewAccountHandler(accountService, taskService, core.Redis)
 	taskHandler := handlers.NewTaskHandler(taskService, cloudService, accountService)
-	taskHandler.SetRedisCache(core.Redis)
-	queueStatusHandler := handlers.NewQueueStatusHandler(taskQueue)
+	taskHandler.SetTaskQueue(taskQueue)
+	queueStatusHandler := handlers.NewQueueStatusHandler(taskQueue, taskMonitor)
 	adminHandler := handlers.NewAdminHandler(adminService)
 	exchangeHandler := handlers.NewExchangeHandler(exchangeService, productService)
 	announcementHandler := handlers.NewAnnouncementHandler(announcementService)
@@ -194,6 +207,7 @@ func Run(ctx context.Context, args []string) error {
 	accountHandler.SetOperationService(operationService)
 	taskHandler.SetOperationService(operationService)
 	exchangeHandler.SetOperationService(operationService)
+	queueStatusHandler.SetOperationService(operationService)
 	auditFilter := middleware.NewAuditLogFilter()
 	// 初始化全局共享的审计 writer（避免每个请求新建 worker goroutine）。
 	middleware.SetAuditDroppedMetrics(metricsCollector)
@@ -203,16 +217,15 @@ func Run(ctx context.Context, args []string) error {
 
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.New()
-	if err := configureTrustedProxies(r, bootstrap.GetEnv("TRUSTED_PROXIES", "")); err != nil {
+	if err := configureTrustedProxies(r, config.Server.TrustedProxies); err != nil {
 		return err
 	}
-	r.MaxMultipartMemory = 8 << 20 // 8 MiB
+	r.MaxMultipartMemory = config.Server.MaxMultipartSize
 	r.Use(middleware.RequestIDMiddleware())
 	r.Use(middleware.RecoveryWithLogger())
-	requestTimeout := bootstrap.GetDurationEnv("REQUEST_TIMEOUT", 30*time.Second)
 	// SSE/WS are deliberately long-lived; applying REQUEST_TIMEOUT would close
 	// them at a fixed interval and surface as ERR_INCOMPLETE_CHUNKED_ENCODING.
-	r.Use(middleware.TimeoutMiddlewareExcept(requestTimeout, "/events", "/ws"))
+	r.Use(middleware.TimeoutMiddlewareExcept(config.Server.RequestTimeout, "/events", "/ws"))
 	r.Use(middleware.BodySizeLimitMiddleware(10 << 20)) // 10 MiB
 	r.Use(middleware.HTTPMetricsMiddleware(metricsCollector))
 	r.Use(middleware.CORSMiddleware())
@@ -233,15 +246,10 @@ func Run(ctx context.Context, args []string) error {
 	// 释放 SMS 限流器后台协程。
 	defer accountHandler.Close()
 
-	// registerRoutes exposes the global WebSocket hub. Own its lifecycle here so
+	// registerRoutes receives the process-owned WebSocket hub. Own its lifecycle here so
 	// bind failures, graceful shutdown errors and normal exits all stop the hub
 	// before repositories and the database are closed.
-	wsHub := ws.GetHub()
-	wsHub.SetWSMessageRepository(repos.WSMessage)
-	if err := wsHub.ConfigureEventBus(ctx, core.Redis, bootstrap.GetEnv("WS_EVENT_CHANNEL", "caiyun:ws:events"), bootstrap.GetEnv("INSTANCE_ID", "api")); err != nil {
-		return err
-	}
-	defer wsHub.Stop()
+	operationService.SetEventPublisher(ws.NewOperationEventPublisher(wsHub))
 
 	registerRoutes(r, routeDependencies{
 		jwtManager:       jwtManager,
@@ -250,6 +258,7 @@ func Run(ctx context.Context, args []string) error {
 		postAuthRateMw:   postAuthLimiter,
 		auditFilter:      auditFilter,
 		metricsCollector: metricsCollector,
+		wsHub:            wsHub,
 		readinessCheck:   coreReadinessCheck(core, taskQueue),
 		handlers: routeHandlers{
 			auth:         authHandler,
@@ -263,10 +272,10 @@ func Run(ctx context.Context, args []string) error {
 		},
 	})
 
-	port := bootstrap.GetEnv("PORT", "8080")
+	port := config.Server.Port
 	srv := &http.Server{
 		Addr:        ":" + port,
-		Handler:     r,
+		Handler:     otelhttp.NewHandler(r, "caiyun.api"),
 		ReadTimeout: 15 * time.Second,
 		// WriteTimeout is intentionally disabled: http.Server has no per-route
 		// write deadline, and a finite value terminates active SSE/WS streams.
@@ -295,37 +304,79 @@ func Run(ctx context.Context, args []string) error {
 		log.Println("正在关闭 API 服务...")
 	}
 
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	if err := srv.Shutdown(shutdownCtx); err != nil {
+	// Stop realtime transports before http.Server.Shutdown.  SSE handlers keep
+	// a request active until either the request context or Hub.stopCh is closed;
+	// stopping the Hub first makes those handlers leave immediately instead of
+	// consuming the whole process grace period.
+	if err := shutdownAPIServer(wsHub.StopContext, srv.Shutdown, 30*time.Second); err != nil {
 		return fmt.Errorf("关闭 API 服务失败: %w", err)
 	}
-	// HTTP 已停止接收请求。后续 defer 会依次停止 WebSocket Hub、
-	// drain 审计 writer，再关闭 Core/DB。
+	// HTTP 已停止接收请求。后续 defer 会 drain 审计 writer，再关闭 Core/DB。
 	log.Println("API 服务已停止")
 	return nil
 }
 
-func newJWTManagerFromEnv() (*jwt.Manager, error) {
-	algorithm := strings.ToUpper(strings.TrimSpace(bootstrap.GetEnv("JWT_ALGORITHM", "HS256")))
+// shutdownAPIServer keeps the realtime-to-HTTP shutdown order explicit and
+// independently testable.  The Hub Stop method is idempotent, so the deferred
+// cleanup in Run remains a safe fallback for early-startup failures.
+func shutdownAPIServer(stopRealtime func(context.Context) error, shutdown func(context.Context) error, timeout time.Duration) error {
+	if timeout <= 0 {
+		timeout = 30 * time.Second
+	}
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	// Keep part of the process-wide grace period for HTTP. A stalled realtime
+	// transport must not prevent HTTP from closing listeners and draining its
+	// own in-flight requests.
+	realtimeBudget := timeout / 3
+	if realtimeBudget <= 0 || realtimeBudget > 10*time.Second {
+		realtimeBudget = 10 * time.Second
+	}
+	var realtimeErr error
+	if stopRealtime != nil {
+		realtimeCtx, realtimeCancel := context.WithTimeout(shutdownCtx, realtimeBudget)
+		realtimeErr = stopRealtime(realtimeCtx)
+		realtimeCancel()
+	}
+	if shutdown == nil {
+		if realtimeErr != nil {
+			return fmt.Errorf("关闭实时推送: %w", realtimeErr)
+		}
+		return nil
+	}
+	shutdownErr := shutdown(shutdownCtx)
+	if realtimeErr != nil && shutdownErr != nil {
+		return errors.Join(
+			fmt.Errorf("关闭实时推送: %w", realtimeErr),
+			fmt.Errorf("关闭 HTTP 服务: %w", shutdownErr),
+		)
+	}
+	if realtimeErr != nil {
+		return fmt.Errorf("关闭实时推送: %w", realtimeErr)
+	}
+	return shutdownErr
+}
+
+func newJWTManager(config JWTConfig) (*jwt.Manager, error) {
 	var manager *jwt.Manager
-	switch algorithm {
+	switch config.Algorithm {
 	case "RS256":
 		var err error
 		manager, err = jwt.NewRS256Manager(
-			bootstrap.GetSecretEnv("JWT_PRIVATE_KEY", ""),
-			bootstrap.GetSecretEnv("JWT_PUBLIC_KEY", ""),
+			config.PrivateKey,
+			config.PublicKey,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("初始化 RS256 JWT 失败: %w", err)
 		}
 	case "HS256", "":
-		manager = jwt.NewManager(bootstrap.GetSecretEnv("JWT_SECRET", ""))
+		manager = jwt.NewManager(config.Secret)
 	default:
-		return nil, fmt.Errorf("不支持的 JWT_ALGORITHM: %s，仅支持 HS256 或 RS256", algorithm)
+		return nil, fmt.Errorf("不支持的 JWT_ALGORITHM: %s，仅支持 HS256 或 RS256", config.Algorithm)
 	}
 	return manager.SetIssuerAudience(
-		bootstrap.GetEnv("JWT_ISSUER", "caiyun-api"),
-		bootstrap.GetEnv("JWT_AUDIENCE", "caiyun-web"),
+		config.Issuer,
+		config.Audience,
 	), nil
 }

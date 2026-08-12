@@ -5,7 +5,7 @@ import type { GetProductCategoriesResponse, SearchProductsResponse, UpdateProduc
 export function searchProducts(keyword: string, limit?: number): Promise<SearchProductsResponse> {
   const fallback: SearchProductsResponse = { products: [], total: 0 }
   return request<SearchProductsResponse | ApiResponse<SearchProductsResponse>>({
-    url: '/api/products/search',
+    url: '/api/v1/products/search',
     method: 'get',
     params: { keyword, limit }
   }).then((res) => unwrapApiData(res, fallback))
@@ -14,14 +14,14 @@ export function searchProducts(keyword: string, limit?: number): Promise<SearchP
 export function getProductCategories(): Promise<GetProductCategoriesResponse> {
   const fallback: GetProductCategoriesResponse = { categories: [] }
   return request<GetProductCategoriesResponse | ApiResponse<GetProductCategoriesResponse>>({
-    url: '/api/products/categories',
+    url: '/api/v1/products/categories',
     method: 'get'
   }).then((res) => unwrapApiData(res, fallback))
 }
 
 export function updateProducts(accountId?: number): Promise<UpdateProductsResponse> {
   return request<UpdateProductsResponse>({
-    url: '/api/products/update',
+    url: '/api/v1/products/update',
     method: 'post',
     data: { account_id: accountId }
   })
