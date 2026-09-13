@@ -48,14 +48,26 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Validate repository policy and deployment scripts
+      - name: Validate deployment script syntax
         working-directory: .
         run: |
           bash -n scripts/deploy-linux.sh scripts/rollback-linux.sh scripts/health-check.sh scripts/deploy-smoke-test.sh scripts/package-release.sh scripts/migration-smoke-test.sh scripts/generate-sbom.sh scripts/sign-release.sh scripts/import-calendar.sh scripts/rotate-encryption.sh scripts/check-no-local-docs.sh scripts/check-no-release-binaries.sh scripts/deploy-k8s.sh scripts/verify-k8s-runtime.sh scripts/verify-otel-runtime.sh scripts/verify-compose-runtime.sh scripts/verify-legacy-list-drain.sh scripts/chaos-drill.sh scripts/capacity-drill.sh scripts/collect-slo-snapshot.sh
+
+      - name: Validate repository policy
+        working-directory: .
+        run: |
           bash scripts/check-no-local-docs.sh
           bash scripts/check-no-release-binaries.sh
+
+      - name: Validate deploy smoke tests
+        working-directory: .
+        run: |
           bash scripts/deploy-smoke-test.sh
           bash scripts/migration-smoke-test.sh
+
+      - name: Validate release invariants
+        working-directory: .
+        run: |
           python scripts/sync_k8s_sql.py --check
           python scripts/validate-k8s-manifests.py
           python scripts/validate-deployment-hardening.py
