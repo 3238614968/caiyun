@@ -160,7 +160,14 @@ jobs:
           CAIYUN_TEST_MYSQL_PASSWORD: caiyun_root_test
           CAIYUN_TEST_REDIS_ADDR: 127.0.0.1:6379
           CAIYUN_TEST_REDIS_DB: '15'
-        run: go test ./internal/services -run OperationMySQLRedisIntegration -count=1
+        run: |
+          # 失败时以 ::error:: 注解暴露输出尾行(匿名无法读取 Actions 日志)。
+          if out=$(go test ./internal/services -run OperationMySQLRedisIntegration -count=1 2>&1); then
+            printf '%s\n' "$out" | tail -n 3
+          else
+            printf '%s\n' "$out" | tail -n 12 | while IFS= read -r l; do echo "::error::${l}"; done
+            exit 1
+          fi
 
       - name: Vet
         env:
@@ -196,7 +203,13 @@ jobs:
       - name: Vulnerability scan
         env:
           GOTOOLCHAIN: local
-        run: govulncheck ./...
+        run: |
+          if out=$(govulncheck ./... 2>&1); then
+            printf '%s\n' "$out" | tail -n 3
+          else
+            printf '%s\n' "$out" | tail -n 12 | while IFS= read -r l; do echo "::error::${l}"; done
+            exit 1
+          fi
 
       - name: Redis queue integration test
         env:
@@ -204,7 +217,13 @@ jobs:
           CAIYUN_REDIS_INTEGRATION: '1'
           CAIYUN_TEST_REDIS_ADDR: 127.0.0.1:6379
           CAIYUN_TEST_REDIS_DB: '15'
-        run: go test ./internal/queue -run RedisIntegration -count=1
+        run: |
+          if out=$(go test ./internal/queue -run RedisIntegration -count=1 2>&1); then
+            printf '%s\n' "$out" | tail -n 3
+          else
+            printf '%s\n' "$out" | tail -n 12 | while IFS= read -r l; do echo "::error::${l}"; done
+            exit 1
+          fi
 
   windows-release:
     name: Windows package-release smoke test
