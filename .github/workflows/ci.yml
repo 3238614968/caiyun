@@ -141,7 +141,14 @@ jobs:
           CAIYUN_TEST_MYSQL_ADDR: 127.0.0.1:3306
           CAIYUN_TEST_MYSQL_USER: root
           CAIYUN_TEST_MYSQL_PASSWORD: caiyun_root_test
-        run: go test ./internal/dbmigrate -run MySQLIntegration -count=1
+        run: |
+          # 失败时把输出尾行以 ::error:: 注解暴露(GH 日志匿名 API 不可读,注解可查)。
+          if out=$(go test ./internal/dbmigrate -run MySQLIntegration -count=1 2>&1); then
+            printf '%s\n' "$out" | tail -n 3
+          else
+            printf '%s\n' "$out" | tail -n 10 | while IFS= read -r l; do echo "::error::${l}"; done
+            exit 1
+          fi
 
       - name: Operation MySQL/Redis cancel and replay race integration
         env:
