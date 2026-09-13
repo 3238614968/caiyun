@@ -68,14 +68,32 @@ jobs:
       - name: Validate release invariants
         working-directory: .
         run: |
-          python scripts/sync_k8s_sql.py --check
-          python scripts/validate-k8s-manifests.py
-          python scripts/validate-deployment-hardening.py
-          python scripts/validate-alert-metric-contract.py
-
-          python scripts/validate-dto-boundaries.py
-          python scripts/validate-streams-cutover.py
-          python -m unittest discover -s scripts/tests -p "test_*.py"
+          # 每项校验带回显标记;失败脚本会以 ::error:: 注解直接指认,避免整组日志不可见时无法定位。
+          checks=(
+            "sync_k8s_sql.py --check"
+            "validate-k8s-manifests.py"
+            "validate-deployment-hardening.py"
+            "validate-alert-metric-contract.py"
+            "validate-dto-boundaries.py"
+            "validate-streams-cutover.py"
+          )
+          for check in "${checks[@]}"; do
+            name="${check%% *}"
+            if out=$(python "scripts/$check" 2>&1); then
+              echo "::notice::INVARIANT_OK $name"
+            else
+              echo "$out" | tail -n 20
+              echo "::error::INVARIANT_FAIL $name"
+              exit 1
+            fi
+          done
+          if out=$(python -m unittest discover -s scripts/tests -p "test_*.py" 2>&1); then
+            echo "::notice::INVARIANT_OK scripts/tests"
+          else
+            echo "$out" | tail -n 40
+            echo "::error::INVARIANT_FAIL scripts/tests"
+            exit 1
+          fi
 
       - name: Validate local OpenAPI route inventory
         run: |
