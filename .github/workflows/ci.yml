@@ -68,29 +68,32 @@ jobs:
       - name: Validate release invariants
         working-directory: .
         run: |
-          # 每项校验带回显标记;失败脚本会以 ::error:: 注解直接指认,避免整组日志不可见时无法定位。
-          checks=(
-            "sync_k8s_sql.py --check"
-            "validate-k8s-manifests.py"
-            "validate-deployment-hardening.py"
-            "validate-alert-metric-contract.py"
-            "validate-dto-boundaries.py"
-            "validate-streams-cutover.py"
-          )
-          for check in "${checks[@]}"; do
-            name="${check%% *}"
-            if out=$(python "scripts/$check" 2>&1); then
-              echo "::notice::INVARIANT_OK $name"
+          # 每项校验带标记注解;失败时把真实错误尾行以 ::error:: 输出,便于匿名 API 定位。
+          run_check() {
+            local label="$1"; shift
+            local out
+            if out=$("$@" 2>&1); then
+              echo "::notice::INVARIANT_OK $label"
             else
-              echo "$out" | tail -n 20
-              echo "::error::INVARIANT_FAIL $name"
+              printf '%s\n' "$out" | tail -n 5 | while IFS= read -r line; do
+                echo "::error::${label}: ${line}"
+              done
+              echo "::error::INVARIANT_FAIL $label"
               exit 1
             fi
-          done
+          }
+          run_check sync_k8s "python" "scripts/sync_k8s_sql.py" --check
+          run_check k8s_manifests "python" "scripts/validate-k8s-manifests.py"
+          run_check deployment_hardening "python" "scripts/validate-deployment-hardening.py"
+          run_check alert_metric_contract "python" "scripts/validate-alert-metric-contract.py"
+          run_check dto_boundaries "python" "scripts/validate-dto-boundaries.py"
+          run_check streams_cutover "python" "scripts/validate-streams-cutover.py"
           if out=$(python -m unittest discover -s scripts/tests -p "test_*.py" 2>&1); then
             echo "::notice::INVARIANT_OK scripts/tests"
           else
-            echo "$out" | tail -n 40
+            printf '%s\n' "$out" | tail -n 8 | while IFS= read -r line; do
+              echo "::error::scripts/tests: ${line}"
+            done
             echo "::error::INVARIANT_FAIL scripts/tests"
             exit 1
           fi
