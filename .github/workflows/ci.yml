@@ -101,6 +101,7 @@ jobs:
           fi
 
       - name: Validate local OpenAPI route inventory
+        working-directory: .
         run: |
           python scripts/generate-openapi-local.py
           python scripts/validate-openapi-local.py
