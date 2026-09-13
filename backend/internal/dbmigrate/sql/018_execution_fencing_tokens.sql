@@ -18,7 +18,7 @@ BEGIN
           AND column_name = p_column_name
     );
     IF @column_exists = 0 THEN
-        SET @sql = CONCAT('ALTER TABLE `', p_table_name, '` ADD COLUMN `', p_column_name, '` ', p_column_definition, ', ALGORITHM=INPLACE, LOCK=NONE');
+        SET @sql = CONCAT('ALTER TABLE `', p_table_name, '` ADD COLUMN `', p_column_name, '` ', p_column_definition);
         PREPARE stmt FROM @sql;
         EXECUTE stmt;
         DEALLOCATE PREPARE stmt;
