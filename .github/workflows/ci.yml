@@ -68,6 +68,8 @@ jobs:
       - name: Validate release invariants
         working-directory: .
         run: |
+          # migrate_legacy_db 的字段重加密用例依赖 PyCryptodome(可选导入),CI 需显式安装。
+          python -m pip install --quiet --disable-pip-version-check pycryptodome
           # 每项校验带标记注解;失败时把真实错误尾行以 ::error:: 输出,便于匿名 API 定位。
           run_check() {
             local label="$1"; shift
