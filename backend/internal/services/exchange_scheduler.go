@@ -1,6 +1,7 @@
 package services
 
 import (
+	"caiyun/internal/constants"
 	"caiyun/internal/envutil"
 	"caiyun/internal/models"
 	"caiyun/internal/monitor"
@@ -9,6 +10,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -33,6 +35,12 @@ type ExchangeScheduler struct {
 	// 抢兑队列
 	preparedQueue []*models.ExchangeTask
 	queueMutex    sync.RWMutex
+
+	// 每副本独立的调度去重状态：preparedSlots 记录本副本已预热入队的时间槽，
+	// scheduledFires 记录已挂上精确触发定时器的时间槽，防止重复预热与重复触发。
+	// 跨副本的执行去重仍由 TryMarkRunning 兜底。
+	preparedSlots  map[string]bool
+	scheduledFires map[string]*time.Timer
 
 	// 停止信号
 	stopChan        chan struct{}
@@ -80,6 +88,8 @@ func NewExchangeScheduler(
 		runningTimeout:      exchangeTaskRunningTimeoutFromEnv(),
 		executionCtx:        executionCtx,
 		cancelExecution:     cancelExecution,
+		preparedSlots:       make(map[string]bool),
+		scheduledFires:      make(map[string]*time.Timer),
 	}
 }
 
@@ -139,6 +149,7 @@ func (s *ExchangeScheduler) Stop() {
 			s.cancelExecution()
 		}
 	})
+	s.stopScheduledFires()
 	s.loopWG.Wait()
 	// Running exchange attempts share executionCtx.  Cancel it before waiting so
 	// a process shutdown does not leave a scheduler task sleeping between retry
@@ -217,9 +228,13 @@ func (s *ExchangeScheduler) checkAndPrepareExchange() {
 		if s.isStopped() {
 			return
 		}
-		if s.claimSchedulerSlot("prepare", now, hour, minute, 10*time.Minute) {
+		// 每个副本各自预热队列与 JWT（预热只产生本副本内存状态与连接准备，
+		// 无跨副本副作用），避免未抢到 prepare 租约的副本在 :00 触发时才
+		// 同步预热，把首个请求拖慢数秒。跨副本执行去重由 TryMarkRunning 保证。
+		if s.markPreparedOnce(now, hour, minute) {
 			log.Printf("【抢兑调度器】准备 %02d:%02d 抢兑队列...", hour, minute)
 			s.prepareQueueByTime(hour, minute)
+			s.schedulePreciseFire(now, hour, minute)
 		}
 	}
 	if hour, minute, ok := scheduledExecuteSlot(now); ok {
@@ -228,9 +243,103 @@ func (s *ExchangeScheduler) checkAndPrepareExchange() {
 		}
 		// 执行阶段不再使用整分钟租约。多副本同时触发时由 TryMarkRunning 抢占任务执行权，
 		// 避免拿到租约的实例在真正执行前崩溃导致整个时间槽漏执行。
-		log.Printf("【抢兑调度器】执行 %02d:%02d 抢兑...", hour, minute)
+		log.Printf("【抢兑调度器】执行 %02d:%02d 抢兑（兜底 tick）...", hour, minute)
 		s.executeExchangeByTime(hour, minute)
 	}
+}
+
+// markPreparedOnce 保证同一副本对同一时间槽只预热入队一次（按日期+时分去重）。
+func (s *ExchangeScheduler) markPreparedOnce(now time.Time, hour, minute int) bool {
+	executeTime := now.Add(time.Duration(constants.ExchangePreInitSeconds) * time.Second)
+	key := fmt.Sprintf("%s:%02d%02d", executeTime.Format("20060102"), hour, minute)
+
+	s.queueMutex.Lock()
+	defer s.queueMutex.Unlock()
+	if s.preparedSlots[key] {
+		return false
+	}
+	s.preparedSlots[key] = true
+
+	// 轻量清理：只保留当天的槽位标记，避免长期运行内存增长。
+	today := executeTime.Format("20060102")
+	for existing := range s.preparedSlots {
+		if !strings.HasPrefix(existing, today+":") && existing != key {
+			delete(s.preparedSlots, existing)
+		}
+	}
+	return true
+}
+
+// schedulePreciseFire 在准备阶段（默认提前 ExchangePreInitSeconds 秒）为整点
+// 抢兑挂一个精确定时器，到点（如 12:00:00.000）直接派发，不再依赖粗粒度唤醒
+// tick 的秒级抖动；兜底 :00 tick 仍可捕获准备之后新建的迟到任务。
+func (s *ExchangeScheduler) schedulePreciseFire(now time.Time, hour, minute int) {
+	executeTime := now.Add(time.Duration(constants.ExchangePreInitSeconds) * time.Second)
+	slotStart := time.Date(
+		executeTime.Year(), executeTime.Month(), executeTime.Day(),
+		hour, minute, 0, 0, executeTime.Location(),
+	)
+	delay := time.Until(slotStart)
+	// 时钟纠偏：整点以服务端时间为准，EXCHANGE_FIRE_OFFSET 正值=延后发、
+	// 负值=提前发（默认 0），用于补偿本机与服务端的时钟偏差。
+	delay += exchangeFireOffset()
+	// 只在合理窗口内挂精确触发器，过远或已过点交给兜底 tick。
+	if delay <= 0 || delay > 2*time.Minute {
+		return
+	}
+
+	key := fmt.Sprintf("fire:%s:%02d%02d", slotStart.Format("20060102"), hour, minute)
+	s.queueMutex.Lock()
+	if _, exists := s.scheduledFires[key]; exists {
+		s.queueMutex.Unlock()
+		return
+	}
+	timer := time.AfterFunc(delay, func() {
+		s.queueMutex.Lock()
+		delete(s.scheduledFires, key)
+		s.queueMutex.Unlock()
+		if s.isStopped() {
+			return
+		}
+		log.Printf("【抢兑调度器】精确触发 %02d:%02d 抢兑", hour, minute)
+		s.executeExchangeByTime(hour, minute)
+	})
+	s.scheduledFires[key] = timer
+	s.queueMutex.Unlock()
+}
+
+// stopScheduledFires 停止并清空所有已挂起的精确触发定时器。
+func (s *ExchangeScheduler) stopScheduledFires() {
+	s.queueMutex.Lock()
+	defer s.queueMutex.Unlock()
+	for key, timer := range s.scheduledFires {
+		if timer != nil {
+			timer.Stop()
+		}
+		delete(s.scheduledFires, key)
+	}
+}
+
+// exchangeFireOffset 读取整点精确触发的时钟纠偏量（EXCHANGE_FIRE_OFFSET）。
+// 用 time.ParseDuration 解析以支持负值（envutil.Duration 只接受正数），
+// 限制在 ±5s 防止误配。
+func exchangeFireOffset() time.Duration {
+	raw := strings.TrimSpace(os.Getenv("EXCHANGE_FIRE_OFFSET"))
+	if raw == "" {
+		return 0
+	}
+	offset, err := time.ParseDuration(raw)
+	if err != nil {
+		return 0
+	}
+	const cap = 5 * time.Second
+	if offset > cap {
+		return cap
+	}
+	if offset < -cap {
+		return -cap
+	}
+	return offset
 }
 
 func (s *ExchangeScheduler) claimSchedulerSlot(kind string, now time.Time, hour, minute int, ttl time.Duration) bool {

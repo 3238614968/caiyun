@@ -13,9 +13,12 @@ import (
 )
 
 const (
-	exchangeSubmitLockPrefix         = "exchange:submit:"
-	defaultExchangeRequestsPerSecond = 6
-	defaultExchangeRequestBurst      = 2
+	exchangeSubmitLockPrefix = "exchange:submit:"
+	// 定时整点抢兑需要在 :00 瞬间把整波账号一起发出，过低的速率会把 20~30 个账号
+	// 摊到 3~5 秒导致抢不到货。这里放开首波速率与突发量，真正的并发上限由
+	// 抢兑调度器的 concurrency 令牌桶与每账号+商品的提交锁共同兜底。
+	defaultExchangeRequestsPerSecond = 30
+	defaultExchangeRequestBurst      = 30
 	defaultExchangeSubmitLockTTL     = 5 * time.Second
 	defaultExchangeSubmitLockJanitor = 30 * time.Second
 )

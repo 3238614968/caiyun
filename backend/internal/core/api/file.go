@@ -260,6 +260,107 @@ type DeleteFilesResp struct {
 	Message string `json:"message"`
 }
 
+// TriggerAlbumBackup 触发一次真实的相册备份快照：
+// hcy/backup/createSnapshot -> PUT 分片 -> hcy/backup/completeSnapshot，
+// 请求头 op-type=backup（sub-op=200），与 App 手动备份链路一致。
+func (f *FileAPI) TriggerAlbumBackup() error {
+	content := []byte(randomUploadContent() + "|caiyun-backup-snapshot")
+	contentHash := sha256Hex(content)
+	size := len(content)
+	timestamp := time.Now().UnixMilli()
+
+	headers := buildUploadHeaders("10000023", "backup")
+	headers["Content-Type"] = "application/json"
+
+	createBody := map[string]interface{}{
+		"contentHash":          contentHash,
+		"contentHashAlgorithm": "SHA256",
+		"count":                1,
+		"fileExtension":        "zip",
+		"partInfos": []map[string]interface{}{
+			{"end": size, "partNumber": 1, "partSize": size, "start": 0},
+		},
+		"size":      size,
+		"timestamp": timestamp,
+	}
+
+	createResp, err := f.client.Post("https://personal-kd-njs.yun.139.com/hcy/backup/createSnapshot", headers, createBody)
+	if err != nil {
+		return fmt.Errorf("创建备份快照失败: %w", err)
+	}
+	createBodyText, err := f.client.ReadResponseBody(createResp)
+	if err != nil {
+		return fmt.Errorf("读取备份快照响应失败: %w", err)
+	}
+
+	var createResult struct {
+		Success bool   `json:"success"`
+		Code    string `json:"code"`
+		Message string `json:"message"`
+		Data    struct {
+			FileID      string `json:"fileId"`
+			UploadID    string `json:"uploadId"`
+			RapidUpload bool   `json:"rapidUpload"`
+			PartInfos   []struct {
+				UploadURL string `json:"uploadUrl"`
+			} `json:"partInfos"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(createBodyText), &createResult); err != nil {
+		return fmt.Errorf("解析备份快照响应失败: %s", summarizeFileBody(createBodyText))
+	}
+	if !createResult.Success || createResult.Data.FileID == "" {
+		return fmt.Errorf("创建备份快照失败: code=%s msg=%s", createResult.Code, createResult.Message)
+	}
+
+	if !createResult.Data.RapidUpload {
+		if len(createResult.Data.PartInfos) == 0 || createResult.Data.PartInfos[0].UploadURL == "" {
+			return fmt.Errorf("创建备份快照失败: uploadUrl 为空")
+		}
+		if err := putBinaryToUploadURL(createResult.Data.PartInfos[0].UploadURL, content); err != nil {
+			return fmt.Errorf("上传备份快照内容失败: %w", err)
+		}
+	}
+
+	completeBody := map[string]interface{}{
+		"contentHash":          contentHash,
+		"contentHashAlgorithm": "SHA256",
+		"count":                1,
+		"fileId":               createResult.Data.FileID,
+		"size":                 size,
+		"timestamp":            time.Now().UnixMilli(),
+		"uploadId":             createResult.Data.UploadID,
+	}
+	completeResp, err := f.client.Post("https://personal-kd-njs.yun.139.com/hcy/backup/completeSnapshot", headers, completeBody)
+	if err != nil {
+		return fmt.Errorf("完成备份快照失败: %w", err)
+	}
+	completeText, err := f.client.ReadResponseBody(completeResp)
+	if err != nil {
+		return fmt.Errorf("读取完成备份响应失败: %w", err)
+	}
+	var completeResult struct {
+		Success bool   `json:"success"`
+		Code    string `json:"code"`
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal([]byte(completeText), &completeResult); err != nil {
+		return fmt.Errorf("解析完成备份响应失败: %s", summarizeFileBody(completeText))
+	}
+	if !completeResult.Success {
+		return fmt.Errorf("完成备份快照失败: code=%s msg=%s", completeResult.Code, completeResult.Message)
+	}
+	return nil
+}
+
+func summarizeFileBody(body string) string {
+	trimmed := strings.TrimSpace(body)
+	if len(trimmed) > 200 {
+		return trimmed[:200]
+	}
+	return trimmed
+}
+
 // DeleteFiles 删除文件
 func (f *FileAPI) DeleteFiles(fileIDs []string) (*DeleteFilesResp, error) {
 	if len(fileIDs) == 0 {

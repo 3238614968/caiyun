@@ -245,6 +245,54 @@ func NewTaskCatalog() *TaskCatalog {
 			},
 		},
 		{
+			Code:           "token_pk",
+			Name:           "算力大作战",
+			Description:    "自动完成算力大作战任务并领取Token奖励",
+			SortOrder:      152,
+			DefaultEnabled: true,
+			RunInBatch:     true,
+			Aliases:        []string{"tokenpk", "suanli"},
+			execute: func(r *TaskRunner) *TaskResult {
+				return r.runTokenPKTask()
+			},
+		},
+		{
+			Code:           "make_wish",
+			Name:           "许愿赢好礼",
+			Description:    "每月许愿并完成任务累积抽奖码（可用CAIYUN_MAKEWISH_PRIZE指定愿望关键字）",
+			SortOrder:      154,
+			DefaultEnabled: true,
+			RunInBatch:     true,
+			Aliases:        []string{"makewish", "wish"},
+			execute: func(r *TaskRunner) *TaskResult {
+				return r.runMakeWishTask()
+			},
+		},
+		{
+			Code:           "fun_ai",
+			Name:           "趣玩AI抽奖",
+			Description:    "体验AI功能累积抽奖次数并抽奖",
+			SortOrder:      156,
+			DefaultEnabled: true,
+			RunInBatch:     true,
+			Aliases:        []string{"funai", "playai"},
+			execute: func(r *TaskRunner) *TaskResult {
+				return r.runFunAITask()
+			},
+		},
+		{
+			Code:           "poster_activity",
+			Name:           "校园海报活动",
+			Description:    "完成AI相机体验任务并抽取校园海报活动奖励",
+			SortOrder:      158,
+			DefaultEnabled: true,
+			RunInBatch:     true,
+			Aliases:        []string{"poster", "newyear_special"},
+			execute: func(r *TaskRunner) *TaskResult {
+				return r.runPosterTask()
+			},
+		},
+		{
 			Code:           "after_task",
 			Name:           "收尾清理",
 			Description:    "清理任务批次中产生的临时文件和分享链接",

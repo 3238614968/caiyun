@@ -49,9 +49,6 @@ func (h *Hub) HandleSSE(w http.ResponseWriter, r *http.Request, userID uint) {
 			if !writeSSE(w, msg) {
 				return
 			}
-			if repo := h.getSSERepo(); repo != nil && msg.UserID != 0 && msg.MessageID != "" {
-				_, _ = repo.MarkAsDeliveredByMessageID(userID, msg.MessageID)
-			}
 		}
 	}
 }
@@ -90,6 +87,10 @@ func (h *Hub) unregisterSSE(c *SSEClient) {
 		}
 	}
 }
+
+// replaySSE 有意不做 ACK：SSE 只能证明字节写入过 HTTP 响应，无法证明浏览器
+// 真正消费了事件。持久化消息保持 pending，直到 WebSocket 显式 ACK（或 TTL
+// 清理）。Last-Event-ID 仅减少重连重放，不改变持久投递状态。
 func (h *Hub) replaySSE(w http.ResponseWriter, r *http.Request, uid uint, repo *repository.WSMessageRepository) {
 	last := requestedSSELastEventID(r)
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
@@ -111,7 +112,6 @@ func (h *Hub) replaySSE(w http.ResponseWriter, r *http.Request, uid uint, repo *
 		if !writeSSE(w, msg) {
 			return
 		}
-		_, _ = repo.MarkAsDeliveredByMessageID(uid, row.MessageID)
 	}
 }
 
