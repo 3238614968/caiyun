@@ -46,6 +46,15 @@ fi
 grep -q '^API_MONITOR_TOKEN=' "$ENV_FILE" || printf '\nAPI_MONITOR_TOKEN=caiyun_api_e2e_token\n' >> "$ENV_FILE"
 
 cleanup() {
+  local status=$?
+  # 失败时先导出容器状态与关键日志(down -v 之后无从取证)。
+  if [ "$status" -ne 0 ] && [ "${KEEP_E2E_STACK:-0}" != "1" ]; then
+    docker compose --project-name "$PROJECT_NAME" --env-file "$ENV_FILE" \
+      -f "$ROOT_DIR/docker-compose.yml" -f "$ROOT_DIR/docker-compose.e2e.yml" ps -a || true
+    docker compose --project-name "$PROJECT_NAME" --env-file "$ENV_FILE" \
+      -f "$ROOT_DIR/docker-compose.yml" -f "$ROOT_DIR/docker-compose.e2e.yml" \
+      logs --tail 40 backend-migrate backend-api backend-worker || true
+  fi
   if [[ "${KEEP_E2E_STACK:-0}" != "1" ]]; then
     docker compose --project-name "$PROJECT_NAME" --env-file "$ENV_FILE" \
       -f "$ROOT_DIR/docker-compose.yml" -f "$ROOT_DIR/docker-compose.e2e.yml" down -v --remove-orphans
