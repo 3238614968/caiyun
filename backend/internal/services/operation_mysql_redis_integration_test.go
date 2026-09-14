@@ -259,6 +259,15 @@ func assertOperationDeadLetterReplayRace(t *testing.T, service *OperationService
 	}
 	length, err := q.GetQueueLength()
 	if err != nil || length != 1 {
+		// 临时诊断(CI 无本地 MySQL/Redis 可复现):打印两次 queued_at 与三种队列长度,
+		// 定位重放入队为何未体现在 pending 队列。
+		delayed, delayedErr := q.GetDelayedLength()
+		dead, deadErr := q.GetDeadLetterLength()
+		t.Logf("replay diagnostic: submit_queued_at=%s final_queued_at=%s pending=%d pending_err=%v delayed=%d(delayed_err=%v) dead=%d(dead_err=%v)",
+			op.QueuedAt.Format(time.RFC3339Nano), final.QueuedAt.Format(time.RFC3339Nano),
+			length, err, delayed, delayedErr, dead, deadErr)
+	}
+	if err != nil || length != 1 {
 		t.Fatalf("replay must enqueue exactly once: length=%d err=%v", length, err)
 	}
 	replayedMessage, err := q.Dequeue(time.Second)

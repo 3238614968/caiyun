@@ -165,7 +165,7 @@ jobs:
           if out=$(go test ./internal/services -run OperationMySQLRedisIntegration -count=1 2>&1); then
             printf '%s\n' "$out" | tail -n 3
           else
-            printf '%s\n' "$out" | tail -n 12 | while IFS= read -r l; do echo "::error::${l}"; done
+            printf '%s\n' "$out" | tail -n 30 | while IFS= read -r l; do echo "::error::${l}"; done
             exit 1
           fi
 
