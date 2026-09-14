@@ -5,7 +5,14 @@ set -u
 PREFIX=/data/data/com.termux/files/usr
 HOME_DIR=/data/data/com.termux/files/home
 NGX=$HOME_DIR/caiyun/nginx
-DIST=$HOME_DIR/caiyun/dist
+DIST=${CAIYUN_DIST:-$HOME_DIR/caiyun/dist}
+
+# 前端产物必须存在：nginx 在 root 指向空目录时照样能启动并通过端口探针，
+# 若不校验会产出一个访问即 404 的"成功部署"。
+if [ ! -f "$DIST/index.html" ]; then
+  echo "[nginx] FAIL: $DIST/index.html not found - build frontend on PC and upload dist/ first" >&2
+  exit 1
+fi
 mkdir -p "$NGX/logs" "$NGX/tmp" "$NGX/conf"
 
 cat > "$NGX/conf/nginx.conf" <<EOF

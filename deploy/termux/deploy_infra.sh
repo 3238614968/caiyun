@@ -27,23 +27,37 @@ fi
 . "$SECRETS"
 
 # ---------- Redis ----------
-# 队列（Streams）、锁与会话键都在本实例，必须 noeviction：
-# allkeys-lru 会在内存达到上限时淘汰 stream/pending/锁键，导致任务静默丢失或重复执行。
-# 内存超限时 Redis 返回 OOM 错误而非丢键，由应用侧感知并告警。
+# 队列（Streams）、锁与会话键都在本实例：
+# 1) maxmemory-policy 必须 noeviction——allkeys-lru 会在内存达到上限时淘汰
+#    stream/pending/锁键，导致任务静默丢失或重复执行；超限时返回 OOM 错误由应用侧感知。
+# 2) 必须启用 AOF——RDB 900s 快照在进程/设备异常退出时会丢失最近未落盘的
+#    队列/锁/会话状态；appendfsync everysec 把丢失窗口压到 ~1s。
 REDIS_MAXMEMORY=${REDIS_MAXMEMORY:-256mb}
+redis_persist_ok() {
+  redis-cli -a "$REDIS_PW" -p 6379 info persistence 2>/dev/null | grep -q 'aof_enabled:1'
+}
 if redis-cli -a "$REDIS_PW" -p 6379 ping 2>/dev/null | grep -q PONG; then
-  echo "[redis] already running, enforcing noeviction"
+  echo "[redis] already running, enforcing noeviction + AOF"
   redis-cli -a "$REDIS_PW" -p 6379 config set maxmemory-policy noeviction >/dev/null 2>&1 \
     || echo "[redis] WARN: failed to enforce noeviction on running instance" >&2
+  if ! redis_persist_ok; then
+    redis-cli -a "$REDIS_PW" -p 6379 config set appendonly yes >/dev/null 2>&1
+    redis-cli -a "$REDIS_PW" -p 6379 config rewrite >/dev/null 2>&1 || true
+    sleep 2
+    redis_persist_ok || { echo "[redis] FAIL: cannot enable AOF on running instance" >&2; exit 1; }
+  fi
+  echo "[redis] OK (noeviction, AOF)"
 else
   redis-server --port 6379 --requirepass "$REDIS_PW" \
     --dir "$DATA/redis" --daemonize yes --save '900 1' \
+    --appendonly yes --appendfsync everysec \
     --logfile "$LOG/redis.log" --maxmemory "$REDIS_MAXMEMORY" \
     --maxmemory-policy noeviction
   sleep 1
   redis-cli -a "$REDIS_PW" -p 6379 ping 2>/dev/null | grep -q PONG \
     || { echo "[redis] FAIL"; tail -5 "$LOG/redis.log" >&2; exit 1; }
-  echo "[redis] OK (noeviction)"
+  redis_persist_ok || { echo "[redis] FAIL: AOF not enabled" >&2; tail -5 "$LOG/redis.log" >&2; exit 1; }
+  echo "[redis] OK (noeviction, AOF)"
 fi
 
 # ---------- MariaDB ----------
@@ -67,18 +81,21 @@ mysql_root_ok() {
 mysql_root_anon_ok() {
   "$MYSQLADMIN" --socket="$MYSQL_SOCK" -u root ping 2>/dev/null | grep -q alive
 }
+# 服务是否可连（匿名或已设密码均可）——用于"进程就绪"判定，不能用 mysql_root_ok，
+# 否则全新 datadir（root 空密码）会在下面设密码之前就误判失败退出。
+mysql_up() { mysql_root_ok || mysql_root_anon_ok; }
 
-if [ -f "$BASE/mysqld.pid" ] && kill -0 "$(cat "$BASE/mysqld.pid")" 2>/dev/null && mysql_root_ok; then
+if [ -f "$BASE/mysqld.pid" ] && kill -0 "$(cat "$BASE/mysqld.pid")" 2>/dev/null && mysql_up; then
   echo "[mariadb] already running"
 else
   nohup "$MYSQLD" --datadir="$MYSQL_DATA" --socket="$MYSQL_SOCK" --port=3306 \
     --pid-file="$BASE/mysqld.pid" --log-error="$LOG/mariadb.log" \
     >> "$LOG/mariadb.out" 2>&1 &
   for i in $(seq 1 15); do
-    mysql_root_ok && break
+    mysql_up && break
     sleep 1
   done
-  mysql_root_ok || { echo "[mariadb] FAIL"; tail -20 "$LOG/mariadb.log" >&2; tail -20 "$LOG/mariadb.out" >&2; exit 1; }
+  mysql_up || { echo "[mariadb] FAIL"; tail -20 "$LOG/mariadb.log" >&2; tail -20 "$LOG/mariadb.out" >&2; exit 1; }
   echo "[mariadb] started"
 fi
 

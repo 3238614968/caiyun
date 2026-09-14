@@ -17,13 +17,20 @@ MYSQLADMIN=$(command -v mariadb-admin || echo mysqladmin)
 MYSQL_SOCK="$BASE/mysqld.sock"
 BIN="$BASE/caiyun-linux"
 
-# ---- Redis（noeviction：队列/锁/会话键不可被 LRU 淘汰，见 deploy_infra.sh 注释）----
+# ---- Redis（noeviction + AOF：队列/锁/会话键不可被淘汰，崩溃丢失窗口 ≤1s，见 deploy_infra.sh 注释）----
 redis-cli -a "$REDIS_PW" -p 6379 ping 2>/dev/null | grep -q PONG || {
   redis-server --port 6379 --requirepass "$REDIS_PW" --dir "$BASE/data/redis" \
-    --daemonize yes --save '900 1' --logfile "$LOG/redis.log" \
+    --daemonize yes --save '900 1' --appendonly yes --appendfsync everysec \
+    --logfile "$LOG/redis.log" \
     --maxmemory "${REDIS_MAXMEMORY:-256mb}" --maxmemory-policy noeviction
   echo "[redis] started"
 }
+# 对已在运行但缺 AOF 的旧实例补齐（幂等）
+if redis-cli -a "$REDIS_PW" -p 6379 ping 2>/dev/null | grep -q PONG \
+   && ! redis-cli -a "$REDIS_PW" -p 6379 info persistence 2>/dev/null | grep -q 'aof_enabled:1'; then
+  redis-cli -a "$REDIS_PW" -p 6379 config set appendonly yes >/dev/null 2>&1 \
+    && echo "[redis] AOF enabled on running instance"
+fi
 
 # ---- MariaDB（root 已设密码，探测必须带凭据）----
 if ! "$MYSQLADMIN" --socket="$MYSQL_SOCK" -u root -p"$DB_ROOT_PW" ping 2>/dev/null | grep -q alive; then
