@@ -53,7 +53,11 @@ cleanup() {
       -f "$ROOT_DIR/docker-compose.yml" -f "$ROOT_DIR/docker-compose.e2e.yml" ps -a || true
     docker compose --project-name "$PROJECT_NAME" --env-file "$ENV_FILE" \
       -f "$ROOT_DIR/docker-compose.yml" -f "$ROOT_DIR/docker-compose.e2e.yml" \
-      logs --tail 40 backend-migrate backend-api backend-worker || true
+      logs --no-color --tail 10 backend-migrate backend-worker || true
+    # api 日志最后输出且保留最多行,方便 CI 端按前缀截取注解。
+    docker compose --project-name "$PROJECT_NAME" --env-file "$ENV_FILE" \
+      -f "$ROOT_DIR/docker-compose.yml" -f "$ROOT_DIR/docker-compose.e2e.yml" \
+      logs --no-color --tail 50 backend-api || true
   fi
   if [[ "${KEEP_E2E_STACK:-0}" != "1" ]]; then
     docker compose --project-name "$PROJECT_NAME" --env-file "$ENV_FILE" \

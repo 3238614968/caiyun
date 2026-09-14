@@ -453,9 +453,9 @@ jobs:
           code=${PIPESTATUS[0]}
           set -e
           if [ "$code" -ne 0 ]; then
-            # 失败特征行优先(尾部常被 compose down 清理日志淹没),再附末 5 行上下文。
-            grep -E 'Error|error|failed|Failed|FAIL|✘|exited|unhealthy|No such|not found|assertion|panic|fatal|Fatal|refused|missing|required|expected' "$RUNNER_TEMP/e2e.log" | tail -n 14 | while IFS= read -r l; do echo "::error::e2e|${l}"; done
-            tail -n 5 "$RUNNER_TEMP/e2e.log" | while IFS= read -r l; do echo "::error::e2e~|${l}"; done
+            # 直接抽取 api 容器日志尾行(中文/FATAL 等关键词不可靠),附依赖失败行。
+            grep -a 'caiyun-e2e-api ' "$RUNNER_TEMP/e2e.log" | tail -n 10 | while IFS= read -r l; do echo "::error::api|${l}"; done
+            grep -aE 'dependency failed|exited \(' "$RUNNER_TEMP/e2e.log" | tail -n 3 | while IFS= read -r l; do echo "::error::dep|${l}"; done
             exit "$code"
           fi
 
