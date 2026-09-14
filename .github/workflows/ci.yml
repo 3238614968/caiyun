@@ -439,7 +439,16 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Run real Docker Compose E2E
-        run: bash scripts/e2e-compose.sh
+        run: |
+          # 保留实时日志的同时捕获尾部,失败时以 ::error:: 注解暴露关键行。
+          set +e
+          bash scripts/e2e-compose.sh 2>&1 | tail -n 200 | tee "$RUNNER_TEMP/e2e.log"
+          code=${PIPESTATUS[0]}
+          set -e
+          if [ "$code" -ne 0 ]; then
+            tail -n 10 "$RUNNER_TEMP/e2e.log" | while IFS= read -r l; do echo "::error::e2e|${l}"; done
+            exit "$code"
+          fi
 
   release:
     name: GitHub Release artifacts
