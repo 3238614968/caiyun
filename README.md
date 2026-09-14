@@ -75,30 +75,43 @@ flowchart LR
 
 ### 环境要求
 
-- Go `1.25.13`
-- Node.js `20+` 与 npm
-- MySQL `8.0+`
-- Redis `7.0+`
-- Docker Compose（推荐）
+- Docker Engine 与 Docker Compose v2（Docker 部署）
+- Go `1.25.13`、Node.js `20+` 与 npm（仅源码开发）
+- MySQL `8.0+`、Redis `7.0+`（仅源码开发或外部依赖部署）
 
 ### 使用 Docker Compose
 
 ```bash
-cp .env.example .env
-# 设置数据库、Redis、JWT、数据加密和 Worker 监控相关密钥
-docker compose up --build -d
-docker compose ps
+bash scripts/deploy-compose.sh
+```
+
+Windows PowerShell：
+
+```powershell
+.\scripts\deploy-compose.ps1
 ```
 
 默认访问地址：
 
 | 服务 | 地址 |
 | --- | --- |
-| Web 前端 | `http://localhost` |
-| API 就绪探针 | `http://localhost/readyz` |
-| Worker 就绪探针 | `http://127.0.0.1:8081/readyz` |
+| Web 前端 | 脚本输出的 `CAIYUN_HTTP_PORT` 地址 |
+| API 就绪探针 | 脚本输出的 `CAIYUN_API_PORT/readyz` 地址 |
+| Worker 就绪探针 | 脚本输出的 `CAIYUN_WORKER_PORT/readyz` 地址 |
 
-Compose 首先执行 `backend-migrate`。迁移成功后，`backend-api` 和 `backend-worker` 才会进入启动阶段。
+部署脚本会在首次运行时生成 `.env`、构建镜像、等待 MySQL/Redis 就绪、执行 `backend-migrate`、幂等创建初始管理员、启动 API/Worker/前端并执行健康检查。脚本不会覆盖已有 `.env`，也不会删除数据卷。
+
+生产环境需要先准备 HTTPS 反向代理，并使用：
+
+```bash
+PUBLIC_ORIGIN=https://cloud.example.com bash scripts/deploy-compose.sh --production
+```
+
+如果只需要本地 HTTP 演示，可以显式使用：
+
+```bash
+bash scripts/deploy-compose.sh --local
+```
 
 ### 本地源码运行
 

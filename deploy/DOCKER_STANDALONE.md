@@ -15,7 +15,7 @@ docker build -t registry.example.com/team/caiyun-backend:${VERSION} \
   --build-arg BUILD_TIME=${BUILD_TIME} \
   backend
 
-docker build -t registry.example.com/team/caiyun-frontend:${VERSION} frontend
+docker build -t registry.example.com/team/caiyun-frontend:${VERSION} -f frontend/Dockerfile .
 ```
 
 前端构建前确认 `frontend/.env.production` 中的 API 与推送地址。`VITE_*` 配置已固化到静态文件，运行容器时再设置不会改变前端行为。

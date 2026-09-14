@@ -51,7 +51,7 @@ jobs:
       - name: Validate deployment script syntax
         working-directory: .
         run: |
-          bash -n scripts/deploy-linux.sh scripts/rollback-linux.sh scripts/health-check.sh scripts/deploy-smoke-test.sh scripts/package-release.sh scripts/migration-smoke-test.sh scripts/generate-sbom.sh scripts/sign-release.sh scripts/import-calendar.sh scripts/rotate-encryption.sh scripts/check-no-local-docs.sh scripts/check-no-release-binaries.sh scripts/deploy-k8s.sh scripts/verify-k8s-runtime.sh scripts/verify-otel-runtime.sh scripts/verify-compose-runtime.sh scripts/verify-legacy-list-drain.sh scripts/chaos-drill.sh scripts/capacity-drill.sh scripts/collect-slo-snapshot.sh
+          bash -n scripts/deploy-linux.sh scripts/rollback-linux.sh scripts/health-check.sh scripts/deploy-smoke-test.sh scripts/deploy-compose.sh scripts/package-release.sh scripts/migration-smoke-test.sh scripts/generate-sbom.sh scripts/sign-release.sh scripts/import-calendar.sh scripts/rotate-encryption.sh scripts/check-no-local-docs.sh scripts/check-no-release-binaries.sh scripts/deploy-k8s.sh scripts/verify-k8s-runtime.sh scripts/verify-otel-runtime.sh scripts/verify-compose-runtime.sh scripts/verify-legacy-list-drain.sh scripts/chaos-drill.sh scripts/capacity-drill.sh scripts/collect-slo-snapshot.sh
 
       - name: Validate repository policy
         working-directory: .
@@ -376,7 +376,7 @@ jobs:
         run: >-
           docker build -f frontend/Dockerfile
           -t caiyun-frontend:ci
-          -t "${IMAGE_PREFIX}/caiyun-frontend:${IMAGE_TAG}" frontend
+          -t "${IMAGE_PREFIX}/caiyun-frontend:${IMAGE_TAG}" .
 
       - name: Trivy backend image
         uses: aquasecurity/trivy-action@v0.36.0
@@ -458,6 +458,34 @@ jobs:
             grep -aE 'dependency failed|exited \(' "$RUNNER_TEMP/e2e.log" | tail -n 3 | while IFS= read -r l; do echo "::error::dep|${l}"; done
             exit "$code"
           fi
+
+  compose-deploy:
+    name: Docker Compose one-command deployment
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run one-command local deployment
+        run: |
+          set +e
+          bash scripts/deploy-compose.sh --local 2>&1 | tee "$RUNNER_TEMP/compose-deploy.log"
+          code=${PIPESTATUS[0]}
+          set -e
+          if [ "$code" -ne 0 ]; then
+            docker compose ps -a || true
+            docker compose logs --no-color --tail=150 backend-migrate backend-admin-init backend-api backend-worker frontend || true
+            exit "$code"
+          fi
+
+      - name: Verify deployment is repeatable
+        run: bash scripts/deploy-compose.sh --local
+
+      - name: Cleanup deployment stack
+        if: always()
+        run: docker compose down -v --remove-orphans || true
 
   release:
     name: GitHub Release artifacts

@@ -12,6 +12,8 @@
 | 开发、联调、预发布 | [源码部署](./SOURCE_DEPLOYMENT.md) | 本机或容器化依赖 | 需要调试、热更新或逐组件启动 |
 | 多副本与集群调度 | [Kubernetes](./KUBERNETES.md) | 清单内置或外部托管服务 | 滚动升级、资源约束、探针和高可用 |
 
+首次使用 Docker Compose 时，推荐直接运行仓库根目录的 `bash scripts/deploy-compose.sh`。它会生成配置、构建镜像、执行迁移和管理员初始化，并验证服务健康；详细说明见 [Docker Compose 部署](./DOCKER_COMPOSE.md)。
+
 ## 专题文档
 
 - [Nginx、HTTPS 与实时推送](./NGINX_TLS.md)

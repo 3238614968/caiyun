@@ -1,20 +1,31 @@
-# 契约文件（src/api/generated）必须在宿主机/CI 先用仓库根的 python 脚本生成
-# （scripts/generate-api-client-types.py），构建上下文里直接 COPY 进来；
-# 容器内没有 python，也无法 `cd ..` 回到仓库根，因此绕过 prebuild 钩子。
+# Generate the ignored frontend contract inside the Docker build. The build
+# context is the repository root so a clean checkout does not depend on a
+# developer/CI host having Python or a stale generated file.
+FROM python:3.13-alpine AS contracts
+
+WORKDIR /src
+COPY backend ./backend
+COPY scripts ./scripts
+
+RUN python scripts/generate-openapi-local.py \
+ && python scripts/generate-asyncapi-local.py \
+ && python scripts/generate-api-client-types.py
+
 FROM node:20-alpine AS builder
 
 WORKDIR /app
 
-COPY package*.json ./
+COPY frontend/package*.json ./
 RUN npm ci
 
-COPY . .
+COPY frontend/ .
+COPY --from=contracts /src/frontend/src/api/generated ./src/api/generated
 
 RUN npm run build --ignore-scripts && npm run bundle:budget
 
 FROM nginxinc/nginx-unprivileged:1.27-alpine
 
-COPY nginx.conf /etc/nginx/conf.d/default.conf
+COPY frontend/nginx.conf /etc/nginx/conf.d/default.conf
 COPY --from=builder /app/dist /usr/share/nginx/html
 
 EXPOSE 8080

@@ -29,3 +29,9 @@ func validatePasswordStrength(username string, password string) error {
 	}
 	return nil
 }
+
+// ValidatePasswordStrength exposes the shared password policy to trusted
+// bootstrap flows without duplicating the registration rules.
+func ValidatePasswordStrength(username string, password string) error {
+	return validatePasswordStrength(username, password)
+}

@@ -3,10 +3,12 @@ x-backend-image: &backend-image
   build:
     context: ./backend
     dockerfile: Dockerfile
+    args:
+      GOPROXY: ${CAIYUN_GOPROXY:-https://goproxy.cn,direct}
 
 x-backend-environment: &backend-environment
-  APP_ENV: production
-  COOKIE_SECURE: "true"
+  APP_ENV: ${APP_ENV:-production}
+  COOKIE_SECURE: ${COOKIE_SECURE:-true}
   DB_AUTO_MIGRATE: "false"
   TASK_CONFIG_SYNC_ON_STARTUP: "false"
   DB_HOST: mysql
@@ -47,8 +49,6 @@ services:
       MYSQL_USER: ${MYSQL_USER:-caiyun_app}
       MYSQL_PASSWORD: ${MYSQL_PASSWORD:?MYSQL_PASSWORD is required}
       TZ: Asia/Shanghai
-    ports:
-      - "127.0.0.1:3306:3306"
     volumes:
       - mysql-data:/var/lib/mysql
       # Fresh local databases bootstrap from the first versioned migration.
@@ -74,8 +74,6 @@ services:
     environment:
       REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD is required}
     command: ["redis-server", "--appendonly", "yes", "--requirepass", "${REDIS_PASSWORD:?REDIS_PASSWORD is required}"]
-    ports:
-      - "127.0.0.1:6379:6379"
     volumes:
       - redis-data:/data
     networks: [caiyun-network]
@@ -112,7 +110,7 @@ services:
     stop_grace_period: 60s
     command: ["api"]
     ports:
-      - "127.0.0.1:8080:8080"
+      - "127.0.0.1:${CAIYUN_API_PORT:-8080}:8080"
     depends_on:
       backend-migrate:
         condition: service_completed_successfully
@@ -158,7 +156,7 @@ services:
     stop_grace_period: 75s
     command: ["worker"]
     ports:
-      - "127.0.0.1:8081:8081"
+      - "127.0.0.1:${CAIYUN_WORKER_PORT:-8081}:8081"
     depends_on:
       backend-migrate:
         condition: service_completed_successfully
@@ -187,18 +185,40 @@ services:
           memory: 1g
           cpus: "1.5"
 
+  backend-admin-init:
+    <<: *backend-image
+    restart: "no"
+    command: ["bootstrap-admin"]
+    depends_on:
+      backend-migrate:
+        condition: service_completed_successfully
+    environment:
+      <<: *backend-environment
+      BOOTSTRAP_ADMIN_USERNAME: ${BOOTSTRAP_ADMIN_USERNAME:?BOOTSTRAP_ADMIN_USERNAME is required}
+      BOOTSTRAP_ADMIN_PASSWORD: ${BOOTSTRAP_ADMIN_PASSWORD:?BOOTSTRAP_ADMIN_PASSWORD is required}
+      BOOTSTRAP_ADMIN_EMAIL: ${BOOTSTRAP_ADMIN_EMAIL:-}
+    networks: [caiyun-network]
+
   frontend:
     build:
-      context: ./frontend
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: frontend/Dockerfile
     container_name: caiyun-frontend
     restart: unless-stopped
     ports:
-      - "127.0.0.1:80:8080"
+      - "${CAIYUN_BIND_ADDRESS:-127.0.0.1}:${CAIYUN_HTTP_PORT:-80}:8080"
     depends_on:
       backend-api:
         condition: service_healthy
+      backend-admin-init:
+        condition: service_completed_successfully
     networks: [caiyun-network]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/ >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
     deploy:
       resources:
         limits:

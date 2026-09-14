@@ -37,6 +37,9 @@ DATA_ENCRYPTION_CURRENT_VERSION=v1
 TRUSTED_PROXIES=none
 WORKER_MONITOR_TOKEN=caiyun_worker_e2e_token
 API_MONITOR_TOKEN=caiyun_api_e2e_token
+BOOTSTRAP_ADMIN_USERNAME=e2e-admin
+BOOTSTRAP_ADMIN_PASSWORD=E2eAdminPass123!
+BOOTSTRAP_ADMIN_EMAIL=e2e-admin@example.local
 GRAFANA_ADMIN_PASSWORD=caiyun_grafana_e2e_change_me
 TASK_QUEUE_BACKEND=streams
 ALLOWED_ORIGINS=http://frontend:8080,http://localhost,http://127.0.0.1
@@ -44,6 +47,9 @@ EOF
 fi
 
 grep -q '^API_MONITOR_TOKEN=' "$ENV_FILE" || printf '\nAPI_MONITOR_TOKEN=caiyun_api_e2e_token\n' >> "$ENV_FILE"
+grep -q '^BOOTSTRAP_ADMIN_USERNAME=' "$ENV_FILE" || printf 'BOOTSTRAP_ADMIN_USERNAME=e2e-admin\n' >> "$ENV_FILE"
+grep -q '^BOOTSTRAP_ADMIN_PASSWORD=' "$ENV_FILE" || printf 'BOOTSTRAP_ADMIN_PASSWORD=E2eAdminPass123!\n' >> "$ENV_FILE"
+grep -q '^BOOTSTRAP_ADMIN_EMAIL=' "$ENV_FILE" || printf 'BOOTSTRAP_ADMIN_EMAIL=e2e-admin@example.local\n' >> "$ENV_FILE"
 
 cleanup() {
   local status=$?

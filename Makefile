@@ -5,7 +5,7 @@ COMMIT ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
 BUILD_TIME ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 GO_LDFLAGS := -s -w -X caiyun/internal/version.Version=$(VERSION) -X caiyun/internal/version.Commit=$(COMMIT) -X caiyun/internal/version.BuildTime=$(BUILD_TIME)
 
-.PHONY: test vet backend-build frontend-build frontend-test frontend-e2e frontend-audit build redis-integration deploy-smoke package-release sync-k8s-sql check-k8s-sql check-no-local-docs openapi-local openapi-check asyncapi-local asyncapi-check api-types api-types-check k8s-runtime-check otel-runtime-check compose-runtime-check legacy-list-drain chaos-drill capacity-drill operation-integration frontend-contract-check slo-snapshot
+.PHONY: test vet backend-build frontend-build frontend-test frontend-e2e frontend-audit build redis-integration deploy-smoke compose-deploy package-release sync-k8s-sql check-k8s-sql check-no-local-docs openapi-local openapi-check asyncapi-local asyncapi-check api-types api-types-check k8s-runtime-check otel-runtime-check compose-runtime-check legacy-list-drain chaos-drill capacity-drill operation-integration frontend-contract-check slo-snapshot
 
 test:
 	cd backend && go test ./...
@@ -46,6 +46,9 @@ check-k8s-sql:
 
 deploy-smoke:
 	bash scripts/deploy-smoke-test.sh
+
+compose-deploy:
+	bash scripts/deploy-compose.sh
 
 package-release: build
 	bash scripts/package-release.sh

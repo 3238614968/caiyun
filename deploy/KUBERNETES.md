@@ -40,7 +40,7 @@ VERSION=2.1.0
 REGISTRY=registry.example.com/caiyun
 
 docker build -t "$REGISTRY/backend:$VERSION" -f backend/Dockerfile .
-docker build -t "$REGISTRY/frontend:$VERSION" -f frontend/Dockerfile frontend
+docker build -t "$REGISTRY/frontend:$VERSION" -f frontend/Dockerfile .
 
 docker push "$REGISTRY/backend:$VERSION"
 docker push "$REGISTRY/frontend:$VERSION"

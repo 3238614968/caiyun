@@ -217,11 +217,14 @@ func validateDependencyClocks(db *gorm.DB, redisCache *cache.RedisCache, maxSkew
 	}
 	now := time.Now().UTC()
 
-	var dbNow time.Time
-	if err := db.Raw("SELECT UTC_TIMESTAMP(6)").Scan(&dbNow).Error; err != nil {
+	// Use MySQL's argument-less UNIX_TIMESTAMP. Passing UTC_TIMESTAMP to
+	// UNIX_TIMESTAMP makes MySQL reinterpret the UTC datetime in the session
+	// timezone, which shifts the result on hosts configured outside UTC.
+	var dbUnixSeconds int64
+	if err := db.Raw("SELECT UNIX_TIMESTAMP()").Scan(&dbUnixSeconds).Error; err != nil {
 		return fmt.Errorf("数据库时钟校验失败: %w", err)
 	}
-	dbNow = dbNow.UTC()
+	dbNow := time.Unix(dbUnixSeconds, 0).UTC()
 	if skew := absoluteDuration(now.Sub(dbNow)); skew > maxSkew {
 		return fmt.Errorf("数据库时钟偏差过大: app=%s db=%s skew=%s max=%s，请先同步主机/MySQL时钟",
 			now.Format(time.RFC3339Nano), dbNow.Format(time.RFC3339Nano), skew, maxSkew)

@@ -9,6 +9,7 @@ Browser -> 127.0.0.1:80 (frontend/nginx) -> backend-api:8080
                                       -> /events 或 /ws
 backend-worker -> Redis queue -> MySQL
 backend-migrate -> MySQL（一次性发布门禁）
+backend-admin-init -> MySQL（一次性管理员初始化）
 Grafana -> 127.0.0.1:3000
 ```
 
@@ -16,11 +17,11 @@ Grafana -> 127.0.0.1:3000
 
 | 服务 | 宿主机端口 | 容器端口 | 持久化卷 |
 | --- | --- | --- | --- |
-| Frontend | `127.0.0.1:80` | `8080` | 无 |
-| API | `127.0.0.1:8080` | `8080` | 无 |
-| Worker 监控 | `127.0.0.1:8081` | `8081` | 无 |
-| MySQL | `127.0.0.1:3306` | `3306` | `mysql-data` |
-| Redis | `127.0.0.1:6379` | `6379` | `redis-data` |
+| Frontend | `127.0.0.1:${CAIYUN_HTTP_PORT:-80}` | `8080` | 无 |
+| API | `127.0.0.1:${CAIYUN_API_PORT:-8080}` | `8080` | 无 |
+| Worker 监控 | `127.0.0.1:${CAIYUN_WORKER_PORT:-8081}` | `8081` | 无 |
+| MySQL | Compose 内部 `mysql:3306` | `3306` | `mysql-data` |
+| Redis | Compose 内部 `redis:6379` | `6379` | `redis-data` |
 | Grafana | `127.0.0.1:3000` | `3000` | `grafana-data` |
 
 公网访问应通过宿主机 Nginx、负载均衡器或隧道服务转发，不应直接修改数据库和 Redis 为全网监听。
@@ -71,6 +72,9 @@ DATA_ENCRYPTION_KEYS=v1=<base64-32-byte-key>
 DATA_ENCRYPTION_CURRENT_VERSION=v1
 WORKER_MONITOR_TOKEN=<monitor-token>
 GRAFANA_ADMIN_PASSWORD=<grafana-password>
+BOOTSTRAP_ADMIN_USERNAME=admin
+BOOTSTRAP_ADMIN_PASSWORD=<strong-admin-password>
+BOOTSTRAP_ADMIN_EMAIL=admin@example.com
 ALLOWED_ORIGINS=https://caiyun.example.com
 TRUSTED_PROXIES=none
 ```
@@ -100,17 +104,18 @@ VITE_WS_URL=/ws
 ## 5. 首次启动
 
 ```bash
-docker compose build --pull
-docker compose up -d
-docker compose ps
+bash scripts/deploy-compose.sh
 ```
 
-启动顺序由 Compose 健康检查控制：
+脚本会生成或校验 `.env`，然后执行构建、依赖健康检查、数据库迁移、首次管理员初始化、业务服务启动和 HTTP 健康检查。已有 `.env` 和数据卷不会被覆盖或删除。
+
+启动顺序由 Compose 健康检查和一次性任务控制：
 
 1. MySQL 和 Redis 达到健康状态。
 2. `backend-migrate` 使用当前后端镜像执行数据库迁移。
 3. 迁移成功后启动 API 与 Worker。
-4. API 健康后启动前端。
+4. 初始化管理员成功后启动前端。
+5. 脚本验证 API、Worker 和前端可访问。
 
 查看迁移与启动日志：
 
@@ -119,12 +124,10 @@ docker compose logs --no-log-prefix backend-migrate
 docker compose logs -f --tail=200 backend-api backend-worker frontend
 ```
 
-如果 `backend-migrate` 失败，API 和 Worker 不会启动。修正配置或数据库问题后重新执行：
+如果迁移或管理员初始化失败，脚本会保留容器和数据卷并输出日志。修正配置后重新执行：
 
 ```bash
-docker compose rm -f backend-migrate
-docker compose up -d backend-migrate
-docker compose up -d
+bash scripts/deploy-compose.sh
 ```
 
 ## 6. 部署验证
@@ -163,10 +166,10 @@ docker compose logs -f --tail=200 backend-api backend-worker
 # 重启业务服务
 docker compose restart backend-api backend-worker
 
-# 进入 MySQL
+# 进入 MySQL（数据库默认不暴露宿主机端口）
 docker exec -it caiyun-mysql mysql -uroot -p caiyun
 
-# 查看 Redis 状态
+# 查看 Redis 状态（Redis 默认不暴露宿主机端口）
 docker exec -it caiyun-redis redis-cli -a '<REDIS_PASSWORD>' INFO
 
 # 查看资源使用
@@ -209,7 +212,7 @@ docker compose pull backend-migrate backend-api backend-worker
 docker compose up -d
 ```
 
-当前前端服务仍由 `frontend/Dockerfile` 本地构建。如需完全使用预构建镜像，可在生产专用 Compose 覆盖文件中为 `frontend` 设置 `image` 并移除 `build`。
+前端镜像构建上下文现在是仓库根目录，Docker 构建阶段会自行生成 API/AsyncAPI TypeScript 契约，不依赖宿主机 Python 或工作区中的 ignored 生成文件。如需完全使用预构建镜像，可在生产专用 Compose 覆盖文件中为 `frontend` 设置 `image` 并移除 `build`。
 
 ## 10. 日志与磁盘
 

@@ -15,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	adminbootstrapapp "caiyun/internal/app/adminbootstrap"
 	apiapp "caiyun/internal/app/api"
 	migratorapp "caiyun/internal/app/migrator"
 	reencryptapp "caiyun/internal/app/reencrypt"
@@ -63,6 +64,8 @@ func runCommand(ctx context.Context, args []string, stdout, stderr io.Writer) er
 		return workerapp.Run(ctx, subArgs)
 	case "migrate", "migrator":
 		return migratorapp.Run(ctx, subArgs)
+	case "bootstrap-admin":
+		return adminbootstrapapp.Run(ctx, subArgs)
 	case "reencrypt":
 		return reencryptapp.Run(ctx, subArgs)
 	case "all":
@@ -90,6 +93,7 @@ func printUsage(w io.Writer) {
   api         启动 HTTP API
   worker      启动后台任务 Worker
   migrate     执行数据库迁移和结构校验
+  bootstrap-admin  幂等创建首次管理员（仅使用环境变量凭据）
   reencrypt   扫描或轮换字段加密版本
   all         由当前二进制监督 api 与 worker 两个子进程
   version     输出构建版本信息
