@@ -15,6 +15,7 @@
 - [核心能力](#核心能力)
 - [系统架构](#系统架构)
 - [技术栈](#技术栈)
+- [一键部署](#一键部署)
 - [快速开始](#快速开始)
 - [配置管理](#配置管理)
 - [开发与质量验证](#开发与质量验证)
@@ -70,6 +71,28 @@ flowchart LR
 | 数据 | MySQL 8、Redis 7 |
 | 测试 | Go testing、Vitest、Playwright |
 | 运维 | Docker Compose、Kubernetes、systemd、Nginx、Prometheus、Grafana |
+
+## 一键部署
+
+在仓库根目录执行以下命令，即可自动完成配置生成、镜像构建、数据库迁移、管理员初始化、服务启动和健康检查：
+
+```bash
+bash scripts/deploy-compose.sh --local
+```
+
+生产环境需要配置 HTTPS 域名：
+
+```bash
+PUBLIC_ORIGIN=https://cloud.example.com bash scripts/deploy-compose.sh --production
+```
+
+如果已经准备好有效的 `.env`，后续启动或更新也可以直接使用更短的纯 Compose 命令：
+
+```bash
+docker compose up --build -d
+```
+
+该命令会按照 Compose 依赖顺序执行数据库迁移和管理员初始化；全新环境首次部署仍建议使用上面的部署脚本，以自动生成安全配置并完成健康检查。
 
 ## 快速开始
 
