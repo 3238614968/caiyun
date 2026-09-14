@@ -19,7 +19,7 @@ Worker :8081 -> MySQL + Redis + upstream APIs
 - 64 位 Linux，支持 systemd。
 - MySQL 8.0+、Redis 7.0+。
 - Nginx、curl、tar、gzip、sha256sum。
-- 构建机需要 Go 1.25.12、Node.js 20+、npm；生产机使用发布包时无需安装 Go 和 Node.js。
+- 构建机需要 Go 1.25.13、Node.js 20+、npm；生产机使用发布包时无需安装 Go 和 Node.js。
 - 域名已解析到服务器，系统时间已同步。
 
 Debian/Ubuntu 示例：

@@ -1,6 +1,6 @@
 # 移动云盘管理系统
 
-[![Go](https://img.shields.io/badge/Go-1.25.12-00ADD8?logo=go&logoColor=white)](./backend/go.mod)
+[![Go](https://img.shields.io/badge/Go-1.25.13-00ADD8?logo=go&logoColor=white)](./backend/go.mod)
 [![Vue](https://img.shields.io/badge/Vue-3-42B883?logo=vuedotjs&logoColor=white)](./frontend/package.json)
 [![MySQL](https://img.shields.io/badge/MySQL-8.0+-4479A1?logo=mysql&logoColor=white)](./docker-compose.yml)
 [![Redis](https://img.shields.io/badge/Redis-7.0+-DC382D?logo=redis&logoColor=white)](./docker-compose.yml)
@@ -65,7 +65,7 @@ flowchart LR
 
 | 层级 | 组件 |
 | --- | --- |
-| 后端 | Go 1.25.12、Gin、GORM |
+| 后端 | Go 1.25.13、Gin、GORM |
 | 前端 | Vue 3、TypeScript、Vite |
 | 数据 | MySQL 8、Redis 7 |
 | 测试 | Go testing、Vitest、Playwright |
@@ -75,7 +75,7 @@ flowchart LR
 
 ### 环境要求
 
-- Go `1.25.12`
+- Go `1.25.13`
 - Node.js `20+` 与 npm
 - MySQL `8.0+`
 - Redis `7.0+`
