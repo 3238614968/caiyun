@@ -1,7 +1,7 @@
 #!/data/data/com.termux/files/usr/bin/bash
 # caiyun 应用部署：.env + 二进制 + migrate + API/Worker 启动
 # 前置：
-#   1. 已运行 deploy_infra.sh（生成 ~/caiyun/secrets.env）
+#   1. 已运行 deploy_infra.sh（生成 ~/caiyun/secrets.env，Redis noeviction、MariaDB root 已设密码）
 #   2. 二进制已放在 ~/caiyun/caiyun-arm64.new（或已存在 ~/caiyun/caiyun-linux）
 #      ⚠️ Termux/Android 上必须用 CGO_ENABLED=1 本机编译，
 #      交叉编译的 CGO_ENABLED=0 静态二进制没有 /etc/resolv.conf，DNS 会全部失败：
@@ -11,11 +11,12 @@
 #   3. 前端 dist 已 PC 构建并上传到 ~/caiyun/dist
 # 可选环境变量：
 #   CAIYUN_ORIGIN  允许跨域来源，默认 http://127.0.0.1:5701（经 nginx 访问时填面板地址）
-set -u
+set -euo pipefail
 BASE=$HOME/caiyun
 LOG=$BASE/logs
 . "$BASE/secrets.env"
 ORIGIN="${CAIYUN_ORIGIN:-http://127.0.0.1:5701}"
+BIN="$BASE/caiyun-linux"
 
 # ---------- .env ----------
 cat > "$BASE/.env" <<EOF
@@ -60,33 +61,58 @@ chmod 600 "$BASE/.env"
 echo "[env] written"
 
 # ---------- 二进制 ----------
-BIN="$BASE/caiyun-linux"
-[ -f "$BASE/caiyun-arm64.new" ] && mv "$BASE/caiyun-arm64.new" "$BIN"
+if [ -f "$BASE/caiyun-arm64.new" ]; then
+  mv "$BASE/caiyun-arm64.new" "$BIN"
+fi
+if [ ! -x "$BIN" ]; then
+  echo "[bin] missing executable $BIN (see prerequisites in this script header)" >&2
+  exit 1
+fi
 chmod +x "$BIN"
-"$BIN" version && echo "[bin] ok"
+"$BIN" version >/dev/null || { echo "[bin] '$BIN version' FAILED" >&2; exit 1; }
+echo "[bin] ok"
 
-# ---------- 迁移 ----------
+# ---------- 迁移（失败必须终止，不能让 tail 吞掉退出码）----------
 cd "$BASE"
-"$BIN" migrate 2>&1 | tail -5
-"$BIN" migrate --validate-only 2>&1 | tail -3 && echo "[migrate] validated"
+if ! "$BIN" migrate > "$LOG/migrate.log" 2>&1; then
+  echo "[migrate] FAILED, see $LOG/migrate.log" >&2
+  tail -20 "$LOG/migrate.log" >&2
+  exit 1
+fi
+tail -5 "$LOG/migrate.log"
+if ! "$BIN" migrate --validate-only > "$LOG/migrate-validate.log" 2>&1; then
+  echo "[migrate] validate-only FAILED, see $LOG/migrate-validate.log" >&2
+  tail -20 "$LOG/migrate-validate.log" >&2
+  exit 1
+fi
+echo "[migrate] validated"
 
 # ---------- 启动 API / Worker ----------
 start_role() {
   local role=$1 port=$2
   local pidfile="$BASE/$role.pid"
   if [ -f "$pidfile" ] && kill -0 "$(cat "$pidfile")" 2>/dev/null; then
-    echo "[$role] already running pid=$(cat "$pidfile")"; return
+    echo "[$role] already running pid=$(cat "$pidfile")"
+    return 0
   fi
   cd "$BASE"
   nohup "$BIN" "$role" >> "$LOG/$role.out" 2>&1 &
   echo $! > "$pidfile"
-  sleep 3
-  if curl -fsS "http://127.0.0.1:$port/readyz" >/dev/null 2>&1; then
-    echo "[$role] ready on :$port"
-  else
-    echo "[$role] NOT ready on :$port"; tail -15 "$LOG/$role.out"; return 1
-  fi
+  local i
+  for i in $(seq 1 30); do
+    curl -fsS "http://127.0.0.1:$port/readyz" >/dev/null 2>&1 && { echo "[$role] ready on :$port"; return 0; }
+    sleep 2
+  done
+  echo "[$role] NOT ready on :$port after 60s" >&2
+  tail -15 "$LOG/$role.out" >&2
+  return 1
 }
-start_role api 8080
-start_role worker 8081
+
+rc=0
+start_role api 8080 || rc=1
+start_role worker 8081 || rc=1
+if [ "$rc" -ne 0 ]; then
+  echo "=== APP FAILED: one or more services not ready ===" >&2
+  exit 1
+fi
 echo "=== APP DONE ==="
