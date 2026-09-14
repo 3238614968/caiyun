@@ -96,8 +96,11 @@ func assertOperationDuplicateDeliveryFencing(t *testing.T, service *OperationSer
 	base := time.Date(2026, time.July, 29, 0, 0, 0, 0, time.UTC)
 	now := base
 	originalNow := service.now
+	// 假时钟必须在本断言结束时还原:矩阵三个断言共享同一 service,
+	// t.Cleanup 会拖到子测试收尾才恢复,导致后续重放断言拿到冻结的
+	// queued_at、与提交时相同的幂等键被去重吞掉(CI 上 pending=0)。
+	defer func() { service.now = originalNow }()
 	service.now = func() time.Time { return now }
-	t.Cleanup(func() { service.now = originalNow })
 
 	op, created, dispatchErr, err := service.Submit(ctx, SubmitOperationRequest{
 		UserID:         503,
@@ -258,15 +261,6 @@ func assertOperationDeadLetterReplayRace(t *testing.T, service *OperationService
 		t.Fatalf("replayed operation state: %+v err=%v", final, err)
 	}
 	length, err := q.GetQueueLength()
-	if err != nil || length != 1 {
-		// 临时诊断(CI 无本地 MySQL/Redis 可复现):打印两次 queued_at 与三种队列长度,
-		// 定位重放入队为何未体现在 pending 队列。
-		delayed, delayedErr := q.GetDelayedLength()
-		dead, deadErr := q.GetDeadLetterLength()
-		t.Logf("replay diagnostic: submit_queued_at=%s final_queued_at=%s pending=%d pending_err=%v delayed=%d(delayed_err=%v) dead=%d(dead_err=%v)",
-			op.QueuedAt.Format(time.RFC3339Nano), final.QueuedAt.Format(time.RFC3339Nano),
-			length, err, delayed, delayedErr, dead, deadErr)
-	}
 	if err != nil || length != 1 {
 		t.Fatalf("replay must enqueue exactly once: length=%d err=%v", length, err)
 	}
