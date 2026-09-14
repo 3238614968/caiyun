@@ -26,7 +26,6 @@
     "images:optimize": "node scripts/optimize-product-images.mjs",
     "analyze:report": "node scripts/analyze-bundle.mjs",
     "bundle:budget": "node scripts/check-bundle-budget.mjs",
-    "pree2e:real": "npm run contracts:generate",
     "e2e:real": "playwright test -c playwright.real.config.ts"
   },
   "dependencies": {

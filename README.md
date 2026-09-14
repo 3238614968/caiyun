@@ -160,6 +160,52 @@ npm ci
 npm run dev
 ```
 
+### Android Termux 部署（免 Docker、免 root）
+
+在没有 Docker 的 Android 手机上（如旧机型、vivo/小米等限制 Docker 的 ROM），可以用 [Termux](https://termux.dev/) 原生部署全栈。与 Docker 部署的差异点：
+
+- **Go 二进制必须 CGO 编译**：Android 没有 `/etc/resolv.conf`，`CGO_ENABLED=0` 的纯静态二进制内置 DNS 解析器会回退查询 `127.0.0.1:53`（无监听）导致所有域名解析失败，表现为任务批量报 `upstream circuit is open`。正确做法是在 Termux 本机编译：
+
+  ```bash
+  pkg install -y golang clang git
+  git clone https://github.com/<your>/caiyun && cd caiyun/backend
+  CGO_ENABLED=1 GOOS=android GOARCH=arm64 CC=clang \
+    go build -trimpath -ldflags="-s -w" -o caiyun-linux ./cmd/caiyun
+  ```
+
+- **前端在 PC 构建**：Termux 中 rollup 原生模块因 bionic libc 不兼容会失败，`npm run build` 后把 `dist/` 打包上传到手机 `~/caiyun/dist`。
+- **数据库用 MariaDB**（Termux 官方包，兼容 MySQL 协议），Redis/nginx 均有原生包。
+
+部署步骤（全部脚本位于 [`deploy/termux/`](./deploy/termux)）：
+
+```bash
+# 1. 安装依赖
+bash deploy/termux/install_deps.sh
+
+# 2. 初始化 Redis + MariaDB（随机生成全部密钥到 ~/caiyun/secrets.env，勿提交）
+bash deploy/termux/deploy_infra.sh
+
+# 3. 生成 .env、执行迁移、启动 API(:8080) 与 Worker(:8081)
+#    二进制放 ~/caiyun/caiyun-arm64.new；经 nginx 访问时先 export CAIYUN_ORIGIN=http://<手机IP>:5701
+bash deploy/termux/deploy_app.sh
+
+# 4. nginx 静态托管 + 反代，监听 :5701
+bash deploy/termux/deploy_nginx.sh
+
+# 5. 注册管理员（密码 ≥8 位含字母数字）
+CAIYUN_ADMIN_USER=admin CAIYUN_ADMIN_PASS='yourpass' bash deploy/termux/create_admin.sh
+```
+
+**开机自启**：安装 Termux:Boot 后执行（脚本头部注释含国产 ROM 白名单注意事项）：
+
+```bash
+mkdir -p ~/.termux/boot
+echo 'bash $HOME/caiyun/start_all.sh >> $HOME/caiyun/logs/boot.log 2>&1' \
+  > ~/.termux/boot/00-caiyun.sh && chmod +x ~/.termux/boot/00-caiyun.sh
+```
+
+日常恢复/重启全部服务：`bash ~/caiyun/start_all.sh`（幂等）。
+
 ## 配置管理
 
 ### 后端配置

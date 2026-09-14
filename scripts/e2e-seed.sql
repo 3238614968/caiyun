@@ -1,11 +1,16 @@
 -- Real Docker Compose E2E seed data.
 -- Password for e2e-admin is: E2eAdminPass123!
 
-INSERT INTO users (id, username, password, email, role, token_version, created_at, updated_at, deleted_at) VALUES
-  (900001, 'e2e-admin', '$2a$10$A6MpkfmGCpT8h8wzTIMe/OBT0xxo28a5W1HIUumciQj2uWH6wH1Ne', 'e2e-admin@example.local', 'admin', 0, NOW(), NOW(), NULL)
+-- normalized_username / normalized_email are NOT derived columns: the login
+-- path queries users by normalized_username = LOWER(TRIM(username)) (migration
+-- 012), so the seed must populate them explicitly or authentication 401s.
+INSERT INTO users (id, username, normalized_username, password, email, normalized_email, role, token_version, created_at, updated_at, deleted_at) VALUES
+  (900001, 'e2e-admin', 'e2e-admin', '$2a$10$A6MpkfmGCpT8h8wzTIMe/OBT0xxo28a5W1HIUumciQj2uWH6wH1Ne', 'e2e-admin@example.local', 'e2e-admin@example.local', 'admin', 0, NOW(), NOW(), NULL)
 ON DUPLICATE KEY UPDATE
+  normalized_username = VALUES(normalized_username),
   password = VALUES(password),
   email = VALUES(email),
+  normalized_email = VALUES(normalized_email),
   role = VALUES(role),
   token_version = 0,
   deleted_at = NULL,
