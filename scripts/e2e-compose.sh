@@ -7,6 +7,24 @@ PROJECT_NAME="${COMPOSE_PROJECT_NAME:-caiyun-e2e}"
 
 mkdir -p "$ROOT_DIR/.local"
 
+# 镜像内的 npm 钩子会跳过契约生成（容器没有 python），必须先在宿主机生成
+# frontend/src/api/generated，再交给 docker build 的 COPY 上下文。
+# 依次探测可用的解释器（Windows 的 python3 可能是商店占位符，跑不通）。
+PY=""
+for candidate in python3 python py; do
+  if command -v "$candidate" >/dev/null 2>&1 && "$candidate" --version >/dev/null 2>&1; then
+    PY="$candidate"
+    break
+  fi
+done
+if [ -z "$PY" ]; then
+  echo "contract generation needs a working python (python3/python/py)" >&2
+  exit 1
+fi
+"$PY" "$ROOT_DIR/scripts/generate-openapi-local.py" >/dev/null
+"$PY" "$ROOT_DIR/scripts/generate-asyncapi-local.py" >/dev/null
+"$PY" "$ROOT_DIR/scripts/generate-api-client-types.py" >/dev/null
+
 if [[ ! -f "$ENV_FILE" ]]; then
   cat > "$ENV_FILE" <<'EOF'
 MYSQL_ROOT_PASSWORD=caiyun_root_e2e_change_me

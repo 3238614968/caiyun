@@ -8,4 +8,6 @@ RUN npx playwright install --with-deps chromium
 
 COPY . .
 
-CMD ["npm", "run", "e2e:real"]
+# 契约文件由宿主机在 compose build 前生成并随上下文拷入;
+# --ignore-scripts 跳过 pree2e:real 的 python 生成钩子(容器内不可用)。
+CMD ["npm", "run", "e2e:real", "--ignore-scripts"]

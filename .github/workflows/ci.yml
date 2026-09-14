@@ -355,6 +355,13 @@ jobs:
           test -n "$SAFE_TAG" || SAFE_TAG=ci
           echo "IMAGE_TAG=$SAFE_TAG" >> "$GITHUB_ENV"
 
+      - name: Generate frontend API contracts
+        run: |
+          # 前端镜像构建上下文没有仓库根与 python,先在 runner 生成契约文件。
+          python scripts/generate-openapi-local.py
+          python scripts/generate-asyncapi-local.py
+          python scripts/generate-api-client-types.py
+
       - name: Build unified backend image
         run: >-
           docker build -f backend/Dockerfile
@@ -372,7 +379,7 @@ jobs:
           -t "${IMAGE_PREFIX}/caiyun-frontend:${IMAGE_TAG}" frontend
 
       - name: Trivy backend image
-        uses: aquasecurity/trivy-action@v0.29.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: caiyun-backend:ci
           format: sarif
@@ -381,7 +388,7 @@ jobs:
           ignore-unfixed: true
 
       - name: Trivy Frontend image
-        uses: aquasecurity/trivy-action@v0.29.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: caiyun-frontend:ci
           format: sarif
