@@ -40,7 +40,7 @@ chmod +x /opt/caiyun/bin/caiyun-linux
 
 第二次扫描应报告没有需要重加密的数据，然后使用原有服务管理器重新启动 API、Worker。若之前临时设置过 `FIELD_CRYPTO_ALLOW_LEGACY_NO_AAD=true`，迁移后删除或设为 `false` 并重启。
 
-如果需要先恢复旧格式凭据读取，可在 API 和 Worker 的现有环境配置中临时启用 `FIELD_CRYPTO_ALLOW_LEGACY_NO_AAD=true` 并重启，再尽快执行上述迁移。这个选项仍要求使用正确密钥并通过 AES-GCM 认证，不接受错误密钥或损坏密文。
+如果选择保留旧格式凭据，可在 API 和 Worker 的现有环境配置中启用 `FIELD_CRYPTO_ALLOW_LEGACY_NO_AAD=true` 并重启，无需执行 `reencrypt`。开启后支持读取新旧密文，新写入仍使用带 AAD 的新格式；继续保留原始密钥和版本。这个选项仍要求使用正确密钥并通过 AES-GCM 认证，不接受错误密钥或损坏密文。以后选择迁移时，再执行上述扫描与重加密步骤。
 
 如果 dry-run 仍报告认证失败，停止写入迁移，核对历史数据对应的 `DATA_ENCRYPTION_KEYS`、版本及原始密钥。不得删除账号凭据或用新密钥覆盖历史数据来绕过错误。
 

@@ -6,19 +6,23 @@
 [![Redis](https://img.shields.io/badge/Redis-7.0+-DC382D?logo=redis&logoColor=white)](./docker-compose.yml)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](./LICENSE)
 
-面向移动云盘账号运营场景的全栈自动化平台。系统提供账号托管、日常任务执行、商品同步、定时兑换、结果审计和实时状态推送，并具备队列调度、数据迁移、健康检查及多种部署能力。
+面向移动云盘账号运营场景的全栈自动化平台。系统提供多账号托管、活动任务执行、账号邮件互发与互助、商品同步、定时抢兑、待领奖品展示、云朵趋势和实时状态推送，并具备队列调度、数据迁移、健康检查及多种部署能力。
 
 生产环境采用统一后端制品 `caiyun-linux`。API、Worker 和数据库迁移通过独立子命令运行，并作为不同进程部署，以确保职责隔离和发布过程可控。
+
+本文功能、配置与构建说明已于 **2026-09-30** 对照仓库实现更新。已有账号的旧版加密凭据可选择兼容读取，具体设置见[旧版凭据兼容](#旧版凭据兼容)。
 
 ## 目录
 
 - [核心能力](#核心能力)
+  - [活动任务与多账号](#活动任务与多账号)
 - [系统架构](#系统架构)
 - [技术栈](#技术栈)
 - [一键部署](#一键部署)
 - [快速开始](#快速开始)
   - [Android Termux 部署（免 Docker、免 root）](#android-termux-部署免-docker免-root)
 - [配置管理](#配置管理)
+  - [旧版凭据兼容](#旧版凭据兼容)
 - [开发与质量验证](#开发与质量验证)
 - [构建与发布](#构建与发布)
 - [可观测性与运维](#可观测性与运维)
@@ -31,13 +35,38 @@
 | 领域 | 说明 |
 | --- | --- |
 | 身份与会话 | 注册、登录、Cookie/JWT 会话、刷新令牌、邮箱找回和会话版本失效 |
-| 账号管理 | 多账号托管、Token 刷新、健康检查、异常隔离和状态审计 |
-| 自动任务 | 签到、奖励领取、任务中心巡检、云朵统计等可注册任务 |
-| 兑换中心 | 商品同步、规则配置、多账号定时兑换、失败重试和兑换结果记录 |
+| 账号管理 | 多账号托管、到期自动刷新 Token、连续刷新失败后的暂停、更新凭据及手动恢复 |
+| 自动任务 | 签到、任务中心、AI 活动、备份奖励、139 邮箱互发和活动互助；按账号隔离配置 |
+| 兑换中心 | 商品同步、规则配置、多账号抢兑、单点/多时段/Cron 调度、日历策略与失败重试 |
+| 领奖专区 | 按账号展示全部待领奖品，支持搜索、到期筛选、分页、刷新和领取指引 |
+| 云朵统计 | 当前余额、今日任务收益、全局排名和历史趋势；缺失或覆盖不全的数据保留断点 |
 | 异步处理 | Redis Streams/List 队列、并发控制、分布式锁、Outbox、幂等和死信处理 |
 | 实时推送 | SSE 优先，保留 WebSocket；支持重连、消息序列和离线补偿 |
 | 数据治理 | 版本化 SQL 迁移、敏感字段加密和密钥轮换 |
 | 运行保障 | 健康探针、结构化日志、指标监控、回滚脚本和制品校验 |
+
+### 活动任务与多账号
+
+可在管理页面配置任务，按账号执行或由 Worker 批量调度。主要任务组如下，完整覆盖范围和上游条件见[任务覆盖文档](./backend/docs/TASK_COVERAGE.md)。
+
+| 任务组 | 主要能力 |
+| --- | --- |
+| 日常任务 | 每日签到、微信签到/抽奖、备份及云朵翻倍、任务中心巡检、消息奖励和云朵统计 |
+| AI 与活动任务 | 算力大作战、许愿活动、趣玩 AI、校园海报、AI 图像/扫描/写真及限时任务 |
+| 多账号协作 | `mail_mutual`：139 邮箱账号互发；`mutual_assist`：许愿、算力和趣玩 AI 活动互助 |
+| 奖励与权益 | `prize_center`、`hidden_rewards`、`upgrade_gift`、`student_perks`、`mcloud_day` |
+| 扩展活动 | `fun_ai_mail`、`family_circle`、`meitu_backup`、`red_invite`、`unloading_1t`、`rafflecode`、`ai_store` |
+| 设备状态 | `notice_switch`、`album_backup_report`：按账号配置真实通知与备份状态 |
+
+- 邮件互发和活动互助仅在**同一网站用户名下的活跃云盘账号**之间执行，至少需要两个账号。
+- 邮件按有向账号对去重：A 发给 B 与 B 发给 A 分别计算，每对每自然月最多一次。单次执行最多发信 `CAIYUN_MAIL_MUTUAL_MAX_SENDS_PER_RUN` 封，默认 20；账号较多时由后续批次继续处理。
+- 139 邮箱互发使用云盘账号对应的邮箱授权。网站密码找回邮件使用单独的 SMTP 配置。
+- 云盘凭据到期时优先刷新；单纯到期不会停用账号。连续 3 次刷新/获取 JWT 失败后暂停，更新凭据或手动启用可重置错误计数。
+- 任务完成以服务端状态为准；短信验证码、学生资格、设备真实状态、库存和活动开放条件会影响可执行范围。AI 豆兑换等默认关闭的操作需要主动启用或单独执行。
+
+领奖专区位于「兑换中心 → 领奖专区」。普通用户查询自己的账号，管理员可选择托管账号；查询接口为 `GET /api/v1/exchange/prizes?account_id=账号ID`，附加 `refresh=1` 可强制刷新。
+
+首页「今日获得」统计任务收益，云朵趋势统计余额净变化；兑换支出会影响余额。历史缺失或账号覆盖不全时显示断点，新增账号的初始余额不会当作任务收益。
 
 ## 系统架构
 
@@ -48,6 +77,7 @@ flowchart LR
   Edge --> API[Go API]
   API --> MySQL[(MySQL 8)]
   API <--> Redis[(Redis 7)]
+  API --> Upstream
   Worker[Go Worker] <--> Redis
   Worker --> MySQL
   Worker --> Upstream[移动云盘上游接口]
@@ -100,7 +130,9 @@ docker compose up --build -d
 ### 环境要求
 
 - Docker Engine 与 Docker Compose v2（Docker 部署）
-- Go `1.25.13`、Node.js `20+` 与 npm（仅源码开发）
+- Go `1.25.13` 或更高版本（后端源码开发）
+- Node.js `20.19+（20.x）` 或 `22.12+` 与 npm（前端源码开发，需满足 Vite 的 engines 要求）
+- 可通过 `python` 命令调用的 Python 3（用于生成本地接口契约）
 - MySQL `8.0+`、Redis `7.0+`（仅源码开发或外部依赖部署）
 
 ### 使用 Docker Compose
@@ -139,20 +171,17 @@ bash scripts/deploy-compose.sh --local
 
 ### 本地源码运行
 
-准备可用的 MySQL、Redis 和后端环境变量，然后分别启动各运行单元：
+准备可用的 MySQL、Redis 和后端环境变量。以下命令从仓库根目录执行：先执行迁移，再在不同终端启动 API、Worker 和前端。
 
 ```bash
 # 数据库迁移
-cd backend
-go run ./cmd/caiyun migrate
+(cd backend && go run ./cmd/caiyun migrate)
 
 # API
-cd backend
-go run ./cmd/caiyun api
+(cd backend && go run ./cmd/caiyun api)
 
 # Worker
-cd backend
-go run ./cmd/caiyun worker
+(cd backend && go run ./cmd/caiyun worker)
 
 # 前端开发服务器
 cd frontend
@@ -227,6 +256,39 @@ TRUSTED_PROXIES=<proxy-ip-or-cidr>
 
 敏感值应通过部署平台的 Secret 或环境变量注入。生产环境应显式关闭自动迁移，并在发布阶段单独执行 `caiyun-linux migrate`。
 
+日常任务与账号协作的常用配置：
+
+| 配置 | 默认值 | 作用 |
+| --- | --- | --- |
+| `TASK_SCHEDULE` | `0 8 * * *` | Worker 每日批次的 Cron 时间 |
+| `TASK_CONCURRENCY` | 以部署模板为准 | 同时执行的账号任务数量 |
+| `CAIYUN_MAIL_MUTUAL_MAX_SENDS_PER_RUN` | `20` | 单次邮箱互发任务的最大发信数 |
+| `FIELD_CRYPTO_ALLOW_LEGACY_NO_AAD` | `false` | 是否读取历史无 AAD 的加密凭据 |
+
+活动验证码、奖品 OID 和设备状态按账号配置，配置键追加 `_手机号`，具体键名和前置条件见[实现核对说明](./backend/docs/IMPLEMENTATION_RECHECK.md)。Docker 部署需将这些配置显式传入 Worker 的 `environment` 或 `env_file`。
+
+### 旧版凭据兼容
+
+数据库中的 `auth/token/jwt_token` 使用 AES-GCM 加密。新格式包含 AAD 校验上下文；历史无 AAD 密文可以选择继续兼容读取：
+
+```dotenv
+FIELD_CRYPTO_ALLOW_LEGACY_NO_AAD=true
+```
+
+API 和 Worker 使用相同配置，修改后重启两个进程。**保留历史密文对应的原始密钥与版本**；开启兼容后支持读取新旧密文，新写入凭据仍使用新格式，此模式无需执行 `reencrypt`。
+
+也可以备份数据库后将旧数据转换为新格式。在加载现有数据库和加密配置的目录执行：
+
+```bash
+# 只读扫描，确认历史数据可解密
+./caiyun-linux reencrypt
+
+# 扫描成功、数据库备份完成后执行
+./caiyun-linux reencrypt --apply
+```
+
+迁移完成后可将兼容开关设为 `false` 并重启 API、Worker。密钥不匹配或密文损坏时，开启兼容也无法恢复凭据；领奖接口会返回 409 和具体处理提示。完整排查步骤见[部署凭据修复说明](./backend/docs/DEPLOYMENT_CREDENTIAL_HOTFIX.md)。
+
 ### 前端配置
 
 前端配置模板位于 [`frontend/.env.example`](./frontend/.env.example)。所有 `VITE_*` 变量均在构建阶段写入静态产物，配置变更后需要重新构建。
@@ -271,6 +333,19 @@ SSE 支持同源 Cookie 会话、`Last-Event-ID` 重放、可配置心跳和 Ngi
 make build
 ```
 
+默认后端构建目标为 **Linux AMD64（x86_64）**，`CGO_ENABLED=0`，输出 ELF 静态可执行程序。Android/Termux 使用上文的专用构建方式。
+
+Windows PowerShell 可使用仓库脚本构建和打包；前端构建前需安装可通过 `python` 命令调用的 Python 3：
+
+```powershell
+.\scripts\build-linux.ps1
+Push-Location frontend
+npm ci
+npm run build
+Pop-Location
+.\scripts\package-release.ps1 -BuildId (Get-Date -Format "yyyyMMdd-HHmmss")
+```
+
 主要输出：
 
 - `backend/caiyun-linux`
@@ -284,7 +359,7 @@ make build
 ./caiyun-linux worker
 ./caiyun-linux migrate
 ./caiyun-linux migrate --validate-only
-./caiyun-linux reencrypt --table all --batch-size 200 --apply
+./caiyun-linux reencrypt --table all --batch-size 200
 ./caiyun-linux version
 ```
 
@@ -297,6 +372,15 @@ make build
 5. 构建并发布 `frontend/dist/`。
 6. 验证 Nginx 配置并重新加载服务。
 7. 检查健康探针、Worker 指标和 `/events` 长连接。
+
+确认磁盘制品与运行中的 API 都已更新，默认 API 端口为 8080：
+
+```bash
+./caiyun-linux version
+curl -sS http://127.0.0.1:8080/livez
+```
+
+对比两处 `version` 与 `build_time`。磁盘文件已替换但进程未重启时，接口仍会运行旧版本。抢兑调度、领奖接口和界面修改需同步更新 API、Worker、前端。
 
 systemd、Kubernetes、制品打包和回滚流程参见 [`deploy/README.md`](./deploy/README.md)。
 
@@ -373,6 +457,11 @@ Prometheus 告警规则和 Grafana 仪表盘位于 `deploy/monitoring/`。应用
 
 ### 后端专项
 
+- [`backend/docs/TASK_COVERAGE.md`](./backend/docs/TASK_COVERAGE.md)：任务覆盖、多账号协作与上游条件
+- [`backend/docs/ACTIVITY_COVERAGE_COMPLETION.md`](./backend/docs/ACTIVITY_COVERAGE_COMPLETION.md)：新增活动接口与任务实现
+- [`backend/docs/IMPLEMENTATION_RECHECK.md`](./backend/docs/IMPLEMENTATION_RECHECK.md)：协议、账号配置及实现二次核对
+- [`backend/docs/EXCHANGE_UI_TROUBLESHOOTING.md`](./backend/docs/EXCHANGE_UI_TROUBLESHOOTING.md)：抢兑时间、滑块、领奖与趋势说明
+- [`backend/docs/DEPLOYMENT_CREDENTIAL_HOTFIX.md`](./backend/docs/DEPLOYMENT_CREDENTIAL_HOTFIX.md)：历史凭据兼容、409/500 与部署恢复
 - [`backend/docs/OPERATIONS_CHECKLIST.md`](./backend/docs/OPERATIONS_CHECKLIST.md)：生产运维检查表
 - [`backend/docs/ENCRYPTION_ROTATION.md`](./backend/docs/ENCRYPTION_ROTATION.md)：敏感字段密钥轮换
 - [`backend/docs/REDIS_STREAMS_QUEUE_MIGRATION.md`](./backend/docs/REDIS_STREAMS_QUEUE_MIGRATION.md)：队列迁移说明
