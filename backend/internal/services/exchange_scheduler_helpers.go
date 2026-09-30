@@ -4,7 +4,6 @@ import (
 	"caiyun/internal/constants"
 	"caiyun/internal/models"
 	"caiyun/internal/repository"
-	"fmt"
 	"strconv"
 	"strings"
 	"time"
@@ -115,14 +114,8 @@ func taskMatchesExchangeSlot(task *models.ExchangeTask, hour, minute int, now ti
 		now = time.Now()
 	}
 	slot := time.Date(now.Year(), now.Month(), now.Day(), hour, minute, 0, 0, now.Location())
-	if ok, _ := repository.ShouldRunExchangeTaskAt(task, slot); ok {
-		return true
-	}
-	timeStr := fmt.Sprintf("%02d:%02d:00", hour, minute)
-	if scheduled := normalizeExchangeSlotTime(task.ScheduledExchangeTime); scheduled != "" {
-		return scheduled == timeStr
-	}
-	return normalizeExchangeSlotTime(task.ExchangeAccount.ExchangeTime1) == timeStr || normalizeExchangeSlotTime(task.ExchangeAccount.ExchangeTime2) == timeStr
+	ok, _ := repository.ShouldRunExchangeTaskAt(task, slot)
+	return ok
 }
 
 func humanizeExchangePeriod(period string) string {

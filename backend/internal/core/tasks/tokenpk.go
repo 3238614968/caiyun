@@ -1,6 +1,7 @@
 package tasks
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -14,6 +15,7 @@ import (
 type TokenPKTask struct {
 	*activityActions
 	lastMessage string
+	pending     bool
 }
 
 func NewTokenPKTask(client *http.Client, log *logger.Logger) *TokenPKTask {
@@ -40,12 +42,6 @@ const (
 	tokenPKActionManual  = "manual"
 )
 
-// tokenPKManualReasons 无法通过接口自动化完成的任务按钮（key）。
-var tokenPKManualReasons = map[string]string{
-	"loginPc":      "需要登录PC客户端",
-	"inviteFriend": "需要好友真实参与",
-}
-
 type tokenPKAction struct {
 	Task api.ActivityTask
 	Kind string
@@ -63,13 +59,17 @@ func planTokenPKActions(tasks []api.ActivityTask) []tokenPKAction {
 		case activityStateFinish:
 			continue
 		}
+		// Completed rewards stay claimable even after the monthly cap is reached.
+		if task.MonthlyLimit > 0 && task.MonthlyCompleted >= task.MonthlyLimit {
+			continue
+		}
 		key := task.StepKey()
-		if reason, manual := tokenPKManualReasons[key]; manual {
-			actions = append(actions, tokenPKAction{Task: task, Kind: tokenPKActionManual, Key: reason})
+		if key == "inviteFriend" {
+			// The cross-account mutual_assist task handles this step.
 			continue
 		}
 		switch key {
-		case "backup", "uploadPhoto", "aiCamera", "aiAssistant", "createNote", "shareFile", "openUrl":
+		case "backup", "uploadPhoto", "aiCamera", "aiAssistant", "createNote", "shareFile", "openUrl", "loginPc":
 			actions = append(actions, tokenPKAction{Task: task, Kind: tokenPKActionRun, Key: key})
 		case "reserveLogin":
 			actions = append(actions, tokenPKAction{Task: task, Kind: tokenPKActionReserve, Key: key})
@@ -81,6 +81,9 @@ func planTokenPKActions(tasks []api.ActivityTask) []tokenPKAction {
 }
 
 func (t *TokenPKTask) Run() error {
+	t.pending = false
+	var issues []error
+	attempted := make(map[int]bool)
 	t.logger.Start("------【算力大作战】------")
 	t.api.PrepareActivitySession(api.TokenPKMarketName)
 
@@ -94,24 +97,33 @@ func (t *TokenPKTask) Run() error {
 	manualTasks := make([]string, 0, len(actions))
 	failures := 0
 	executed := 0
+	initialClaimed := 0
 
 	for _, action := range actions {
 		switch action.Kind {
 		case tokenPKActionReceive:
-			t.receiveTokenPKPrize(action.Task)
+			if err := t.receiveTokenPKPrize(action.Task); err != nil {
+				issues = append(issues, err)
+			} else {
+				initialClaimed++
+			}
 		case tokenPKActionRun:
 			if err := t.executeTokenPKStep(action); err != nil {
 				failures++
+				issues = append(issues, err)
 				t.logger.Debug(fmt.Sprintf("算力大作战任务 %s 执行失败: %v", action.Task.Name, err))
 			} else {
 				executed++
+				attempted[action.Task.ID] = true
 			}
 		case tokenPKActionReserve:
 			if err := t.api.TokenPKStepReserve(action.Task.ID, action.Key); err != nil {
 				failures++
+				issues = append(issues, err)
 				t.logger.Debug(fmt.Sprintf("算力大作战任务 %s 预约失败: %v", action.Task.Name, err))
 			} else {
 				executed++
+				attempted[action.Task.ID] = true
 				t.logger.Success(fmt.Sprintf("算力大作战已预约: %s", action.Task.Name))
 			}
 		case tokenPKActionManual:
@@ -121,15 +133,22 @@ func (t *TokenPKTask) Run() error {
 
 	// 执行动作后服务端需要时间刷新任务状态，重新拉取并领取新完成的任务。
 	time.Sleep(3 * time.Second)
-	claimed := t.receiveFinishedPrizes()
+	claimed, claimErr := t.receiveFinishedPrizes(attempted)
+	claimed += initialClaimed
+	if claimErr != nil {
+		issues = append(issues, claimErr)
+	}
+	t.pending = len(attempted) > 0
 
 	chanceReward, chanceErr := t.api.TokenPKAutoReceiveLotteryChance()
 	if chanceErr != nil {
+		issues = append(issues, chanceErr)
 		t.logger.Debug(fmt.Sprintf("自动领取抽奖次数失败: %v", chanceErr))
 	}
 
 	usedToken, _, progressErr := t.api.TokenPKProgressQueryHome()
 	if progressErr != nil {
+		issues = append(issues, progressErr)
 		t.logger.Debug(fmt.Sprintf("查询算力进度失败: %v", progressErr))
 	}
 
@@ -149,54 +168,62 @@ func (t *TokenPKTask) Run() error {
 	if len(manualTasks) > 0 {
 		parts = append(parts, fmt.Sprintf("需手动: %s", strings.Join(manualTasks, "、")))
 	}
-	if failures > 0 && claimed == 0 && executed == 0 {
-		t.lastMessage = strings.Join(parts, "; ")
-		return fmt.Errorf("算力大作战执行失败(%d 个动作报错)", failures)
+	if failures > 0 {
+		parts = append(parts, fmt.Sprintf("%d项步骤失败", failures))
+	}
+	if t.pending {
+		parts = append(parts, fmt.Sprintf("%d项待服务端确认或跨月完成", len(attempted)))
 	}
 	if len(parts) == 0 {
-		parts = append(parts, "任务均已完成")
+		parts = append(parts, "本轮无可执行步骤（已完成、达到月上限或待好友互助）")
 	}
 	t.lastMessage = strings.Join(parts, "; ")
+	if err := errors.Join(issues...); err != nil {
+		return err
+	}
 	t.logger.Success("算力大作战: " + t.lastMessage)
 	return nil
 }
 
-func (t *TokenPKTask) receiveFinishedPrizes() int {
+func (t *TokenPKTask) receiveFinishedPrizes(attempted map[int]bool) (int, error) {
 	tasks, err := t.api.TokenPKTaskList()
 	if err != nil {
 		t.logger.Debug(fmt.Sprintf("复查算力大作战任务列表失败: %v", err))
-		return 0
+		return 0, err
 	}
 	claimed := 0
+	var issues []error
 	for _, task := range tasks {
+		if strings.EqualFold(task.State, activityStateFinish) {
+			delete(attempted, task.ID)
+		}
 		if strings.EqualFold(task.State, activityStateSuccess) {
-			if t.receiveTokenPKPrize(task) {
+			if err := t.receiveTokenPKPrize(task); err == nil {
 				claimed++
+				delete(attempted, task.ID)
+			} else {
+				issues = append(issues, err)
 			}
 		}
 	}
-	return claimed
+	return claimed, errors.Join(issues...)
 }
 
-func (t *TokenPKTask) receiveTokenPKPrize(task api.ActivityTask) bool {
+func (t *TokenPKTask) receiveTokenPKPrize(task api.ActivityTask) error {
 	if err := t.api.TokenPKReceivePrize(task.ID); err != nil {
 		t.logger.Debug(fmt.Sprintf("领取算力大作战奖励失败(%s): %v", task.Name, err))
-		return false
+		return fmt.Errorf("算力领奖/%d: %w", task.ID, err)
 	}
 	prize := task.PrizeSummary()
 	if prize == "" {
 		prize = task.Name
 	}
 	t.logger.Success(fmt.Sprintf("算力大作战领取奖励: %s -> %s", task.Name, prize))
-	return true
+	return nil
 }
 
-// executeTokenPKStep 先上报“去完成”点击，再执行真实动作（与 App 行为一致）。
+// executeTokenPKStep performs the real action before registering its server step.
 func (t *TokenPKTask) executeTokenPKStep(action tokenPKAction) error {
-	if err := t.api.TokenPKStepClick(action.Task.ID, action.Key); err != nil {
-		return fmt.Errorf("上报任务点击失败: %w", err)
-	}
-
 	var err error
 	switch action.Key {
 	case "backup":
@@ -211,6 +238,8 @@ func (t *TokenPKTask) executeTokenPKStep(action tokenPKAction) error {
 		err = t.createTempNote()
 	case "shareFile":
 		err = t.shareNewFile()
+	case "loginPc":
+		_, _, err = t.uploadTextFileWithChannel("tokenpk_pc", "10200153")
 	case "openUrl":
 		time.Sleep(time.Second)
 	default:
@@ -219,6 +248,9 @@ func (t *TokenPKTask) executeTokenPKStep(action tokenPKAction) error {
 	if err != nil {
 		return err
 	}
+	if err := t.api.TokenPKStepClick(action.Task.ID, action.Key); err != nil {
+		return fmt.Errorf("登记任务步骤失败: %w", err)
+	}
 	t.logger.Success(fmt.Sprintf("算力大作战完成任务动作: %s", action.Task.Name))
 	return nil
 }
@@ -226,6 +258,8 @@ func (t *TokenPKTask) executeTokenPKStep(action tokenPKAction) error {
 func (t *TokenPKTask) Message() string {
 	return strings.TrimSpace(t.lastMessage)
 }
+
+func (t *TokenPKTask) Pending() bool { return t.pending }
 
 func formatTokenCount(tokens int64) string {
 	switch {

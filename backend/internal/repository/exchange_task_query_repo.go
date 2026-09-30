@@ -31,8 +31,8 @@ func (r *ExchangeTaskRepository) GetByUserIDWithFilter(userID uint, filter Excha
 	query = applyExchangeTaskFilter(query, filter)
 	var tasks []*models.ExchangeTask
 	err := query.
-		Preload("ExchangeAccount").
-		Preload("ExchangeAccount.Account").
+		Preload("ExchangeAccount", exchangeRuleMetadataQuery).
+		Preload("ExchangeAccount.Account", accountMetadataQuery).
 		Preload("Product").
 		Order("exchange_tasks.status ASC, exchange_tasks.created_at DESC").
 		Find(&tasks).Error
@@ -49,8 +49,8 @@ func (r *ExchangeTaskRepository) GetAllWithFilter(filter ExchangeTaskFilter) ([]
 	query := applyExchangeTaskFilter(r.db.Model(&models.ExchangeTask{}), filter)
 	var tasks []*models.ExchangeTask
 	err := query.
-		Preload("ExchangeAccount").
-		Preload("ExchangeAccount.Account").
+		Preload("ExchangeAccount", exchangeRuleMetadataQuery).
+		Preload("ExchangeAccount.Account", accountMetadataQuery).
 		Preload("Product").
 		Order("exchange_tasks.status ASC, exchange_tasks.created_at DESC").
 		Find(&tasks).Error

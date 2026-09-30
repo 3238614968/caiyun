@@ -1,7 +1,6 @@
 package tasks
 
 import (
-	"encoding/base64"
 	"fmt"
 	"strings"
 	"time"
@@ -43,12 +42,15 @@ func (a *activityActions) setAccountContext(phone, authToken string) {
 
 // uploadTextFile 上传一个临时文本文件（供上传类/分享类任务计数）。
 func (a *activityActions) uploadTextFile(prefix string) (string, string, error) {
-	name := fmt.Sprintf("%s_%d.txt", prefix, time.Now().Unix())
+	return a.uploadTextFileWithChannel(prefix, "10000023")
+}
+
+func (a *activityActions) uploadTextFileWithChannel(prefix, channel string) (string, string, error) {
+	name := fmt.Sprintf("%s_%d.txt", prefix, time.Now().UnixNano())
 	resp, err := a.fileAPI.UploadRandomFile(&api.UploadRandomFileRequest{
 		ParentFileID: "/",
 		Name:         name,
-		Content:      []byte("0"),
-		ChannelSrc:   "10000023",
+		ChannelSrc:   channel,
 		Ext:          ".txt",
 	})
 	if err != nil {
@@ -63,15 +65,16 @@ func (a *activityActions) uploadTextFile(prefix string) (string, string, error) 
 
 // uploadPhotoFile 上传一张小图片（照片类任务要求 category=image）。
 func (a *activityActions) uploadPhotoFile(prefix string) (string, error) {
-	content, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(api.AICameraSampleBase64, "data:image/jpg;base64,"))
+	content, err := api.GenerateUniqueSampleJPEG(600, 800)
 	if err != nil {
-		return "", fmt.Errorf("解码示例图片失败: %w", err)
+		return "", err
 	}
-	name := fmt.Sprintf("%s_%d.jpg", prefix, time.Now().Unix())
+	name := fmt.Sprintf("%s_%d.jpg", prefix, time.Now().UnixNano())
 	resp, err := a.fileAPI.UploadRandomFile(&api.UploadRandomFileRequest{
 		ParentFileID: "/",
 		Name:         name,
 		Content:      content,
+		ContentType:  "image/jpeg",
 		ChannelSrc:   "10000023",
 		Ext:          ".jpg",
 	})
@@ -133,8 +136,8 @@ func (a *activityActions) shareNewFile() error {
 		return fmt.Errorf("创建分享链接成功但未拿到 linkID")
 	}
 	_ = AppendStringList(a.storage, KeyTempLinks, linkIDs...)
-	// 分享文件本身不再计入待清理列表，删除文件可能导致分享失效。
-	_ = RemoveStringList(a.storage, KeyTempFiles, fileID)
+	// Keep the file in the cleanup list. after_task revokes links before deleting
+	// files, so the share remains valid until task registration completes.
 	return nil
 }
 
@@ -148,15 +151,16 @@ func (a *activityActions) performAICamera() error {
 // 真图（op-type=backup，落到相册备份目录），再提交 createSnapshot/completeSnapshot
 // 快照，服务端据此判定“成功备份一次文件”。
 func (a *activityActions) performAlbumBackup() error {
-	content, err := api.GenerateSampleJPEG(600, 800)
+	content, err := api.GenerateUniqueSampleJPEG(600, 800)
 	if err != nil {
 		return err
 	}
-	name := fmt.Sprintf("backup_%d.jpg", time.Now().Unix())
+	name := fmt.Sprintf("backup_%d.jpg", time.Now().UnixNano())
 	uploaded, err := a.fileAPI.UploadRandomFile(&api.UploadRandomFileRequest{
 		ParentFileID: "/",
 		Name:         name,
 		Content:      content,
+		ContentType:  "image/jpeg",
 		ChannelSrc:   "10000023",
 		OpType:       "backup",
 		Ext:          ".jpg",

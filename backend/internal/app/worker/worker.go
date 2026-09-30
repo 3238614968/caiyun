@@ -191,12 +191,7 @@ func (w *Worker) ExecuteQueueAccountTask(accountID uint, taskType string) error 
 		accountID,
 		taskType,
 		func() error {
-			// 刷新Token（如果需要）
-			if err := w.accountService.RefreshTokenIfNeeded(account); err != nil {
-				return err
-			}
-
-			// 执行队列指定任务；taskType=all/all_tasks 时执行全部批量任务。
+			// TaskService 通过 TokenManager 按需刷新，避免两条刷新路径并发竞争。
 			_, err := w.taskService.ExecuteSelectedTaskForAccountContext(w.ctx, account, taskType)
 			return err
 		},
@@ -212,9 +207,10 @@ func (w *Worker) ExecuteQueueAccountTask(accountID uint, taskType string) error 
 func (w *Worker) RunAllAccounts() error {
 	const batchSize = 200
 	totalSubmitted := 0
+	var lastID uint
 
-	for offset := 0; ; offset += batchSize {
-		accounts, err := w.accountService.ListActiveAccounts(offset, batchSize)
+	for {
+		accounts, err := w.accountService.ListActiveAccountsAfterID(lastID, batchSize)
 		if err != nil {
 			return err
 		}
@@ -222,7 +218,8 @@ func (w *Worker) RunAllAccounts() error {
 			break
 		}
 
-		log.Printf("开始执行第 %d 批激活账号任务，账号数: %d", offset/batchSize+1, len(accounts))
+		lastID = accounts[len(accounts)-1].ID
+		log.Printf("开始执行第 %d 批激活账号任务，账号数: %d", totalSubmitted/batchSize+1, len(accounts))
 		if err := w.taskManager.SubmitBatchTasks(accounts); err != nil {
 			return err
 		}

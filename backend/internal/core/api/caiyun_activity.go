@@ -27,6 +27,8 @@ var activityPortals = map[string]activityPortalConfig{
 	MakeWishMarketName: {pagePath: "hcyview", sourceID: "1075"},
 	FunAIMarketName:    {pagePath: "huiyuanri", sourceID: "1170"},
 	PosterMarketName:   {pagePath: "yunpanpage", sourceID: "2073"},
+	// 邮箱版趣玩AI 与云盘版共用同一套 H5 容器。
+	FunAIMailMarketName: {pagePath: "huiyuanri", sourceID: "1170"},
 }
 
 func (api *CaiyunAPI) buildActivityPageURL(marketName, extraQuery string) string {
@@ -95,6 +97,9 @@ func (api *CaiyunAPI) activityGetBody(marketName, urlStr string) (string, error)
 	if err != nil {
 		return "", fmt.Errorf("读取 %s 响应失败: %w", urlStr, err)
 	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", fmt.Errorf("活动 GET 接口 HTTP %d", resp.StatusCode)
+	}
 	return body, nil
 }
 
@@ -110,6 +115,9 @@ func (api *CaiyunAPI) activityPostBody(marketName, urlStr string, payload interf
 	if err != nil {
 		return "", fmt.Errorf("读取 %s 响应失败: %w", urlStr, err)
 	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", fmt.Errorf("活动 POST 接口 HTTP %d", resp.StatusCode)
+	}
 	return body, nil
 }
 
@@ -119,6 +127,16 @@ type activityResponse struct {
 	Msg     string          `json:"msg"`
 	Message string          `json:"message"`
 	Result  json.RawMessage `json:"result"`
+}
+
+type ActivityBusinessError struct {
+	Operation string
+	Code      string
+	Message   string
+}
+
+func (e *ActivityBusinessError) Error() string {
+	return fmt.Sprintf("%s 失败: code=%s %s", e.Operation, e.Code, e.Message)
 }
 
 func (r *activityResponse) OK() bool {
@@ -143,7 +161,7 @@ func decodeActivityBody(op, body string) (*activityResponse, error) {
 		return nil, fmt.Errorf("%s 响应解析失败: %s", op, summary)
 	}
 	if !envelope.OK() {
-		return &envelope, fmt.Errorf("%s 失败: code=%s %s", op, envelope.Code.String(), envelope.MessageText())
+		return &envelope, &ActivityBusinessError{Operation: op, Code: envelope.Code.String(), Message: envelope.MessageText()}
 	}
 	return &envelope, nil
 }

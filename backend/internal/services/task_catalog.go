@@ -103,6 +103,18 @@ func NewTaskCatalog() *TaskCatalog {
 			},
 		},
 		{
+			Code:           "mail_mutual",
+			Name:           "139邮箱账号互发",
+			Description:    "同一用户下的活跃账号两两互发邮件，每个有序账号对每月最多一次",
+			SortOrder:      55,
+			DefaultEnabled: true,
+			RunInBatch:     true,
+			Aliases:        []string{"mail139_mutual"},
+			execute: func(r *TaskRunner) *TaskResult {
+				return r.runMailMutualTask()
+			},
+		},
+		{
 			Code:           "invitefriends",
 			Name:           "邀请好友看电影",
 			Description:    "执行分享邀请并领取对应云朵奖励",
@@ -117,10 +129,10 @@ func NewTaskCatalog() *TaskCatalog {
 		{
 			Code:           "shake",
 			Name:           "摇一摇",
-			Description:    "执行摇一摇抽奖任务",
+			Description:    "活动接口已下线，默认不再纳入任务批次",
 			SortOrder:      70,
-			DefaultEnabled: true,
-			RunInBatch:     true,
+			DefaultEnabled: false,
+			RunInBatch:     false,
 			execute: func(r *TaskRunner) *TaskResult {
 				return r.runShakeTask()
 			},
@@ -212,10 +224,10 @@ func NewTaskCatalog() *TaskCatalog {
 		{
 			Code:           "cloudbattle",
 			Name:           "云朵大作战",
-			Description:    "执行合成 1T 云朵游戏任务",
+			Description:    "合成 1T 接口当前不可达，默认不再纳入任务批次",
 			SortOrder:      140,
-			DefaultEnabled: true,
-			RunInBatch:     true,
+			DefaultEnabled: false,
+			RunInBatch:     false,
 			Aliases:        []string{"hecheng1t"},
 			execute: func(r *TaskRunner) *TaskResult {
 				return r.runCloudBattleTask()
@@ -235,10 +247,10 @@ func NewTaskCatalog() *TaskCatalog {
 		{
 			Code:           "cloudphone",
 			Name:           "云手机红包",
-			Description:    "执行云手机红包派对签到流程",
+			Description:    "活动接口当前拒绝授权，默认不再纳入任务批次",
 			SortOrder:      160,
-			DefaultEnabled: true,
-			RunInBatch:     true,
+			DefaultEnabled: false,
+			RunInBatch:     false,
 			Aliases:        []string{"cloud_phone_redpack"},
 			execute: func(r *TaskRunner) *TaskResult {
 				return r.runCloudPhoneTask()
@@ -269,6 +281,17 @@ func NewTaskCatalog() *TaskCatalog {
 			},
 		},
 		{
+			Code:           "makewish_exchange",
+			Name:           "许愿 AI 豆兑换",
+			Description:    "可兑换时消耗 300 AI 豆，需手动启用或单独执行",
+			SortOrder:      155,
+			DefaultEnabled: false,
+			RunInBatch:     false,
+			execute: func(r *TaskRunner) *TaskResult {
+				return r.runMakeWishExchangeTask()
+			},
+		},
+		{
 			Code:           "fun_ai",
 			Name:           "趣玩AI抽奖",
 			Description:    "体验AI功能累积抽奖次数并抽奖",
@@ -293,6 +316,29 @@ func NewTaskCatalog() *TaskCatalog {
 			},
 		},
 		{
+			Code:           "mutual_assist",
+			Name:           "多账号活动互助",
+			Description:    "使用同一用户下另一活跃账号助力许愿、算力大作战和趣玩AI邀请活动",
+			SortOrder:      159,
+			DefaultEnabled: true,
+			RunInBatch:     true,
+			Aliases:        []string{"account_mutual_assist"},
+			execute: func(r *TaskRunner) *TaskResult {
+				return r.runMutualAssistTask()
+			},
+		},
+		{
+			Code:           "hidden_rewards",
+			Name:           "隐藏活动奖励",
+			Description:    "扫描隐藏任务、领取已达标的短信通知/月度福袋/焕新权益和未领奖品",
+			SortOrder:      160,
+			DefaultEnabled: true,
+			RunInBatch:     true,
+			execute: func(r *TaskRunner) *TaskResult {
+				return r.runHiddenRewardsTask()
+			},
+		},
+		{
 			Code:           "after_task",
 			Name:           "收尾清理",
 			Description:    "清理任务批次中产生的临时文件和分享链接",
@@ -314,6 +360,161 @@ func NewTaskCatalog() *TaskCatalog {
 			Aliases:        []string{"today_cloud"},
 			execute: func(r *TaskRunner) *TaskResult {
 				return r.runTodayCloudTask()
+			},
+		},
+		{
+			Code:           "notice_switch",
+			Name:           "通知开关同步",
+			Description:    "按账号提供的真实APP通知状态上报，并开启邮箱短信通知开关",
+			SortOrder:      88,
+			DefaultEnabled: true,
+			RunInBatch:     true,
+			Aliases:        []string{"notice", "appnotice"},
+			execute: func(r *TaskRunner) *TaskResult {
+				return r.runNoticeSwitchTask()
+			},
+		},
+		{
+			Code:           "fun_ai_mail",
+			Name:           "趣玩AI邮箱版",
+			Description:    "趣玩AI邮箱版（National_playAI139mail）的任务登记与抽奖",
+			SortOrder:      157,
+			DefaultEnabled: false,
+			RunInBatch:     false,
+			Aliases:        []string{"funai_mail", "playai139mail"},
+			execute: func(r *TaskRunner) *TaskResult {
+				return r.runFunAIMailTask()
+			},
+		},
+		{
+			Code:           "prize_center",
+			Name:           "领奖专区盘点",
+			Description:    "盘点未领取奖品；仅在按账号提供奖品OID与对应验证码时领取一件",
+			SortOrder:      161,
+			DefaultEnabled: true,
+			RunInBatch:     true,
+			Aliases:        []string{"getprize"},
+			execute: func(r *TaskRunner) *TaskResult {
+				return r.runPrizeCenterTask()
+			},
+		},
+		{
+			Code:           "upgrade_gift",
+			Name:           "焕新权益",
+			Description:    "读取焕新权益奖池并激活已获得权益（hidden_rewards 已含激活，默认不重复执行）",
+			SortOrder:      162,
+			DefaultEnabled: false,
+			RunInBatch:     false,
+			Aliases:        []string{"v13gift"},
+			execute: func(r *TaskRunner) *TaskResult {
+				return r.runUpgradeGiftTask()
+			},
+		},
+		{
+			Code:           "student_perks",
+			Name:           "学生认证福利",
+			Description:    "同步并查询学生认证状态；仅在配置短验码时领奖",
+			SortOrder:      163,
+			DefaultEnabled: true,
+			RunInBatch:     true,
+			Aliases:        []string{"studentperks"},
+			execute: func(r *TaskRunner) *TaskResult {
+				return r.runStudentPerksTask()
+			},
+		},
+		{
+			Code:           "family_circle",
+			Name:           "家庭圈任务",
+			Description:    "查询家庭圈备份与任务状态（需先开通家庭圈群组）",
+			SortOrder:      164,
+			DefaultEnabled: false,
+			RunInBatch:     false,
+			Aliases:        []string{"familycircle"},
+			execute: func(r *TaskRunner) *TaskResult {
+				return r.runFamilyCircleTask()
+			},
+		},
+		{
+			Code:           "meitu_backup",
+			Name:           "美图备份好礼",
+			Description:    "美图授权备份领好礼（仅移动号；前置为设备侧授权与备份开关）",
+			SortOrder:      166,
+			DefaultEnabled: false,
+			RunInBatch:     false,
+			Aliases:        []string{"meitu"},
+			execute: func(r *TaskRunner) *TaskResult {
+				return r.runMeituBackupTask()
+			},
+		},
+		{
+			Code:           "red_invite",
+			Name:           "红包邀请",
+			Description:    "红包邀请额度查询与邀请码生成/接受（受活动侧风控约束）",
+			SortOrder:      167,
+			DefaultEnabled: false,
+			RunInBatch:     false,
+			Aliases:        []string{"redinvite", "invitingtask"},
+			execute: func(r *TaskRunner) *TaskResult {
+				return r.runRedInviteTask()
+			},
+		},
+		{
+			Code:           "unloading_1t",
+			Name:           "1T新礼",
+			Description:    "1T 新礼活动探测（服务端当前回 503，未部署）",
+			SortOrder:      168,
+			DefaultEnabled: false,
+			RunInBatch:     false,
+			Aliases:        []string{"newgifts1t"},
+			execute: func(r *TaskRunner) *TaskResult {
+				return r.runUnloading1TTask()
+			},
+		},
+		{
+			Code:           "rafflecode",
+			Name:           "抽奖码",
+			Description:    "抽奖码场次与记录查询（需 jwtToken 头，当前无场次）",
+			SortOrder:      169,
+			DefaultEnabled: false,
+			RunInBatch:     false,
+			execute: func(r *TaskRunner) *TaskResult {
+				return r.runRafflecodeTask()
+			},
+		},
+		{
+			Code:           "ai_store",
+			Name:           "AI Store 作品保存",
+			Description:    "探测 AI Store 授权；仅在配置模块号时保存作品（朋友圈9图需 App 上下文）",
+			SortOrder:      171,
+			DefaultEnabled: false,
+			RunInBatch:     false,
+			Aliases:        []string{"aistore"},
+			execute: func(r *TaskRunner) *TaskResult {
+				return r.runAIStoreTask()
+			},
+		},
+		{
+			Code:           "album_backup_report",
+			Name:           "相册备份状态上报",
+			Description:    "查询相册备份状态；仅在配置真实开关值时上报",
+			SortOrder:      172,
+			DefaultEnabled: false,
+			RunInBatch:     false,
+			Aliases:        []string{"albumbackup"},
+			execute: func(r *TaskRunner) *TaskResult {
+				return r.runAlbumBackupReportTask()
+			},
+		},
+		{
+			Code:           "mcloud_day",
+			Name:           "会员日",
+			Description:    "移动云盘会员日领礼与盲盒抽奖",
+			SortOrder:      173,
+			DefaultEnabled: false,
+			RunInBatch:     false,
+			Aliases:        []string{"mcloudday"},
+			execute: func(r *TaskRunner) *TaskResult {
+				return r.runMCloudDayTask()
 			},
 		},
 	}
@@ -395,7 +596,7 @@ func (c *TaskCatalog) DefaultBatchCodes() []string {
 	defs := c.List()
 	result := make([]string, 0, len(defs))
 	for _, def := range defs {
-		if def.RunInBatch {
+		if def.DefaultEnabled && def.RunInBatch {
 			result = append(result, def.Code)
 		}
 	}
@@ -412,7 +613,11 @@ func (c *TaskCatalog) ResolveBatchCodes(configs []*models.TaskConfig) []string {
 	}
 
 	sorted := make([]*models.TaskConfig, 0, len(configs))
-	sorted = append(sorted, configs...)
+	for _, cfg := range configs {
+		if cfg != nil {
+			sorted = append(sorted, cfg)
+		}
+	}
 	sort.Slice(sorted, func(i, j int) bool {
 		if sorted[i].SortOrder == sorted[j].SortOrder {
 			return sorted[i].TaskType < sorted[j].TaskType

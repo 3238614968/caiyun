@@ -67,6 +67,15 @@ func (options ExchangeTaskCreateOptions) withDefaults() ExchangeTaskCreateOption
 	options.CalendarPolicy = strings.TrimSpace(strings.ToLower(options.CalendarPolicy))
 	options.HolidayDates = strings.TrimSpace(options.HolidayDates)
 	options.WorkdayDates = strings.TrimSpace(options.WorkdayDates)
+	if options.CustomCron != "" {
+		options.ScheduledExchangeTime = ""
+		options.RestockTimes = ""
+	} else if options.ScheduledExchangeTime != "" && len(strings.FieldsFunc(options.RestockTimes, func(r rune) bool { return r == ',' || r == '，' || r == ';' || r == '；' || r == '\n' })) <= 1 {
+		options.ScheduledExchangeTime = normalizeExchangeSlotTime(options.ScheduledExchangeTime)
+		if options.RestockTimes != "" {
+			options.RestockTimes = options.ScheduledExchangeTime
+		}
+	}
 	return options
 }
 

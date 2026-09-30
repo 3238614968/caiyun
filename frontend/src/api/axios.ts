@@ -134,6 +134,7 @@ service.interceptors.response.use(
     return data
   },
   async (error: AxiosError<ErrorResponseBody>) => {
+    if (error.code === 'ERR_CANCELED') return Promise.reject(error)
     const { response } = error
     const requestConfig = error.config as AppAxiosRequestConfig | undefined
 

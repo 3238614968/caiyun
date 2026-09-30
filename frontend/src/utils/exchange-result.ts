@@ -47,6 +47,10 @@ export const formatExchangeResult = (message?: string, status?: string): Exchang
     return { label: '商品信息需更新', type: 'warning' }
   }
 
+  if (/code=610\b/.test(raw) || /Error Code[：:]\s*GK/i.test(raw)) {
+    return { label: '活动服务拒绝（610/GK）', type: 'warning' }
+  }
+
   if (raw.includes('活动异常') || raw.includes('Error Code')) {
     return { label: '活动异常', type: 'warning' }
   }

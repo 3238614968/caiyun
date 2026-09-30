@@ -1,4 +1,5 @@
 import { computed, ref, type Ref } from 'vue'
+import { normalizeExchangeSchedule } from '@/utils/exchange-schedule'
 import { ElMessage } from 'element-plus'
 import {
   createExchangeTask,
@@ -139,17 +140,15 @@ export function useExchangeTaskActions(options: UseExchangeTaskActionsOptions) {
     options.taskForm.value.account_id = options.taskForm.value.account_ids[0] ?? options.taskForm.value.account_id ?? null
 
     const payload: CreateExchangeTaskRequest = {
+      ...normalizeExchangeSchedule(options.taskForm.value),
       product_id: productId,
       task_type: options.taskForm.value.task_type,
       max_attempts: options.taskForm.value.task_type === 'long_term'
         ? Math.max(Number(options.taskForm.value.max_attempts) || 10, 10)
         : Math.max(Number(options.taskForm.value.max_attempts) || 1, 1),
-      scheduled_exchange_time: options.taskForm.value.scheduled_exchange_time || undefined,
       restock_cycle: options.taskForm.value.task_type === 'long_term' ? options.taskForm.value.restock_cycle : undefined,
       restock_weekday: options.taskForm.value.task_type === 'long_term' && options.taskForm.value.restock_cycle === 'weekly' ? options.taskForm.value.restock_weekday : undefined,
       restock_day_of_month: options.taskForm.value.task_type === 'long_term' && options.taskForm.value.restock_cycle === 'monthly' ? options.taskForm.value.restock_day_of_month : undefined,
-      restock_times: options.taskForm.value.task_type === 'long_term' && options.taskForm.value.restock_times.length > 0 ? options.taskForm.value.restock_times : undefined,
-      custom_cron: options.taskForm.value.task_type === 'long_term' ? options.taskForm.value.custom_cron.trim() || undefined : undefined,
       calendar_policy: options.taskForm.value.task_type === 'long_term' ? options.taskForm.value.calendar_policy : undefined,
       holiday_dates: options.taskForm.value.task_type === 'long_term' && options.taskForm.value.holiday_dates.length > 0 ? options.taskForm.value.holiday_dates : undefined,
       workday_dates: options.taskForm.value.task_type === 'long_term' && options.taskForm.value.workday_dates.length > 0 ? options.taskForm.value.workday_dates : undefined

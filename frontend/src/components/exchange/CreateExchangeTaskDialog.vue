@@ -199,10 +199,12 @@
       <el-form-item label="指定抢兑时间">
         <el-time-picker
           v-model="form.scheduled_exchange_time"
+          :disabled="form.task_type === 'long_term' && (!!form.custom_cron.trim() || form.restock_times.length > 1)"
           value-format="HH:mm:ss"
           format="HH:mm"
           placeholder="选择抢兑时间"
           style="width: 180px;"
+          @change="syncSingleTime"
         />
         <span class="inline-hint">为空时使用抢兑规则时间；配置多个时间点或 cron 时优先生效</span>
       </el-form-item>
@@ -262,12 +264,14 @@
       >
         <el-select
           v-model="form.restock_times"
+          :disabled="!!form.custom_cron.trim()"
           multiple
           filterable
           allow-create
           default-first-option
           placeholder="输入 HH:mm 后回车，例如 10:00、16:00"
           style="width: 100%;"
+          @change="syncSingleRestockTime"
         />
       </el-form-item>
 
@@ -391,6 +395,13 @@ const selectedAccountCount = computed(() => (
   hasCloudAccounts.value ? form.value.account_ids.length : form.value.exchange_rule_ids.length
 ))
 const canSubmit = computed(() => Boolean(form.value.product_id && selectedAccountCount.value > 0))
+
+const syncSingleTime = () => {
+  if (form.value.restock_times.length <= 1) form.value.restock_times = form.value.scheduled_exchange_time ? [form.value.scheduled_exchange_time] : []
+}
+const syncSingleRestockTime = () => {
+  if (form.value.restock_times.length === 1) form.value.scheduled_exchange_time = form.value.restock_times[0]
+}
 
 const handleCloudAccountChange = () => {
   syncCloudAccountSelection(form.value)

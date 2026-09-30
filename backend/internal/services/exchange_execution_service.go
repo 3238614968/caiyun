@@ -291,6 +291,7 @@ func (s *ExchangeService) executeSingleTaskContext(ctx context.Context, task *mo
 			}
 		}()
 		var retryErr error
+		preparedSession := &exchangePreparedSession{}
 		success, message, execTime, attemptsUsed, retryErr = runExchangeWithRetries(
 			ctx,
 			maxRetries,
@@ -307,7 +308,7 @@ func (s *ExchangeService) executeSingleTaskContext(ctx context.Context, task *mo
 				if !isUsableExchangePrizeID(prizeID) {
 					return false, "商品已下架或不存在，请更新商品列表后重新创建抢兑任务", 0
 				}
-				return s.doExchangeContext(ctx, account, prizeID)
+				return s.doExchangeContext(ctx, account, prizeID, preparedSession)
 			},
 		)
 		if retryErr != nil {
@@ -376,8 +377,8 @@ func (s *ExchangeService) doExchange(account *models.ExchangeAccount, prizeID st
 	return performExchangeWithControls(account, prizeID, s.tokenMgr, s.lockStore)
 }
 
-func (s *ExchangeService) doExchangeContext(ctx context.Context, account *models.ExchangeAccount, prizeID string) (bool, string, int) {
-	return performExchangeWithControlsContext(ctx, account, prizeID, s.tokenMgr, s.lockStore)
+func (s *ExchangeService) doExchangeContext(ctx context.Context, account *models.ExchangeAccount, prizeID string, prepared ...*exchangePreparedSession) (bool, string, int) {
+	return performExchangeWithControlsContext(ctx, account, prizeID, s.tokenMgr, s.lockStore, prepared...)
 }
 
 func (s *ExchangeService) resolveTaskPrizeID(task *models.ExchangeTask) string {

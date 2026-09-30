@@ -207,6 +207,9 @@ func SolveSlideContext(ctx context.Context, puzzle, picture string) (*SlideSolve
 
 	offset, ok := numberFromSMSData(apiResp.Data["offset"])
 	if !ok {
+		offset, ok = numberFromSMSData(apiResp.Data["x"])
+	}
+	if !ok {
 		return nil, fmt.Errorf("滑块识别响应缺少 offset")
 	}
 	result := &SlideSolveResult{Offset: int(offset)}

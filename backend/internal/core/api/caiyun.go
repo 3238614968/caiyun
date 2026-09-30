@@ -1,6 +1,7 @@
 package api
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -21,7 +22,8 @@ const (
 
 // CaiyunAPI 彩云 API 客户端
 type CaiyunAPI struct {
-	client *http.Client
+	client           *http.Client
+	familyCircleBase string
 }
 
 // NewCaiyunAPI 创建彩云 API 客户端
@@ -31,12 +33,18 @@ func NewCaiyunAPI(client *http.Client) *CaiyunAPI {
 
 // CaiyunResponse 彩云 API 通用响应
 type CaiyunResponse struct {
-	Code    interface{} `json:"code"`
-	Message string      `json:"message"`
-	Msg     string      `json:"msg"`
-	Success bool        `json:"success"`
-	Result  interface{} `json:"result"`
-	Data    interface{} `json:"data"`
+	Code       interface{} `json:"code"`
+	Message    string      `json:"message"`
+	Msg        string      `json:"msg"`
+	Success    bool        `json:"success"`
+	Result     interface{} `json:"result"`
+	Data       interface{} `json:"data"`
+	Body       interface{} `json:"body"`
+	ReturnCode interface{} `json:"returnCode"`
+	ReturnMsg  string      `json:"returnMsg"`
+	ResultCode interface{} `json:"resultCode"`
+	ResultMsg  string      `json:"resultMsg"`
+	ResultData interface{} `json:"resultData"`
 }
 
 type SignInCalendar struct {
@@ -46,15 +54,21 @@ type SignInCalendar struct {
 
 // SignInResult 签到结果
 type SignInResult struct {
-	TodaySignIn              bool             `json:"todaySignIn"`
-	SignInPoints             int              `json:"signInPoints"`
-	Total                    int              `json:"total"`
-	ToReceive                int              `json:"toReceive"`
-	CurMonthBackup           bool             `json:"curMonthBackup"`
-	CurMonthBackupTaskAccept bool             `json:"curMonthBackupTaskAccept"`
-	CurMonthBackupSignAccept bool             `json:"curMonthBackupSignAccept"`
-	NextMonthGet             int              `json:"nextMonthGet"`
-	Cal                      []SignInCalendar `json:"cal"`
+	TodaySignIn              bool               `json:"todaySignIn"`
+	SignInPoints             int                `json:"signInPoints"`
+	Total                    int                `json:"total"`
+	ToReceive                int                `json:"toReceive"`
+	ReceiveList              []CloudReceiveItem `json:"receiveList"`
+	CurMonthBackup           bool               `json:"curMonthBackup"`
+	CurMonthBackupTaskAccept bool               `json:"curMonthBackupTaskAccept"`
+	CurMonthBackupSignAccept bool               `json:"curMonthBackupSignAccept"`
+	NextMonthGet             int                `json:"nextMonthGet"`
+	Cal                      []SignInCalendar   `json:"cal"`
+}
+
+type CloudReceiveItem struct {
+	CloudNum  int `json:"cloudNum"`
+	CloudType int `json:"cloudType"`
 }
 
 func (r SignInResult) TodaySigned() bool {
@@ -111,19 +125,20 @@ type TaskListResponse struct {
 
 // Task 任务信息
 type Task struct {
-	ID          int      `json:"id"`
-	Name        string   `json:"name"`
-	Description string   `json:"description"`
-	Status      int      `json:"status"`
-	Reward      int      `json:"reward"`
-	Group       string   `json:"group"`
-	StepTypeSet []string `json:"stepTypeSet"`
-	State       string   `json:"state"`
-	Enable      int      `json:"enable"`
-	GroupID     string   `json:"groupid"`
-	MarketName  string   `json:"marketname"`
-	CurrStep    int      `json:"currstep"`
-	Process     int      `json:"process"`
+	ID          int                               `json:"id"`
+	Name        string                            `json:"name"`
+	Description string                            `json:"description"`
+	Status      int                               `json:"status"`
+	Reward      int                               `json:"reward"`
+	Group       string                            `json:"group"`
+	StepTypeSet []string                          `json:"stepTypeSet"`
+	State       string                            `json:"state"`
+	Enable      *int                              `json:"enable"`
+	GroupID     string                            `json:"groupid"`
+	MarketName  string                            `json:"marketname"`
+	CurrStep    int                               `json:"currstep"`
+	Process     int                               `json:"process"`
+	Button      map[string]map[string]interface{} `json:"button"`
 }
 
 // ShakeResponse 摇一摇响应
@@ -154,6 +169,9 @@ func boolFromAny(v interface{}) bool {
 		return value != 0
 	case float64:
 		return int(value) != 0
+	case json.Number:
+		n, err := value.Int64()
+		return err == nil && n != 0
 	case string:
 		value = strings.TrimSpace(strings.ToLower(value))
 		return value == "1" || value == "true" || value == "yes"
@@ -172,6 +190,8 @@ func isSuccessCode(code interface{}) bool {
 		return v == 0
 	case float64:
 		return int(v) == 0
+	case json.Number:
+		return v.String() == "0"
 	case string:
 		return v == "" || v == "0"
 	default:

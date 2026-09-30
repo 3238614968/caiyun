@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -109,6 +110,7 @@ type UploadRandomFileRequest struct {
 	ParentFileID string
 	Name         string
 	Content      []byte
+	ContentType  string
 	ChannelSrc   string
 	OpType       string
 	Ext          string
@@ -151,6 +153,10 @@ func (f *FileAPI) UploadRandomFile(req *UploadRandomFileRequest) (*UploadRandomF
 
 	contentHash := sha256Hex(content)
 	size := len(content)
+	contentType := strings.TrimSpace(req.ContentType)
+	if contentType == "" {
+		contentType = "application/octet-stream"
+	}
 
 	createHeaders := buildUploadHeaders(channelSrc, req.OpType)
 	createBody := map[string]interface{}{
@@ -161,13 +167,15 @@ func (f *FileAPI) UploadRandomFile(req *UploadRandomFileRequest) (*UploadRandomF
 		"fileRenameMode":       "auto_rename",
 		"contentHash":          contentHash,
 		"contentHashAlgorithm": "SHA256",
-		"contentType":          "application/oct-stream",
+		"contentType":          contentType,
 		"parallelUpload":       false,
 		"partInfos": []map[string]interface{}{
 			{
 				"parallelHashCtx": map[string]interface{}{"partOffset": 0},
 				"partNumber":      1,
 				"partSize":        size,
+				"start":           0,
+				"end":             size - 1,
 			},
 		},
 	}
@@ -183,9 +191,9 @@ func (f *FileAPI) UploadRandomFile(req *UploadRandomFileRequest) (*UploadRandomF
 	}
 
 	var createResult struct {
-		Success bool   `json:"success"`
-		Code    string `json:"code"`
-		Message string `json:"message"`
+		Success bool        `json:"success"`
+		Code    interface{} `json:"code"`
+		Message string      `json:"message"`
 		Data    struct {
 			Exist       bool   `json:"exist"`
 			RapidUpload bool   `json:"rapidUpload"`
@@ -200,8 +208,8 @@ func (f *FileAPI) UploadRandomFile(req *UploadRandomFileRequest) (*UploadRandomF
 		return nil, fmt.Errorf("解析创建响应失败: %w", err)
 	}
 
-	if !createResult.Success {
-		return nil, fmt.Errorf("上传文件创建失败: code=%s, msg=%s", createResult.Code, createResult.Message)
+	if !createResult.Success && createResult.Code != nil && fmt.Sprint(createResult.Code) != "0" && fmt.Sprint(createResult.Code) != "0000" {
+		return nil, fmt.Errorf("上传文件创建失败: code=%v, msg=%s", createResult.Code, createResult.Message)
 	}
 	if createResult.Data.FileID == "" {
 		return nil, fmt.Errorf("上传文件创建失败: fileId 为空")
@@ -212,11 +220,63 @@ func (f *FileAPI) UploadRandomFile(req *UploadRandomFileRequest) (*UploadRandomF
 		return &UploadRandomFileResp{FileID: createResult.Data.FileID}, nil
 	}
 
-	if len(createResult.Data.PartInfos) == 0 || createResult.Data.PartInfos[0].UploadURL == "" {
+	uploadURL := ""
+	for _, part := range createResult.Data.PartInfos {
+		if part.UploadURL != "" {
+			uploadURL = part.UploadURL
+			break
+		}
+	}
+	if uploadURL == "" {
+		urlResp, err := f.client.Post("https://personal-kd-njs.yun.139.com/hcy/file/getUploadUrl", createHeaders, map[string]interface{}{
+			"fileId": createResult.Data.FileID, "uploadId": createResult.Data.UploadID,
+			"partInfos": []map[string]interface{}{{"partNumber": 1, "partSize": size, "start": 0, "end": size - 1}},
+		})
+		if err != nil {
+			return nil, fmt.Errorf("获取文件上传地址失败: %w", err)
+		}
+		urlBody, err := f.client.ReadResponseBody(urlResp)
+		if err != nil {
+			return nil, err
+		}
+		var urlResult struct {
+			Code interface{} `json:"code"`
+			Data struct {
+				UploadURL string `json:"uploadUrl"`
+				PartInfos []struct {
+					UploadURL string `json:"uploadUrl"`
+				} `json:"partInfos"`
+			} `json:"data"`
+		}
+		if err := json.Unmarshal([]byte(urlBody), &urlResult); err != nil {
+			return nil, fmt.Errorf("解析文件上传地址失败: %w", err)
+		}
+		uploadURL = urlResult.Data.UploadURL
+		for _, part := range urlResult.Data.PartInfos {
+			if uploadURL == "" {
+				uploadURL = part.UploadURL
+			}
+		}
+	}
+	if uploadURL == "" {
 		return nil, fmt.Errorf("上传文件创建失败: uploadUrl 为空")
 	}
-
-	if err := putBinaryToUploadURL(createResult.Data.PartInfos[0].UploadURL, content); err != nil {
+	if uploader, ok := f.client.(interface {
+		PutPresigned(string, string, []byte) (*http.Response, error)
+	}); ok {
+		putResp, err := uploader.PutPresigned(uploadURL, "application/octet-stream", content)
+		if err != nil {
+			return nil, fmt.Errorf("上传文件内容失败: %w", err)
+		}
+		if putResp == nil || putResp.Body == nil {
+			return nil, fmt.Errorf("上传文件内容失败: PUT 响应为空")
+		}
+		_, _ = io.Copy(io.Discard, putResp.Body)
+		_ = putResp.Body.Close()
+		if putResp.StatusCode < 200 || putResp.StatusCode >= 300 {
+			return nil, fmt.Errorf("上传文件内容失败: HTTP %d", putResp.StatusCode)
+		}
+	} else if err := putBinaryToUploadURL(uploadURL, content); err != nil {
 		return nil, fmt.Errorf("上传文件内容失败: %w", err)
 	}
 
@@ -239,15 +299,15 @@ func (f *FileAPI) UploadRandomFile(req *UploadRandomFileRequest) (*UploadRandomF
 	}
 
 	var completeResult struct {
-		Success bool   `json:"success"`
-		Code    string `json:"code"`
-		Message string `json:"message"`
+		Success bool        `json:"success"`
+		Code    interface{} `json:"code"`
+		Message string      `json:"message"`
 	}
 	if err := json.Unmarshal([]byte(completeRespBody), &completeResult); err != nil {
 		return nil, fmt.Errorf("解析完成响应失败: %w", err)
 	}
-	if !completeResult.Success {
-		return nil, fmt.Errorf("上传文件完成失败: code=%s, msg=%s", completeResult.Code, completeResult.Message)
+	if !completeResult.Success && fmt.Sprint(completeResult.Code) != "0" && fmt.Sprint(completeResult.Code) != "0000" {
+		return nil, fmt.Errorf("上传文件完成失败: code=%v, msg=%s", completeResult.Code, completeResult.Message)
 	}
 
 	return &UploadRandomFileResp{FileID: createResult.Data.FileID}, nil

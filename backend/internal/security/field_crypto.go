@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -36,8 +37,11 @@ type fieldCryptoConfig struct {
 }
 
 var (
-	fieldCryptoOnce sync.Once
-	fieldCryptoCfg  fieldCryptoConfig
+	// ErrCredentialUnreadable identifies a stored credential that cannot be
+	// authenticated/decrypted; callers must not map it to a missing account.
+	ErrCredentialUnreadable = errors.New("账号凭据无法解密")
+	fieldCryptoOnce         sync.Once
+	fieldCryptoCfg          fieldCryptoConfig
 )
 
 func IsEncryptedValue(value string) bool {
@@ -125,7 +129,18 @@ func EncryptString(value string) (string, error) {
 }
 
 func DecryptString(value string) (string, error) {
-	return decryptString(value, !isProductionEnvironment(), false)
+	plaintext, err := decryptString(value, !isProductionEnvironment(), loadFieldCryptoConfig().allowLegacyNoAAD)
+	if err != nil {
+		return "", fmt.Errorf("%w: %w", ErrCredentialUnreadable, err)
+	}
+	return plaintext, nil
+}
+
+// DecryptStringWithAAD verifies the current format even when a temporary
+// legacy compatibility flag is set. Reencrypt uses it to detect old-format
+// ciphertext whose key version already matches the current version.
+func DecryptStringWithAAD(value string) (string, error) {
+	return decryptString(value, false, false)
 }
 
 // DecryptStringAllowPlaintext is reserved for the explicit reencrypt command,
@@ -138,7 +153,7 @@ func DecryptStringAllowPlaintext(value string) (string, error) {
 	return decryptString(value, true, true)
 }
 
-func decryptString(value string, allowPlaintext, forceLegacyNoAAD bool) (string, error) {
+func decryptString(value string, allowPlaintext, allowLegacyNoAAD bool) (string, error) {
 	if value == "" {
 		return value, nil
 	}
@@ -184,13 +199,13 @@ func decryptString(value string, allowPlaintext, forceLegacyNoAAD bool) (string,
 	nonce := payload[:gcm.NonceSize()]
 	ciphertext := payload[gcm.NonceSize():]
 	plaintext, err := gcm.Open(nil, nonce, ciphertext, []byte(fieldCryptoAAD))
-	if err != nil && (forceLegacyNoAAD || cfg.allowLegacyNoAAD) {
+	if err != nil && allowLegacyNoAAD {
 		// Pre-AAD ciphertexts are accepted only during the explicit reencrypt
 		// command or while the temporary cutover flag is enabled.
 		plaintext, err = gcm.Open(nil, nonce, ciphertext, nil)
 	}
 	if err != nil {
-		if !forceLegacyNoAAD && !cfg.allowLegacyNoAAD {
+		if !allowLegacyNoAAD {
 			return "", fmt.Errorf("解密字段失败（如为旧版无 AAD 密文，请在重加密窗口临时设置 %s=true）: %w", dataEncryptionAllowLegacyAADEnv, err)
 		}
 		return "", fmt.Errorf("解密字段失败: %w", err)

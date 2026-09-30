@@ -3,6 +3,9 @@ import { describe, expect, it } from 'vitest'
 import { formatExchangeResult } from './exchange-result'
 
 describe('formatExchangeResult', () => {
+  it('keeps the upstream GK rejection distinct from solver success', () => {
+    expect(formatExchangeResult('活动异常 Error Code：GK | code=610 | offset=18', 'failed').label).toBe('活动服务拒绝（610/GK）')
+  })
   it('normalizes successful exchange messages', () => {
     expect(formatExchangeResult('兑换成功', 'failed')).toEqual({
       label: '兑换成功',

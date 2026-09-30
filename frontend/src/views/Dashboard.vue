@@ -24,17 +24,26 @@
       style="margin-top: 20px"
     >
       <!-- 趋势图 -->
-      <el-col :span="16">
+      <el-col
+        :xs="24"
+        :sm="24"
+        :md="16"
+      >
         <CloudTrendCard
           :days="trendDays"
           :trend-data="dashboardData.trend_data"
           :latest-summary="latestTrendSummary"
+          :loading="trendLoading"
           @update:days="handleTrendDaysChange"
         />
       </el-col>
 
       <!-- 账号排名 -->
-      <el-col :span="8">
+      <el-col
+        :xs="24"
+        :sm="24"
+        :md="8"
+      >
         <AccountCloudRankingCard
           :ranking="topRanking"
           :is-admin="isAdmin"
@@ -103,12 +112,16 @@ import { isOperationUpdatedMessage, wsClient, type WsMessage } from '../api/webs
 import { getAdminDashboard, type AdminDashboardData } from '../api/account'
 import { useAuthStore } from '../store/auth'
 import { getAnnouncements, type Announcement } from '../api/announcement'
+import { createCoalescedRefresh } from '@/utils/coalesced-refresh'
 
 const CloudTrendCard = defineAsyncComponent(() => import('../components/dashboard/CloudTrendCard.vue'))
 const authStore = useAuthStore()
 const isAdmin = computed(() => authStore.user?.role === 'admin')
 
 const trendDays = ref(7)
+const trendLoading = ref(false)
+let trendRequestSequence = 0
+let disposed = false
 const announcements = ref<Announcement[]>([])
 const announcementLoading = ref(false)
 const announcementDetailVisible = ref(false)
@@ -156,7 +169,7 @@ const stats = ref<DashboardStatItem[]>([
   },
   {
     key: 'today_gained',
-    label: '今日变化',
+    label: '今日获得',
     value: 0,
     diff: 0,
     icon: 'TrendCharts',
@@ -186,8 +199,8 @@ const latestTrendSummary = computed(() => {
   const diff = Number(latest?.cloud_diff || 0)
   return {
     cloud: latest ? formatCloudCount(latest.cloud_count) : '-',
-    diff: formatTrendDiff(diff),
-    diffClass: diff > 0 ? 'positive' : diff < 0 ? 'negative' : ''
+    diff: latest?.comparable === false ? '—' : formatTrendDiff(diff),
+    diffClass: latest?.comparable === false ? '' : diff > 0 ? 'positive' : diff < 0 ? 'negative' : ''
   }
 })
 
@@ -282,15 +295,12 @@ const loadAnnouncements = async () => {
 
 const loadDashboardData = async () => {
   try {
-    const data = await getDashboard()
-    Object.assign(dashboardData, data)
-
     if (isAdmin.value) {
       // Admin: load global data
       const ad = await getAdminDashboard()
       Object.assign(adminData, ad)
       stats.value[0].value = ad.total_cloud
-      stats.value[0].diff = ad.today_gained - ad.yesterday_gained
+      stats.value[0].diff = 0
       stats.value[1].value = ad.account_count
       stats.value[2].value = ad.today_gained
       stats.value[2].diff = 0
@@ -303,6 +313,10 @@ const loadDashboardData = async () => {
         today_gained: r.today_gained
       }))
     } else {
+      const data = await getDashboard()
+      const { trend_data: ignoredTrend, ...summary } = data
+      void ignoredTrend
+      Object.assign(dashboardData, summary)
       // Normal user
       stats.value[0].value = data.total_cloud
       stats.value[0].diff = data.yesterday_diff
@@ -319,12 +333,14 @@ const loadDashboardData = async () => {
 
 // 加载趋势数据
 const loadTrendData = async () => {
+  const sequence = ++trendRequestSequence
+  trendLoading.value = true
   try {
     const { trend_data } = await getTrendData(trendDays.value)
-    dashboardData.trend_data = trend_data
+    if (sequence === trendRequestSequence && !disposed) dashboardData.trend_data = trend_data
   } catch (error) {
-    ElMessage.error('加载趋势数据失败')
-  }
+    if (sequence === trendRequestSequence && !disposed) ElMessage.error('加载趋势数据失败')
+  } finally { if (sequence === trendRequestSequence && !disposed) trendLoading.value = false }
 }
 
 const handleTrendDaysChange = (value: number) => {
@@ -333,13 +349,8 @@ const handleTrendDaysChange = (value: number) => {
 }
 
 // WebSocket推送：任务汇总到达时自动刷新仪表盘数据
-const handleSummaryRefresh = () => {
-  // 延迟1秒刷新，等数据库写入完成
-  setTimeout(() => {
-    loadDashboardData()
-    loadTrendData()
-  }, 1000)
-}
+const dashboardRefresh = createCoalescedRefresh(() => Promise.all([loadDashboardData(), loadTrendData()]))
+const handleSummaryRefresh = () => dashboardRefresh.trigger()
 
 // Operation terminal events carry no private payload and let the dashboard
 // refresh immediately instead of waiting for the next manual navigation.
@@ -352,14 +363,16 @@ const handleOperationRefresh = (msg: WsMessage) => {
 
 onMounted(() => {
   loadReadAnnouncementIDs()
-  loadDashboardData()
-  loadTrendData()
+  void dashboardRefresh.run()
   loadAnnouncements()
   wsClient.on('task_summary', handleSummaryRefresh)
   wsClient.on('operation.updated', handleOperationRefresh)
 })
 
 onUnmounted(() => {
+  disposed = true
+  trendRequestSequence++
+  dashboardRefresh.dispose()
   wsClient.off('task_summary', handleSummaryRefresh)
   wsClient.off('operation.updated', handleOperationRefresh)
 })

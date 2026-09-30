@@ -67,7 +67,7 @@ func performExchangeWithControls(account *models.ExchangeAccount, prizeID string
 	return performExchangeWithControlsContext(context.Background(), account, prizeID, tokenMgr, lockStore)
 }
 
-func performExchangeWithControlsContext(ctx context.Context, account *models.ExchangeAccount, prizeID string, tokenMgr *TokenManager, lockStore exchangeLockStore) (bool, string, int) {
+func performExchangeWithControlsContext(ctx context.Context, account *models.ExchangeAccount, prizeID string, tokenMgr *TokenManager, lockStore exchangeLockStore, prepared ...*exchangePreparedSession) (bool, string, int) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -79,6 +79,9 @@ func performExchangeWithControlsContext(ctx context.Context, account *models.Exc
 	}
 	if err := getExchangeRequestController().WaitContext(ctx); err != nil {
 		return false, err.Error(), 0
+	}
+	if len(prepared) > 0 {
+		return performExchangePreparedContext(ctx, account, prizeID, tokenMgr, prepared[0])
 	}
 	return performExchangeContext(ctx, account, prizeID, tokenMgr)
 }

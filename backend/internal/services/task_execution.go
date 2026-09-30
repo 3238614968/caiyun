@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"fmt"
+	"log"
 	"sort"
 	"strings"
 	"time"
@@ -13,33 +14,40 @@ import (
 )
 
 func resolveConfiguredTaskCodes(taskConfigRepo *repository.TaskConfigRepository) []string {
+	codes, err := loadConfiguredTaskCodes(taskConfigRepo)
+	if err != nil {
+		log.Printf("读取任务批次配置失败: %v", err)
+	}
+	return codes
+}
+
+func loadConfiguredTaskCodes(taskConfigRepo *repository.TaskConfigRepository) ([]string, error) {
 	if taskConfigRepo == nil {
-		return defaultTaskCatalog.DefaultBatchCodes()
+		return defaultTaskCatalog.DefaultBatchCodes(), nil
 	}
 
 	configs, err := taskConfigRepo.List()
-	if err != nil || len(configs) == 0 {
-		return defaultTaskCatalog.DefaultBatchCodes()
+	if err != nil {
+		return []string{}, fmt.Errorf("读取任务配置: %w", err)
+	}
+	if len(configs) == 0 {
+		return defaultTaskCatalog.DefaultBatchCodes(), nil
 	}
 
-	codes := defaultTaskCatalog.ResolveBatchCodes(configs)
-	if len(codes) > 0 {
-		return codes
+	if !taskConfigRepo.HasBatchColumn() {
+		return resolveLegacyEnabledCodes(configs), nil
 	}
-
-	// 兼容旧版 task_configs 表（无 run_in_batch 列）场景：
-	// 此时 RunInBatch 全部为 false，回退为“按 is_enabled + sort_order 执行”。
-	legacyCodes := resolveLegacyEnabledCodes(configs)
-	if len(legacyCodes) > 0 {
-		return legacyCodes
-	}
-
-	return defaultTaskCatalog.DefaultBatchCodes()
+	// An explicitly empty batch means that no tasks are enabled for batching.
+	return defaultTaskCatalog.ResolveBatchCodes(configs), nil
 }
 
 func resolveLegacyEnabledCodes(configs []*models.TaskConfig) []string {
 	sorted := make([]*models.TaskConfig, 0, len(configs))
-	sorted = append(sorted, configs...)
+	for _, cfg := range configs {
+		if cfg != nil {
+			sorted = append(sorted, cfg)
+		}
+	}
 	sort.Slice(sorted, func(i, j int) bool {
 		if sorted[i].SortOrder == sorted[j].SortOrder {
 			return sorted[i].TaskType < sorted[j].TaskType
@@ -57,7 +65,7 @@ func resolveLegacyEnabledCodes(configs []*models.TaskConfig) []string {
 		if code == "" || seen[code] {
 			continue
 		}
-		if _, ok := defaultTaskCatalog.Get(code); !ok {
+		if def, ok := defaultTaskCatalog.Get(code); !ok || !def.RunInBatch {
 			continue
 		}
 		seen[code] = true
@@ -86,11 +94,14 @@ func (r *TaskRunner) RunSelectedContext(ctx context.Context, taskCodes []string)
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	if len(taskCodes) == 0 {
+	if taskCodes == nil {
 		taskCodes = defaultTaskCatalog.DefaultBatchCodes()
 	}
 
 	results := make([]TaskResult, 0, len(taskCodes))
+	if len(taskCodes) == 0 {
+		return results
+	}
 	r.initialCloudCount = r.getCurrentCloudCount()
 
 	for _, code := range taskCodes {

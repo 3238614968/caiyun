@@ -76,6 +76,9 @@ func (s *AccountService) CreateAccountContext(ctx context.Context, userID uint, 
 		if err := accountRepo.Update(existingAccount); err != nil {
 			return nil, err
 		}
+		if clearer, ok := s.tokenProvider.(interface{ ClearToken(uint) }); ok {
+			clearer.ClearToken(existingAccount.ID)
+		}
 
 		return existingAccount, nil
 	}
@@ -207,6 +210,8 @@ func (s *AccountService) UpdateAccountContext(ctx context.Context, userID, accou
 	// 同步解析 Auth 到 token/平台/过期时间
 	if req.Auth != "" {
 		account.Auth = req.Auth
+		account.IsActive = true
+		account.JWTErrorCount = 0
 		if info, err := auth.ParseToken(req.Auth); err == nil && info != nil {
 			account.Token = info.Token
 			account.ExpireAt = info.Expire
@@ -218,6 +223,11 @@ func (s *AccountService) UpdateAccountContext(ctx context.Context, userID, accou
 
 	if err := accountRepo.Update(account); err != nil {
 		return nil, err
+	}
+	if req.Auth != "" {
+		if clearer, ok := s.tokenProvider.(interface{ ClearToken(uint) }); ok {
+			clearer.ClearToken(account.ID)
+		}
 	}
 
 	return account, nil
@@ -302,5 +312,13 @@ func (s *AccountService) SetAccountStatusContext(ctx context.Context, userID, ac
 		return ErrAccountNotFound
 	}
 
-	return accountRepo.SetActiveStatus(accountID, isActive)
+	if err := accountRepo.SetActiveStatus(accountID, isActive); err != nil {
+		return err
+	}
+	if isActive {
+		if clearer, ok := s.tokenProvider.(interface{ ClearToken(uint) }); ok {
+			clearer.ClearToken(accountID)
+		}
+	}
+	return nil
 }

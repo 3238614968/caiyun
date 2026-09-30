@@ -54,6 +54,10 @@ func (s *AccountService) ListActiveAccounts(offset, limit int) ([]*models.Accoun
 	return s.accountRepo.FindActiveAccountsPaged(offset, limit)
 }
 
+func (s *AccountService) ListActiveAccountsAfterID(lastID uint, limit int) ([]*models.Account, error) {
+	return s.accountRepo.FindActiveAccountsAfterID(lastID, limit)
+}
+
 // EnqueueTask 将任务加入队列
 func (s *AccountService) EnqueueTask(accountID uint, taskType string) error {
 	// 获取账号信息

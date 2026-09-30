@@ -200,6 +200,7 @@ func registerStatsRoutes(parent *gin.RouterGroup, taskHandler *handlers.TaskHand
 func registerExchangeRoutes(parent *gin.RouterGroup, exchangeHandler *handlers.ExchangeHandler) {
 	exchange := parent.Group("/exchange")
 	{
+		exchange.GET("/prizes", exchangeHandler.GetPendingPrizes)
 		// 新语义路由：账号规则。旧 /accounts 路由保留兼容一到两个版本。
 		exchange.POST("/rules", exchangeHandler.AddExchangeRule)
 		exchange.GET("/rules", exchangeHandler.GetExchangeRules)

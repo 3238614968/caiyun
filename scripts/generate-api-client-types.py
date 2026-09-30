@@ -66,6 +66,8 @@ CORE_OPENAPI_SCHEMAS = [
     "SendPasswordResetCodeRequest",
     "ResetPasswordRequest",
     "DashboardTrendPoint",
+    "PendingPrize",
+    "PendingPrizeList",
     "DashboardAccountRank",
     "DashboardData",
     "CloudStat",

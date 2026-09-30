@@ -14,11 +14,11 @@ import (
 
 	"caiyun/internal/bootstrap"
 	"caiyun/internal/monitor"
+	"caiyun/internal/observability"
 	"caiyun/internal/queue"
 	"caiyun/internal/version"
 
 	"github.com/prometheus/client_golang/prometheus/promhttp"
-	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 )
 
 // startMonitoringAPI 启动监控API（可选）
@@ -115,7 +115,7 @@ func startMonitoringAPI(worker *Worker, core *bootstrap.Core, config MonitoringC
 
 	srv := &http.Server{
 		Addr:              net.JoinHostPort(host, port),
-		Handler:           otelhttp.NewHandler(mux, "caiyun.worker.monitor"),
+		Handler:           observability.NewHTTPHandler(mux, "caiyun.worker.monitor"),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 

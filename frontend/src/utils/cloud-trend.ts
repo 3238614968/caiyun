@@ -3,6 +3,9 @@ export interface TrendPoint {
   cloud_count: number
   cloud_diff?: number
   has_data?: boolean
+  comparable?: boolean
+  sampled_accounts?: number
+  account_count?: number
 }
 
 export interface TrendChartBounds {
@@ -44,6 +47,7 @@ export const DEFAULT_TREND_BOUNDS: TrendChartBounds = {
 }
 
 export const formatTrendDate = (value: string, short = false) => {
+  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return short ? value.slice(5) : value
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) {
     return value
@@ -71,7 +75,7 @@ export const formatTrendDiff = (value?: number) => {
 }
 
 export const getTrendYAxisRange = (trendData: TrendPoint[]) => {
-  const values = trendData.map(item => Number(item.cloud_count)).filter(value => !Number.isNaN(value))
+  const values = trendData.filter(item => item.has_data !== false).map(item => Number(item.cloud_count)).filter(value => !Number.isNaN(value))
   if (values.length === 0) {
     return { min: 0, max: 100 }
   }
@@ -118,18 +122,15 @@ export const buildTrendChartGeometry = (
     }
   })
 
-  const linePath = points
-    .map((point, index) => `${index === 0 ? 'M' : 'L'} ${point.x.toFixed(2)} ${point.y.toFixed(2)}`)
-    .join(' ')
-
-  const areaPath = points.length > 0
-    ? [
-        `M ${points[0].x.toFixed(2)} ${bottomY.toFixed(2)}`,
-        ...points.map((point, index) => `${index === 0 ? 'L' : 'L'} ${point.x.toFixed(2)} ${point.y.toFixed(2)}`),
-        `L ${points[points.length - 1].x.toFixed(2)} ${bottomY.toFixed(2)}`,
-        'Z'
-      ].join(' ')
-    : ''
+  const segments: TrendChartPoint[][] = []
+  let segment: TrendChartPoint[] = []
+  for (const point of points) {
+    if (point.has_data === false) { if (segment.length) segments.push(segment); segment = []; continue }
+    segment.push(point)
+  }
+  if (segment.length) segments.push(segment)
+  const linePath = segments.map(items => items.map((point, index) => `${index === 0 ? 'M' : 'L'} ${point.x.toFixed(2)} ${point.y.toFixed(2)}`).join(' ')).join(' ')
+  const areaPath = segments.map(items => [`M ${items[0].x.toFixed(2)} ${bottomY.toFixed(2)}`, ...items.map(point => `L ${point.x.toFixed(2)} ${point.y.toFixed(2)}`), `L ${items[items.length - 1].x.toFixed(2)} ${bottomY.toFixed(2)}`, 'Z'].join(' ')).join(' ')
 
   const yTicks = Array.from({ length: 5 }, (_, index) => {
     const ratio = index / 4

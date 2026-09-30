@@ -29,7 +29,12 @@ func respondBusinessError(c *gin.Context, statusCode int, businessCode appErrors
 	apiresponse.ErrorWithBusinessCode(c, statusCode, string(businessCode), message)
 }
 
-func respondInternalServer(c *gin.Context) {
+func respondInternalServer(c *gin.Context, causes ...error) {
+	for _, cause := range causes {
+		if cause != nil {
+			_ = c.Error(cause)
+		}
+	}
 	apiresponse.InternalServer(c, InternalServerErrorResponse().Message)
 }
 

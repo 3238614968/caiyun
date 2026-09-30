@@ -72,7 +72,7 @@ func (r *TaskLogRepository) Create(log *models.TaskLog) error {
 // FindByID 根据ID查找任务日志
 func (r *TaskLogRepository) FindByID(id uint) (*models.TaskLog, error) {
 	var log models.TaskLog
-	err := r.db.Preload("Account").First(&log, id).Error
+	err := r.db.Preload("Account", accountMetadataQuery).First(&log, id).Error
 	if err != nil {
 		return nil, err
 	}
@@ -105,7 +105,7 @@ func (r *TaskLogRepository) FindByUserID(userID uint, offset, limit int) ([]*mod
 		return nil, 0, err
 	}
 
-	err := query.Preload("Account").Order("created_at DESC").Offset(offset).Limit(limit).Find(&logs).Error
+	err := query.Preload("Account", accountMetadataQuery).Order("created_at DESC").Offset(offset).Limit(limit).Find(&logs).Error
 	return logs, total, err
 }
 
@@ -130,7 +130,7 @@ func (r *TaskLogRepository) FindByFilter(userID uint, accountID *uint, taskType,
 		return nil, 0, err
 	}
 
-	err := query.Preload("Account").Order("created_at DESC").Offset(offset).Limit(limit).Find(&logs).Error
+	err := query.Preload("Account", accountMetadataQuery).Order("created_at DESC").Offset(offset).Limit(limit).Find(&logs).Error
 	return logs, total, err
 }
 
@@ -262,7 +262,7 @@ func (r *TaskLogRepository) List(offset, limit int) ([]*models.TaskLog, int64, e
 		return nil, 0, err
 	}
 
-	err := r.db.Preload("Account").Order("created_at DESC").Offset(offset).Limit(limit).Find(&logs).Error
+	err := r.db.Preload("Account", accountMetadataQuery).Order("created_at DESC").Offset(offset).Limit(limit).Find(&logs).Error
 	return logs, total, err
 }
 

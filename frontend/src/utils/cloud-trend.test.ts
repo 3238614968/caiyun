@@ -7,6 +7,16 @@ import {
 } from './cloud-trend'
 
 describe('cloud trend utils', () => {
+  it('preserves gaps and excludes partial historical balances from chart scaling', () => {
+    const geometry = buildTrendChartGeometry([
+      { date: '2026-09-28', cloud_count: 100, has_data: true },
+      { date: '2026-09-29', cloud_count: 999999, has_data: false },
+      { date: '2026-09-30', cloud_count: 120, has_data: true }
+    ])
+    expect(geometry.linePath.match(/M /g)).toHaveLength(2)
+    expect(geometry.linePath).not.toContain('L ')
+    expect(geometry.yTicks[0].value).toBeLessThan(1000)
+  })
   it('formats dates and diff labels', () => {
     expect(formatTrendDate('2026-06-20T00:00:00Z', true)).toBe('06-20')
     expect(formatCloudCount(12345)).toBe('12,345')

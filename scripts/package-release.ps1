@@ -115,6 +115,7 @@ try {
 		"scripts\verify-legacy-list-drain.sh",
         "scripts\chaos-drill.sh",
         "scripts\capacity-drill.sh"
+        "backend\docs\DEPLOYMENT_CREDENTIAL_HOTFIX.md"
     )
     foreach ($relative in $copyFiles) {
         $source = Join-Path $root $relative

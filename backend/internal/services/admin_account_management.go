@@ -75,7 +75,13 @@ type UpdateAccountStatusRequest struct {
 
 // UpdateAccountStatus 更新账号状态
 func (s *AdminService) UpdateAccountStatus(accountID uint, req *UpdateAccountStatusRequest) error {
-	return s.accountRepo.SetActiveStatus(accountID, req.IsActive)
+	if err := s.accountRepo.SetActiveStatus(accountID, req.IsActive); err != nil {
+		return err
+	}
+	if req.IsActive && s.tokenCache != nil {
+		s.tokenCache.ClearToken(accountID)
+	}
+	return nil
 }
 
 // DeleteAccount 删除账号。

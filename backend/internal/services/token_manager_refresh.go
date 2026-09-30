@@ -1,6 +1,7 @@
 package services
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
@@ -93,7 +94,37 @@ func (tm *TokenManager) refreshAccountToken(accountID uint) (*TokenInfo, error) 
 
 	now := time.Now()
 	if err := tm.refreshAuthorizationIfNeeded(account, session, now); err != nil {
-		return nil, err
+		// 到期后的刷新失败才计入停用阈值；单纯过期不会停用账号。
+		failed := newTokenInfoFromSession(session, now)
+		failed.JWTToken = ""
+		tm.updateAccountJWTHealth(account, failed)
+		if account.IsActive {
+			failed.ErrorMsg = fmt.Sprintf("authorization 刷新失败: %v", err)
+		}
+		tm.tokenCache.Store(accountID, failed)
+		return failed, err
+	}
+	if session.jwtToken == "" {
+		if previous := tm.usablePreviousJWT(account, now); previous != nil {
+			if previous.SSOToken == "" {
+				if sso, err := session.authForJWT.QuerySpecTokenForJWT(account.Phone); err == nil {
+					previous.SSOToken = sso
+				}
+			}
+			previous.Auth = session.authStr
+			previous.LastRefresh = now
+			previous.HealthStatus = "healthy"
+			previous.ErrorMsg = ""
+			if account.JWTErrorCount != 0 {
+				if err := tm.accountRepo.ResetJWTErrorCount(account.ID); err != nil {
+					log.Printf("[TokenManager] 重置账号 %d JWT 错误计数失败: %v", account.ID, err)
+				} else {
+					account.JWTErrorCount = 0
+				}
+			}
+			tm.tokenCache.Store(accountID, previous)
+			return previous, nil
+		}
 	}
 
 	tokenInfo := newTokenInfoFromSession(session, now)
@@ -108,6 +139,37 @@ func (tm *TokenManager) refreshAccountToken(accountID uint) (*TokenInfo, error) 
 
 	tm.tokenCache.Store(accountID, tokenInfo)
 	return tokenInfo, nil
+}
+
+func (tm *TokenManager) usablePreviousJWT(account *models.Account, now time.Time) *TokenInfo {
+	var token string
+	var sso string
+	if cached, ok := tm.tokenCache.Load(account.ID); ok {
+		if info, ok := cached.(*TokenInfo); ok && info != nil {
+			token, sso = info.JWTToken, info.SSOToken
+		}
+	}
+	if token == "" {
+		token = account.JWTToken
+	}
+	jwtExpiry := jwtExpiresAt(token)
+	if jwtExpiry.IsZero() || !jwtExpiry.After(now.Add(30*time.Second)) {
+		return nil
+	}
+	validUntil := jwtExpiry
+	if accountExpiry := accountAuthorizationExpireAt(account); accountExpiry > now.UnixMilli() {
+		if expiresAt := time.UnixMilli(accountExpiry); expiresAt.Before(validUntil) {
+			validUntil = expiresAt
+		}
+	}
+	// A failed pre-refresh gets a short grace window, never beyond JWT expiry.
+	if grace := now.Add(5 * time.Minute); validUntil.After(grace) {
+		validUntil = grace
+	}
+	if !validUntil.After(now.Add(30 * time.Second)) {
+		return nil
+	}
+	return &TokenInfo{JWTToken: token, SSOToken: sso, ExpiresAt: validUntil}
 }
 
 func newTokenRefreshSession(account *models.Account) *tokenRefreshSession {
@@ -141,6 +203,9 @@ func (tm *TokenManager) refreshAuthorizationIfNeeded(account *models.Account, se
 	refreshed, err := session.authForJWT.RefreshAuthorization(account.Auth, account.Phone, userDomainID)
 	if err != nil {
 		log.Printf("[TokenManager] 账号 %d authorization 刷新失败，保留原数据库记录: %v", account.ID, err)
+		if accountAuthorizationExpireAt(account) <= now.UnixMilli() {
+			return fmt.Errorf("authorization 已到期且刷新失败: %w", err)
+		}
 		return nil
 	}
 
@@ -168,7 +233,7 @@ func (tm *TokenManager) refreshAuthorizationIfNeeded(account *models.Account, se
 }
 
 func newTokenInfoFromSession(session *tokenRefreshSession, now time.Time) *TokenInfo {
-	return &TokenInfo{
+	info := &TokenInfo{
 		JWTToken:     session.jwtToken,
 		SSOToken:     session.ssoToken,
 		Auth:         session.authStr,
@@ -176,6 +241,10 @@ func newTokenInfoFromSession(session *tokenRefreshSession, now time.Time) *Token
 		LastRefresh:  now,
 		HealthStatus: "healthy",
 	}
+	if expiresAt := jwtExpiresAt(session.jwtToken); !expiresAt.IsZero() && expiresAt.Before(info.ExpiresAt) {
+		info.ExpiresAt = expiresAt
+	}
+	return info
 }
 
 func (tm *TokenManager) updateAccountJWTHealth(account *models.Account, tokenInfo *TokenInfo) {
@@ -217,19 +286,46 @@ func (tm *TokenManager) cachedToken(accountID uint) (*TokenInfo, error, bool) {
 		tm.tokenCache.Delete(accountID)
 		return nil, nil, false
 	}
+	var account *models.Account
+	if tm.accountRepo != nil {
+		var err error
+		account, err = tm.accountRepo.GetByID(accountID)
+		if err != nil {
+			return nil, fmt.Errorf("核对账号缓存状态失败: %w", err), true
+		}
+		if !account.IsActive {
+			tm.tokenCache.CompareAndDelete(accountID, tokenInfo)
+			return nil, fmt.Errorf("账号已停用，请更新凭据或手动启用"), true
+		}
+		if !tokenCacheMatchesAccount(tokenInfo, account) {
+			tm.tokenCache.CompareAndDelete(accountID, tokenInfo)
+			return nil, nil, false
+		}
+	}
 
 	now := time.Now()
 	if tokenInfo.JWTToken != "" && tokenInfo.HealthStatus == "healthy" && now.Add(tokenRefreshHealthySkew).Before(tokenInfo.ExpiresAt) {
 		return tokenInfo, nil, true
 	}
 	if tokenInfo.HealthStatus == "error" && now.Before(tokenInfo.ExpiresAt) {
+		// Manual re-enable or updated authorization resets the persisted failure
+		// count. Other processes must notice that immediately, even with an old
+		// negative cache entry.
+		if account != nil && account.JWTErrorCount == 0 {
+			tm.tokenCache.CompareAndDelete(accountID, tokenInfo)
+			return nil, nil, false
+		}
 		if tokenInfo.ErrorMsg == "" {
-			tokenInfo.ErrorMsg = "Token 暂时不可用"
+			return tokenInfo, fmt.Errorf("Token 暂时不可用"), true
 		}
 		return tokenInfo, fmt.Errorf("%s", tokenInfo.ErrorMsg), true
 	}
 
 	return nil, nil, false
+}
+
+func tokenCacheMatchesAccount(info *TokenInfo, account *models.Account) bool {
+	return info != nil && account != nil && sanitizeAuthValue(account.Auth) == info.Auth
 }
 
 func (tm *TokenManager) accountLock(accountID uint) *sync.Mutex {
@@ -343,6 +439,11 @@ func (tm *TokenManager) waitForExternalRefresh(accountID uint, since time.Time) 
 				LastRefresh:  account.UpdatedAt,
 				HealthStatus: "healthy",
 			}
+			ssoCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			if sso, err := newTokenRefreshSession(account).authForJWT.QuerySpecTokenForJWTContext(ssoCtx, account.Phone); err == nil {
+				tokenInfo.SSOToken = sso
+			}
+			cancel()
 			tm.tokenCache.Store(accountID, tokenInfo)
 			return tokenInfo, nil
 		}

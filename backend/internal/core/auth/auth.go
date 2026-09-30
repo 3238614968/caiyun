@@ -56,7 +56,10 @@ type UserInfo struct {
 // 1) Basic base64(platform:phone:token)  冒号分隔
 // 2) Basic base64(platform|phone|token|expire|...)  竖线分隔（青龙/脚本常见）
 func ParseToken(authString string) (*UserInfo, error) {
-	authBase64 := strings.TrimPrefix(strings.TrimSpace(authString), "Basic ")
+	authBase64 := strings.TrimSpace(authString)
+	if len(authBase64) >= 6 && strings.EqualFold(authBase64[:6], "Basic ") {
+		authBase64 = strings.TrimSpace(authBase64[6:])
+	}
 	if authBase64 == "" {
 		return nil, fmt.Errorf("Auth 为空")
 	}

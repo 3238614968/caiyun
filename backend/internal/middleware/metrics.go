@@ -28,6 +28,10 @@ func HTTPMetricsMiddleware(metrics *monitor.Metrics) gin.HandlerFunc {
 		if metrics != nil {
 			metrics.ObserveHTTPRequest(c.Request.Method, route, status, duration.Seconds())
 		}
+		for _, requestError := range c.Errors {
+			log.Printf("request_id=%s method=%s path=%s internal_error=%v",
+				GetRequestID(c), c.Request.Method, c.Request.URL.Path, requestError.Err)
+		}
 		log.Printf("request_id=%s method=%s path=%s route=%s status=%s duration_ms=%d client_ip=%s user_agent=%q",
 			GetRequestID(c),
 			c.Request.Method,

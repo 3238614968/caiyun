@@ -12,14 +12,16 @@ import (
 
 // ActivityTask 是 tokenpk/newyear 两个活动共用的任务结构。
 type ActivityTask struct {
-	ID        int                    `json:"id"`
-	Name      string                 `json:"name"`
-	State     string                 `json:"state"`
-	CurrStep  int                    `json:"currstep"`
-	LimitType string                 `json:"limitType"`
-	Flag      string                 `json:"flag"`
-	Prizes    []ActivityTaskPrize    `json:"prizes"`
-	Button    map[string]interface{} `json:"button"`
+	ID               int                    `json:"id"`
+	Name             string                 `json:"name"`
+	State            string                 `json:"state"`
+	CurrStep         int                    `json:"currstep"`
+	LimitType        string                 `json:"limitType"`
+	MonthlyCompleted int                    `json:"monthlyCompleted"`
+	MonthlyLimit     int                    `json:"monthlyLimit"`
+	Flag             string                 `json:"flag"`
+	Prizes           []ActivityTaskPrize    `json:"prizes"`
+	Button           map[string]interface{} `json:"button"`
 }
 
 // ActivityTaskPrize 任务奖励描述。
@@ -234,4 +236,38 @@ func (api *CaiyunAPI) TokenPKGenerateInviteCode() (string, error) {
 		_ = json.Unmarshal(envelope.Result, &code)
 	}
 	return code, nil
+}
+
+// TokenPKAcceptInvite must submit form data; the upstream rejects JSON here.
+func (api *CaiyunAPI) TokenPKAcceptInvite(code string) error {
+	if strings.TrimSpace(code) == "" {
+		return fmt.Errorf("算力大作战邀请码为空")
+	}
+	headers := api.buildActivityHeaders(TokenPKMarketName, "", map[string]string{
+		"Content-Type": "application/x-www-form-urlencoded",
+	})
+	form := url.Values{"code": {code}}.Encode()
+	for _, path := range []string{"/tokenpk/invite/accept", "/tokenpk/invite/acceptInvite"} {
+		resp, err := api.client.Post(MobileMarketURL+path, headers, form)
+		if err != nil {
+			return err
+		}
+		body, err := api.client.ReadResponseBody(resp)
+		if err != nil {
+			return err
+		}
+		if (resp.StatusCode == 404 || resp.StatusCode == 405) && path == "/tokenpk/invite/accept" {
+			continue
+		}
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			return fmt.Errorf("算力大作战助力 HTTP %d", resp.StatusCode)
+		}
+		envelope, err := decodeActivityBody("算力大作战助力", body)
+		if err != nil && path == "/tokenpk/invite/accept" && envelope != nil &&
+			(envelope.Code.String() == "404" || envelope.Code.String() == "405") {
+			continue
+		}
+		return err
+	}
+	return fmt.Errorf("算力大作战助力接口未找到")
 }

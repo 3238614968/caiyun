@@ -1,6 +1,7 @@
 package services
 
 import (
+	"context"
 	"crypto/tls"
 	"fmt"
 	"io"
@@ -34,8 +35,15 @@ func newMockExchangeTLSServer(t *testing.T, exchangeStatus int, exchangeBody str
 			_, _ = io.WriteString(w, `{"code":0,"message":"ok","data":{"offset":18,"confidence":0.99,"method":"mock"}}`)
 		case "/ycloud/auth-service/slide/getSlide":
 			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set("x-yun-tid", "fixture-challenge")
 			_, _ = io.WriteString(w, `{"code":0,"msg":"ok","result":{"puzzle":"cHV6emxl","picture":"cGljdHVyZQ==","picWidth":680,"picHeight":400,"puzzleWidth":96}}`)
 		case "/ycloud/signin/page/exchangeV2":
+			if r.URL.Query().Get("puzzleOffset") != "18" {
+				t.Errorf("recognized offset was changed: %s", r.URL.RawQuery)
+			}
+			if r.Header.Get("x-yun-tid") != "fixture-challenge" {
+				t.Error("exchange did not reuse the challenge trace")
+			}
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(exchangeStatus)
 			_, _ = io.WriteString(w, exchangeBody)
@@ -83,6 +91,24 @@ func TestObtainExchangeSlideOffsetWithMockServer(t *testing.T) {
 	}
 	if !strings.Contains(info, "confidence=0.9900") || !strings.Contains(info, "method=mock") {
 		t.Fatalf("obtainExchangeSlideOffset() info = %q", info)
+	}
+}
+
+func TestPreparedRetryKeepsAccountSessionAndReportsGKDiagnostics(t *testing.T) {
+	server := newMockExchangeTLSServer(t, http.StatusOK, `{"code":610,"msg":"活动异常，请稍后重试！Error Code：GK"}`)
+	defer server.Close()
+	t.Setenv("CAIYUN_SMS_API_BASE_URL", server.URL)
+	t.Setenv("CAIYUN_SMS_INSECURE_SKIP_VERIFY", "true")
+	session := newMockExchangeSession(t, server)
+	prepared := &exchangePreparedSession{auth: &exchangeAuthContext{jwtToken: "fixture-jwt"}, http: session}
+	for i := 0; i < 2; i++ {
+		ok, message, _ := performExchangePreparedContext(context.Background(), nil, "prize", nil, prepared)
+		if ok || !strings.Contains(message, "code=610") || !strings.Contains(message, "offset=18") {
+			t.Fatalf("GK outcome=%v %s", ok, message)
+		}
+		if prepared.http != session {
+			t.Fatal("retry discarded the account HTTP session")
+		}
 	}
 }
 

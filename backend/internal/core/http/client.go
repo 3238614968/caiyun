@@ -130,6 +130,16 @@ func (b *circuitBreaker) recordFailure(now time.Time) {
 // ClientOption configures a Client without expanding global mutable state.
 type ClientOption func(*Client)
 
+// WithTransport replaces the outbound transport, primarily for deterministic
+// protocol tests that must never contact upstream services.
+func WithTransport(transport http.RoundTripper) ClientOption {
+	return func(client *Client) {
+		if transport != nil {
+			client.client.Transport = transport
+		}
+	}
+}
+
 // WithCircuitBreakerConfig configures upstream fault protection. It is useful
 // for tests and for deployments that need a stricter recovery budget.
 func WithCircuitBreakerConfig(config CircuitBreakerConfig) ClientOption {
@@ -218,8 +228,13 @@ func NewClient(options ...ClientOption) *Client {
 
 // SetAuth 设置认证信息（只存储base64部分，不包含"Basic "前缀）
 func (c *Client) SetAuth(auth string) {
-	// 移除 "Basic " 前缀（如果存在）
-	c.auth = strings.TrimPrefix(auth, "Basic ")
+	// Authorization scheme names are case-insensitive per HTTP; callers may
+	// paste either "Basic" or "basic" from a client trace.
+	auth = strings.TrimSpace(auth)
+	if len(auth) >= 6 && strings.EqualFold(auth[:6], "Basic ") {
+		auth = strings.TrimSpace(auth[6:])
+	}
+	c.auth = auth
 }
 
 // SetJWTToken 设置 JWT Token
@@ -650,6 +665,52 @@ func (c *Client) PostWithContext(ctx context.Context, url string, headers map[st
 // Put PUT 请求
 func (c *Client) Put(url string, headers map[string]string, body interface{}) (*http.Response, error) {
 	return c.Request("PUT", url, headers, body)
+}
+
+// PutPresigned sends bytes to a presigned upload URL without the cloud account's
+// Authorization, JWT, device headers or cookies. Signed object-storage URLs
+// must receive only the headers included in their signature.
+func (c *Client) PutPresigned(rawURL, contentType string, data []byte) (*http.Response, error) {
+	parsed, err := url.Parse(rawURL)
+	if err != nil || parsed.Scheme != "https" || parsed.Host == "" {
+		return nil, fmt.Errorf("无效的预签名上传地址")
+	}
+	req, err := http.NewRequest(http.MethodPut, rawURL, bytes.NewReader(data))
+	if err != nil {
+		return nil, err
+	}
+	if contentType != "" {
+		req.Header.Set("Content-Type", contentType)
+	}
+	// Use a fresh client so the account cookie jar is not consulted for this host.
+	return (&http.Client{Timeout: c.client.Timeout, Transport: c.client.Transport}).Do(req)
+}
+
+// GetPublicBytes fetches an HTTPS asset without account headers or cookies.
+// It shares only the transport, so tests can replace it without live network.
+func (c *Client) GetPublicBytes(rawURL string, maxBytes int64) ([]byte, error) {
+	parsed, err := url.Parse(rawURL)
+	if err != nil || parsed.Scheme != "https" || parsed.Host == "" {
+		return nil, fmt.Errorf("无效的公开素材地址")
+	}
+	if maxBytes <= 0 {
+		maxBytes = utils.DefaultMaxResponseBodyBytes
+	}
+	req, err := http.NewRequest(http.MethodGet, rawURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("User-Agent", c.userAgent)
+	req.Header.Set("Accept", "image/*")
+	resp, err := (&http.Client{Timeout: c.client.Timeout, Transport: c.client.Transport}).Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("公开素材请求状态码: %d", resp.StatusCode)
+	}
+	return utils.ReadLimitedBody(resp.Body, maxBytes)
 }
 
 func (c *Client) PutWithContext(ctx context.Context, url string, headers map[string]string, body interface{}) (*http.Response, error) {

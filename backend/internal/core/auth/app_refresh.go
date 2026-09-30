@@ -315,8 +315,8 @@ func ensureBasicAuth(authValue string) string {
 	if authValue == "" {
 		return ""
 	}
-	if strings.HasPrefix(authValue, "Basic ") {
-		return authValue
+	if len(authValue) >= 6 && strings.EqualFold(authValue[:6], "Basic ") {
+		return "Basic " + strings.TrimSpace(authValue[6:])
 	}
 	return "Basic " + authValue
 }

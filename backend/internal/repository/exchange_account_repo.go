@@ -81,8 +81,9 @@ func (r *ExchangeAccountRepository) GetByID(id uint) (*models.ExchangeAccount, e
 // GetByUserID 根据用户 ID 获取所有兑换账号
 func (r *ExchangeAccountRepository) GetByUserID(userID uint) ([]*models.ExchangeAccount, error) {
 	var accounts []*models.ExchangeAccount
-	err := r.db.Where("user_id = ?", userID).
-		Preload("Tasks").
+	err := exchangeRuleMetadataQuery(r.db).Where("user_id = ?", userID).
+		Preload("Account", accountMetadataQuery).
+		Preload("Tasks.Product").
 		Order("created_at DESC").
 		Find(&accounts).Error
 	return accounts, err
@@ -185,7 +186,9 @@ func (r *ExchangeAccountRepository) GetAllActive() ([]*models.ExchangeAccount, e
 // GetAll 获取所有兑换账号（管理员用）
 func (r *ExchangeAccountRepository) GetAll() ([]*models.ExchangeAccount, error) {
 	var accounts []*models.ExchangeAccount
-	err := r.db.Preload("Tasks").Order("created_at DESC").Find(&accounts).Error
+	err := exchangeRuleMetadataQuery(r.db).
+		Preload("Account", accountMetadataQuery).
+		Preload("Tasks.Product").Order("created_at DESC").Find(&accounts).Error
 	return accounts, err
 }
 

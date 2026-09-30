@@ -93,7 +93,7 @@ func (h *ExchangeHandler) getExchangeAccounts(c *gin.Context, isAdmin bool) {
 
 	accounts, err := h.exchangeService.GetExchangeAccountsContext(c.Request.Context(), userID, isAdmin)
 	if err != nil {
-		respondInternalServer(c)
+		respondInternalServer(c, err)
 		return
 	}
 

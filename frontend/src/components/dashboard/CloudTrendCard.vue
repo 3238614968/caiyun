@@ -1,5 +1,6 @@
 <template>
   <el-card
+    v-loading="!!loading"
     shadow="hover"
     class="chart-card"
   >
@@ -124,6 +125,7 @@
           class="point-group"
         >
           <circle
+            v-if="point.has_data !== false"
             :cx="point.x"
             :cy="point.y"
             r="18"
@@ -137,6 +139,7 @@
             @blur="deactivatePoint"
           />
           <circle
+            v-if="point.has_data !== false"
             :cx="point.x"
             :cy="point.y"
             :r="point.index === emphasisIndex ? 6.5 : 5"
@@ -178,11 +181,11 @@
           <strong>{{ formatCloudCount(activePoint.cloud_count) }}</strong>
         </div>
         <div class="trend-tooltip__row trend-tooltip__row--secondary">
-          <span>较前日</span>
-          <strong :class="trendDiffClass(activePoint.cloud_diff)">{{ formatTrendDiff(activePoint.cloud_diff) }}</strong>
+          <span>较前日余额</span>
+          <strong :class="activePoint.comparable === false ? '' : trendDiffClass(activePoint.cloud_diff)">{{ activePoint.comparable === false ? '—' : formatTrendDiff(activePoint.cloud_diff) }}</strong>
         </div>
         <div class="trend-tooltip__meta">
-          {{ activePoint.has_data === false ? '补齐值' : '采样值' }}
+          {{ activePoint.account_count ? `${activePoint.sampled_accounts}/${activePoint.account_count} 个账号` : '账号余额' }}
         </div>
       </div>
     </div>
@@ -193,8 +196,11 @@
     >
       <span>当前展示 {{ days }} 天</span>
       <strong>最新云朵 {{ latestSummary.cloud }}</strong>
-      <span :class="latestSummary.diffClass">较前日 {{ latestSummary.diff }}</span>
+      <span :class="latestSummary.diffClass">较前日余额 {{ latestSummary.diff }}</span>
     </div>
+    <p class="trend-note">
+      {{ hasMissingSnapshots ? '历史快照未覆盖全部账号，已保留断点，不计算虚假涨跌。' : '图表展示账号余额，兑换支出也会影响余额变化。' }}
+    </p>
   </el-card>
 </template>
 
@@ -219,6 +225,7 @@ const props = defineProps<{
   days: number
   trendData: TrendPoint[]
   latestSummary: TrendSummary
+  loading?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -231,6 +238,7 @@ const chartSize = ref({
   height: DEFAULT_TREND_BOUNDS.height
 })
 const activePointIndex = ref<number | null>(null)
+const hasMissingSnapshots = computed(() => props.trendData.some(point => point.has_data === false))
 const gradientID = `cloud-trend-gradient-${Math.random().toString(36).slice(2, 8)}`
 
 let resizeObserver: ResizeObserver | null = null

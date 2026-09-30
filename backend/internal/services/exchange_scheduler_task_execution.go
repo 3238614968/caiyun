@@ -97,6 +97,7 @@ func (s *ExchangeScheduler) executeTask(ctx context.Context, task *models.Exchan
 	}()
 
 	maxRetries := effectiveExchangeMaxRetries(task.MaxRetries)
+	preparedSession := &exchangePreparedSession{}
 	success, message, execTime, task.RetryCount, err = runExchangeWithRetries(
 		ctx,
 		maxRetries,
@@ -113,7 +114,7 @@ func (s *ExchangeScheduler) executeTask(ctx context.Context, task *models.Exchan
 			if !isUsableExchangePrizeID(prizeID) {
 				return false, "商品已下架或不存在，请更新商品列表后重新创建抢兑任务", 0
 			}
-			return performExchangeWithControlsContext(ctx, account, prizeID, s.tokenMgr, s.leaseStore)
+			return performExchangeWithControlsContext(ctx, account, prizeID, s.tokenMgr, s.leaseStore, preparedSession)
 		},
 	)
 	if err != nil {

@@ -85,23 +85,26 @@ func (tm *TokenManager) checkAllTokensHealth() {
 			return true
 		}
 
-		if tokenInfo.JWTToken == "" {
-			tokenInfo.HealthStatus = "error"
-			tokenInfo.ErrorMsg = "Token 为空"
-		} else if time.Now().After(tokenInfo.ExpiresAt) {
-			tokenInfo.HealthStatus = "error"
-			tokenInfo.ErrorMsg = "Token 已过期"
-		} else if time.Now().Add(tokenRefreshHealthySkew).After(tokenInfo.ExpiresAt) {
-			tokenInfo.HealthStatus = "warning"
-			tokenInfo.ErrorMsg = "Token 即将过期"
+		updated := *tokenInfo
+		if updated.JWTToken == "" {
+			updated.HealthStatus = "error"
+			updated.ErrorMsg = "Token 为空"
+		} else if time.Now().After(updated.ExpiresAt) {
+			updated.HealthStatus = "error"
+			updated.ErrorMsg = "Token 已过期"
+		} else if time.Now().Add(tokenRefreshHealthySkew).After(updated.ExpiresAt) {
+			updated.HealthStatus = "warning"
+			updated.ErrorMsg = "Token 即将过期"
 		} else {
-			tokenInfo.HealthStatus = "healthy"
-			tokenInfo.ErrorMsg = ""
+			updated.HealthStatus = "healthy"
+			updated.ErrorMsg = ""
 		}
 
 		// 清理超过 tokenRefreshErrorTTL 的 error 条目，避免 sync.Map 无限增长。
-		if tokenInfo.HealthStatus == "error" && time.Since(tokenInfo.LastRefresh) > 30*time.Minute {
-			tm.tokenCache.Delete(accountID)
+		if updated.HealthStatus == "error" && time.Since(updated.LastRefresh) > 30*time.Minute {
+			tm.tokenCache.CompareAndDelete(accountID, tokenInfo)
+		} else {
+			tm.tokenCache.CompareAndSwap(accountID, tokenInfo, &updated)
 		}
 
 		return true

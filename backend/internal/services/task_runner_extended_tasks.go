@@ -95,6 +95,13 @@ func (r *TaskRunner) runMessagePushTask() *TaskResult {
 	return taskResultFromErr("messagepush", startTime, err, "消息推送奖励任务执行成功")
 }
 
+func (r *TaskRunner) runHiddenRewardsTask() *TaskResult {
+	startTime := time.Now()
+	task := tasks.NewHiddenRewardsTask(r.httpClient, r.logger)
+	err := task.Run()
+	return activityTaskResult("hidden_rewards", startTime, err, task.Message(), "隐藏活动奖励盘点完成")
+}
+
 // runRevivalRewardTask 执行复活卡奖励任务
 func (r *TaskRunner) runRevivalRewardTask() *TaskResult {
 	startTime := time.Now()
@@ -136,5 +143,5 @@ func (r *TaskRunner) runTaskListTask() *TaskResult {
 		SetStorage(r.storage).
 		SetAccountContext(r.account.Phone, r.getRawAccountToken())
 	err := task.Run()
-	return taskResultFromErr("tasklist", startTime, err, "任务列表执行成功")
+	return taskResultFromErr("tasklist", startTime, err, "任务列表巡检已执行，逐项完成状态以服务端为准")
 }

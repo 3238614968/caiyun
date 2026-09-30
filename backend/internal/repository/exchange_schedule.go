@@ -137,6 +137,9 @@ func exchangeTaskCandidateTimes(task *models.ExchangeTask) []exchangeSlotTime {
 		return nil
 	}
 	values := splitCSVLike(task.RestockTimes)
+	if len(values) <= 1 && strings.TrimSpace(task.ScheduledExchangeTime) != "" {
+		values = []string{task.ScheduledExchangeTime}
+	}
 	if len(values) == 0 {
 		if strings.TrimSpace(task.ScheduledExchangeTime) != "" {
 			values = append(values, task.ScheduledExchangeTime)
@@ -218,6 +221,9 @@ func matchExchangeCalendarPolicy(task *models.ExchangeTask, now time.Time, looku
 	policy := strings.ToLower(strings.TrimSpace(task.CalendarPolicy))
 	if policy == "" {
 		policy = "all"
+	}
+	if policy == "all" {
+		return true, ""
 	}
 	isHoliday := isExchangeHoliday(task, now, lookup)
 	switch policy {

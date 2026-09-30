@@ -1,9 +1,63 @@
 package api
 
 import (
+	"io"
+	"net/http"
 	"strings"
 	"testing"
+
+	corehttp "caiyun/internal/core/http"
 )
+
+func TestTokenPKAcceptInviteUsesFormBody(t *testing.T) {
+	client := corehttp.NewClient(corehttp.WithTransport(mailRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if req.URL.Path != "/ycloud/tokenpk/invite/accept" || req.Header.Get("Content-Type") != "application/x-www-form-urlencoded" {
+			t.Fatalf("unexpected invite request: %s content-type=%s", req.URL, req.Header.Get("Content-Type"))
+		}
+		body, err := io.ReadAll(req.Body)
+		if err != nil || string(body) != "code=hello%2Bworld" {
+			t.Fatalf("invite body = %q, err = %v", body, err)
+		}
+		return mailTestResponse(req, 200, `{"code":0,"msg":"success"}`), nil
+	})))
+	if err := NewCaiyunAPI(client).TokenPKAcceptInvite("hello+world"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestTokenPKAcceptInviteFallsBackOnlyAfterNotFound(t *testing.T) {
+	var paths []string
+	client := corehttp.NewClient(corehttp.WithTransport(mailRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+		paths = append(paths, req.URL.Path)
+		if req.URL.Path == "/ycloud/tokenpk/invite/accept" {
+			return mailTestResponse(req, 404, `not found`), nil
+		}
+		return mailTestResponse(req, 200, `{"code":0,"msg":"success"}`), nil
+	})))
+	if err := NewCaiyunAPI(client).TokenPKAcceptInvite("code"); err != nil {
+		t.Fatal(err)
+	}
+	if len(paths) != 2 || paths[1] != "/ycloud/tokenpk/invite/acceptInvite" {
+		t.Fatalf("fallback paths = %v", paths)
+	}
+}
+
+func TestTokenPKAcceptInviteFallsBackOnBusinessNotFound(t *testing.T) {
+	var attempts int
+	client := corehttp.NewClient(corehttp.WithTransport(mailRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+		attempts++
+		if attempts == 1 {
+			return mailTestResponse(req, 200, `{"code":404,"msg":"not found"}`), nil
+		}
+		if req.URL.Path != "/ycloud/tokenpk/invite/acceptInvite" {
+			t.Fatalf("wrong fallback endpoint: %s", req.URL.Path)
+		}
+		return mailTestResponse(req, 200, `{"code":0,"msg":"success"}`), nil
+	})))
+	if err := NewCaiyunAPI(client).TokenPKAcceptInvite("code"); err != nil || attempts != 2 {
+		t.Fatalf("fallback result attempts=%d err=%v", attempts, err)
+	}
+}
 
 func TestDecodeActivityBodyAcceptsNumericAndStringCodes(t *testing.T) {
 	for _, body := range []string{

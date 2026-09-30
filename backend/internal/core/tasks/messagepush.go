@@ -33,26 +33,8 @@ func (t *MessagePushRewardTask) Run() error {
 		return err
 	}
 
-	// 解析响应
-	code := 0
-	switch v := resp.Code.(type) {
-	case int:
-		code = v
-	case float64:
-		code = int(v)
-	case string:
-		if v == "0" {
-			code = 0
-		}
-	}
-
-	if code != 0 {
-		msg := resp.Message
-		if msg == "" {
-			msg = resp.Msg
-		}
-		t.logger.Error("获取消息推送状态失败", fmt.Errorf("code=%d, msg=%s", code, msg))
-		return fmt.Errorf("获取消息推送状态失败: code=%d, msg=%s", code, msg)
+	if err := rewardResponseError("获取消息推送状态", resp); err != nil {
+		return err
 	}
 
 	// 解析结果
@@ -63,31 +45,18 @@ func (t *MessagePushRewardTask) Run() error {
 
 	resultMap, ok := resp.Result.(map[string]interface{})
 	if !ok {
-		t.logger.Error("解析消息推送状态失败")
-		return nil
+		return fmt.Errorf("解析消息推送状态失败")
 	}
 
 	// 获取状态
-	pushOn := 0
+	pushOn := responseNumber(resultMap["pushOn"])
 	onDuration := 0
-	secondTaskStatus := 0
+	secondTaskStatus := responseNumber(resultMap["secondTaskStatus"])
 
-	if val, ok := resultMap["pushOn"]; ok && val != nil {
-		if f, ok := val.(float64); ok {
-			pushOn = int(f)
-		}
-	}
-
-	if val, ok := resultMap["onDuration"]; ok && val != nil {
-		if f, ok := val.(float64); ok {
-			onDuration = int(f)
-		}
-	}
-
-	if val, ok := resultMap["secondTaskStatus"]; ok && val != nil {
-		if f, ok := val.(float64); ok {
-			secondTaskStatus = int(f)
-		}
+	if val, ok := resultMap["onDuaration"]; ok && val != nil {
+		onDuration = responseNumber(val)
+	} else if val, ok := resultMap["onDuration"]; ok && val != nil {
+		onDuration = responseNumber(val)
 	}
 
 	// 检查是否开启
@@ -97,41 +66,28 @@ func (t *MessagePushRewardTask) Run() error {
 	}
 
 	// 检查首次奖励
-	firstTaskStatus := 0
-	if val, ok := resultMap["firstTaskStatus"]; ok && val != nil {
-		if f, ok := val.(float64); ok {
-			firstTaskStatus = int(f)
+	firstTaskStatus := responseNumber(resultMap["firstTaskStatus"])
+	// 三种奖励分别检查，未达标的连续天数任务不提交领奖请求。
+	pushTaskStatus := responseNumber(resultMap["pushTaskStatus"])
+	for kind, status := range []int{firstTaskStatus, secondTaskStatus, pushTaskStatus} {
+		kind++
+		if status != 2 {
+			continue
 		}
-	}
-	if firstTaskStatus != 3 {
-		t.logger.Info("首次奖励未领取，请前往 APP 手动完成")
-	}
-
-	// 检查并领取奖励
-	if secondTaskStatus == 2 {
-		t.logger.Info("领取奖励")
-		obtainResp, err := t.api.ObtainMsgPushOn()
+		obtainResp, err := t.api.ObtainMsgPushOnType(kind)
 		if err != nil {
-			t.logger.Error("领取消息通知奖励失败", err)
+			t.logger.Error(fmt.Sprintf("领取消息通知奖励类型%d失败", kind), err)
 			return err
 		}
-
-		obtainCode := 0
-		switch v := obtainResp.Code.(type) {
-		case int:
-			obtainCode = v
-		case float64:
-			obtainCode = int(v)
-		case string:
-			if v == "0" {
-				obtainCode = 0
-			}
+		if err := rewardResponseError(fmt.Sprintf("消息通知奖励类型%d领取", kind), obtainResp); err != nil {
+			return err
 		}
-
-		if obtainCode == 0 {
-			t.logger.Success("领取成功")
+		result, ok := obtainResp.Result.(map[string]interface{})
+		if ok && responseNumber(result["obtainCode"]) == 1 {
+			t.logger.Success(fmt.Sprintf("消息通知奖励类型%d已领取", kind))
+		} else {
+			t.logger.Info(fmt.Sprintf("消息通知奖励类型%d暂无可领取奖励", kind))
 		}
-		return nil
 	}
 
 	t.logger.Info(fmt.Sprintf("已经开启 %d 天", onDuration))

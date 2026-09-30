@@ -2,10 +2,33 @@ package services
 
 import (
 	"encoding/base64"
+	"errors"
 	"net/url"
 	"strings"
 	"testing"
+
+	"caiyun/internal/models"
 )
+
+type stubExchangeTokenProvider struct {
+	info *TokenInfo
+	err  error
+}
+
+func (s stubExchangeTokenProvider) GetToken(uint) (*TokenInfo, error) { return s.info, s.err }
+
+func TestExchangeAuthDoesNotReuseStaleJWTAfterManagedRefreshFailure(t *testing.T) {
+	account := &models.ExchangeAccount{AccountID: 7, JWTToken: "stale-jwt", Auth: "Basic stale-auth"}
+	if _, err := prepareExchangeAuthWithProvider(account, stubExchangeTokenProvider{err: errors.New("refresh failed")}); err == nil {
+		t.Fatal("managed refresh failure must stop exchange instead of using stale JWT")
+	}
+	ctx, err := prepareExchangeAuthWithProvider(account, stubExchangeTokenProvider{info: &TokenInfo{
+		JWTToken: "fresh-jwt", SSOToken: "fresh-sso", Auth: "Basic fresh-auth",
+	}})
+	if err != nil || ctx.jwtToken != "fresh-jwt" || ctx.ssoToken != "fresh-sso" {
+		t.Fatalf("managed exchange credentials = %+v, err = %v", ctx, err)
+	}
+}
 
 func TestBuildExchangeFailureMessageIncludesCoreFields(t *testing.T) {
 	response := map[string]interface{}{

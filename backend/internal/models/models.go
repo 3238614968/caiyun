@@ -60,17 +60,18 @@ type TaskLog struct {
 
 // CloudStats 云朵统计模型
 type CloudStats struct {
-	ID            uint           `gorm:"primarykey" json:"id"`
-	UserID        uint           `gorm:"not null;index" json:"user_id"`
-	AccountID     uint           `gorm:"not null;index;uniqueIndex:uk_cloud_stats_account_date" json:"account_id"`
-	Date          string         `gorm:"type:date;not null;uniqueIndex:uk_cloud_stats_account_date" json:"date"`
-	CloudCount    int            `gorm:"not null" json:"cloud_count"`
-	CloudDiff     int            `gorm:"default:0" json:"cloud_diff"`      // 对比昨日
-	CloudDiffWeek int            `gorm:"default:0" json:"cloud_diff_week"` // 对比上周
-	CreatedAt     time.Time      `json:"created_at"`
-	UpdatedAt     time.Time      `json:"updated_at"`
-	DeletedAt     gorm.DeletedAt `gorm:"index" json:"-"`
-	Account       Account        `gorm:"foreignKey:AccountID" json:"account,omitempty"`
+	ID              uint           `gorm:"primarykey" json:"id"`
+	UserID          uint           `gorm:"not null;index" json:"user_id"`
+	AccountID       uint           `gorm:"not null;index;uniqueIndex:uk_cloud_stats_account_date" json:"account_id"`
+	Date            string         `gorm:"type:date;not null;uniqueIndex:uk_cloud_stats_account_date" json:"date"`
+	CloudCount      int            `gorm:"not null" json:"cloud_count"`
+	SampledAccounts int            `gorm:"->;column:sampled_accounts;-:migration" json:"-"`
+	CloudDiff       int            `gorm:"default:0" json:"cloud_diff"`      // 对比昨日
+	CloudDiffWeek   int            `gorm:"default:0" json:"cloud_diff_week"` // 对比上周
+	CreatedAt       time.Time      `json:"created_at"`
+	UpdatedAt       time.Time      `json:"updated_at"`
+	DeletedAt       gorm.DeletedAt `gorm:"index" json:"-"`
+	Account         Account        `gorm:"foreignKey:AccountID" json:"account,omitempty"`
 }
 
 // SystemConfig 系统配置模型

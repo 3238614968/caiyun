@@ -3,7 +3,9 @@
     <el-col
       v-for="stat in stats"
       :key="stat.key"
-      :span="6"
+      :xs="12"
+      :sm="12"
+      :lg="6"
     >
       <el-card
         shadow="hover"

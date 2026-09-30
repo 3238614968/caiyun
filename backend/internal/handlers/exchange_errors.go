@@ -5,6 +5,7 @@ import (
 	"log"
 	"net/http"
 
+	"caiyun/internal/security"
 	"caiyun/internal/services"
 	appErrors "caiyun/pkg/errors"
 	apiresponse "caiyun/pkg/response"
@@ -20,6 +21,9 @@ func respondExchangeServiceError(c *gin.Context, err error) {
 		return
 	}
 	switch {
+	case errors.Is(err, security.ErrCredentialUnreadable):
+		log.Printf("[ExchangeHandler] request_id=%s credential_error=%v", c.GetString("request_id"), err)
+		respondError(c, http.StatusConflict, "账号凭据无法解密，请管理员核对数据加密密钥并迁移旧版密文后重试")
 	case errors.Is(err, services.ErrExchangeInvalidInput):
 		respondError(c, http.StatusBadRequest, "请求参数错误")
 	case errors.Is(err, services.ErrExchangeCloudAccountMissing):

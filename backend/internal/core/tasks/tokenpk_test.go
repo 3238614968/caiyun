@@ -43,8 +43,8 @@ func TestPlanTokenPKActions(t *testing.T) {
 	if by, ok := byTask[3]; !ok || by.Kind != tokenPKActionRun || by.Key != "aiCamera" {
 		t.Fatalf("task 3 kind = %+v, want run/aiCamera", by)
 	}
-	if by, ok := byTask[5]; !ok || by.Kind != tokenPKActionManual || by.Key == "" {
-		t.Fatalf("task 5 kind = %+v, want manual with reason", by)
+	if by, ok := byTask[5]; !ok || by.Kind != tokenPKActionRun || by.Key != "loginPc" {
+		t.Fatalf("task 5 kind = %+v, want run/loginPc", by)
 	}
 	if by, ok := byTask[8]; !ok || by.Kind != tokenPKActionReserve {
 		t.Fatalf("task 8 kind = %+v, want reserve", by)
@@ -78,5 +78,18 @@ func TestActivityTaskPrizeSummary(t *testing.T) {
 	}}
 	if got := task.PrizeSummary(); got != "Token+50万、Token+100万" {
 		t.Fatalf("PrizeSummary() = %q", got)
+	}
+}
+
+func TestTokenPKMonthlyCapSkipsActionsButKeepsClaimableRewards(t *testing.T) {
+	blocked := activityTaskForTest(3, "WAIT", "aiCamera")
+	blocked.MonthlyCompleted = 3
+	blocked.MonthlyLimit = 3
+	claimable := blocked
+	claimable.ID = 9
+	claimable.State = "SUCCESS"
+	actions := planTokenPKActions([]api.ActivityTask{blocked, claimable})
+	if len(actions) != 1 || actions[0].Task.ID != 9 || actions[0].Kind != tokenPKActionReceive {
+		t.Fatalf("monthly cap actions=%+v", actions)
 	}
 }

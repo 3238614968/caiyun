@@ -36,6 +36,9 @@ func (s *stubAccountRepository) FindActiveAccounts() ([]*models.Account, error) 
 func (s *stubAccountRepository) FindActiveAccountsPaged(offset, limit int) ([]*models.Account, error) {
 	return nil, nil
 }
+func (s *stubAccountRepository) FindActiveAccountsAfterID(lastID uint, limit int) ([]*models.Account, error) {
+	return nil, nil
+}
 func (s *stubAccountRepository) FindActiveAccountsByUserID(userID uint) ([]*models.Account, error) {
 	return nil, nil
 }
@@ -59,12 +62,29 @@ func (s *stubAccountUserRepository) FindByID(id uint) (*models.User, error) {
 }
 
 type stubTokenProvider struct {
-	info *TokenInfo
-	err  error
+	info    *TokenInfo
+	err     error
+	cleared []uint
 }
 
 func (s *stubTokenProvider) GetToken(accountID uint) (*TokenInfo, error) {
 	return s.info, s.err
+}
+func (s *stubTokenProvider) ClearToken(accountID uint) {
+	s.cleared = append(s.cleared, accountID)
+}
+
+func TestManualReenableClearsFailedTokenCache(t *testing.T) {
+	repo := &stubAccountRepository{account: &models.Account{ID: 7, UserID: 3, IsActive: false, JWTErrorCount: 3}}
+	provider := &stubTokenProvider{}
+	service := NewAccountService(repo, &stubAccountUserRepository{}, nil, nil)
+	service.SetTokenProvider(provider)
+	if err := service.SetAccountStatus(3, 7, true); err != nil {
+		t.Fatal(err)
+	}
+	if len(provider.cleared) != 1 || provider.cleared[0] != 7 {
+		t.Fatalf("cache invalidations = %v, want account 7", provider.cleared)
+	}
 }
 
 func TestAccountServiceGetTokenDelegatesToTokenProvider(t *testing.T) {

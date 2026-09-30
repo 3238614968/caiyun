@@ -38,6 +38,7 @@ export default defineConfig({
     : 'list',
   use: {
     baseURL,
+    launchOptions: process.env.PLAYWRIGHT_BROWSER_EXECUTABLE ? { executablePath: process.env.PLAYWRIGHT_BROWSER_EXECUTABLE } : undefined,
     locale: 'zh-CN',
     timezoneId: 'Asia/Shanghai',
     trace: 'retain-on-failure',

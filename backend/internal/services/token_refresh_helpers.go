@@ -9,6 +9,27 @@ import (
 	"time"
 )
 
+func jwtExpiresAt(token string) time.Time {
+	parts := strings.Split(strings.TrimSpace(token), ".")
+	if len(parts) != 3 {
+		return time.Time{}
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return time.Time{}
+	}
+	var claims struct {
+		ExpiresAt int64 `json:"exp"`
+	}
+	if err := json.Unmarshal(payload, &claims); err != nil || claims.ExpiresAt <= 0 {
+		return time.Time{}
+	}
+	if claims.ExpiresAt > 1_000_000_000_000 {
+		return time.UnixMilli(claims.ExpiresAt)
+	}
+	return time.Unix(claims.ExpiresAt, 0)
+}
+
 const authorizationPreRefreshSkew = 5 * 24 * time.Hour
 
 func accountAuthorizationExpireAt(account *models.Account) int64 {

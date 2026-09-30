@@ -36,6 +36,7 @@ type accountRepository interface {
 	ListByUserID(userID uint, offset, limit int, phone string) ([]*models.Account, int64, error)
 	FindActiveAccounts() ([]*models.Account, error)
 	FindActiveAccountsPaged(offset, limit int) ([]*models.Account, error)
+	FindActiveAccountsAfterID(lastID uint, limit int) ([]*models.Account, error)
 	FindActiveAccountsByUserID(userID uint) ([]*models.Account, error)
 	UpdateCloudCount(id uint, cloudCount int) error
 	GetTotalCloudCountByUserID(userID uint) (int, error)

@@ -332,10 +332,8 @@ const formatExchangeAccountLabel = (task: ExchangeTask) => {
 const formatTime = (value?: string) => value ? value.slice(0, 5) : '规则时间'
 
 const formatTaskSchedule = (task: ExchangeTask) => {
-  const restockTimes = task.restock_times
-    ? String(task.restock_times).split(',').filter(Boolean).map(item => item.slice(0, 5)).join(' / ')
-    : ''
-  const time = task.custom_cron ? `Cron ${task.custom_cron}` : restockTimes || formatTime(task.scheduled_exchange_time)
+  const slots = task.restock_times ? String(task.restock_times).split(',').map(item => item.trim()).filter(Boolean) : []
+  const time = task.custom_cron ? `Cron ${task.custom_cron}` : slots.length > 1 ? slots.map(item => item.slice(0, 5)).join(' / ') : task.scheduled_exchange_time ? formatTime(task.scheduled_exchange_time) : slots[0]?.slice(0, 5) || '规则时间'
   if (task.task_type !== 'long_term') return time
   const cycle = task.restock_cycle || 'daily'
   let suffix = cycleLabelMap[cycle] || cycle

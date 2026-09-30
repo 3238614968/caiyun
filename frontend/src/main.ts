@@ -5,6 +5,7 @@ import './plugins/element-styles'
 
 // 引入移动端适配样式
 import './styles/mobile.css'
+import './styles/workspace.css'
 import App from './App.vue'
 import router from './router'
 

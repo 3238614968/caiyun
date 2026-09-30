@@ -97,6 +97,65 @@ func TestAccountRepositoryListByUserIDSortsActiveFirst(t *testing.T) {
 	}
 }
 
+func TestAccountMailPeersStayWithinOwnerAndReenableResetsFailureCount(t *testing.T) {
+	db := newRepositoryTestDB(t, &models.Account{})
+	repo := NewAccountRepository(db)
+	accounts := []*models.Account{
+		{UserID: 1, Phone: "13800000001", IsActive: true, JWTErrorCount: 3},
+		{UserID: 1, Phone: "13800000002", IsActive: true},
+		{UserID: 1, Phone: "13800000003", IsActive: false},
+		{UserID: 2, Phone: "13800000004", IsActive: true},
+	}
+	for _, account := range accounts {
+		if err := db.Create(account).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	peers, err := repo.ListActiveMailPeers(1, accounts[0].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(peers) != 1 || peers[0].ID != accounts[1].ID || peers[0].Phone != accounts[1].Phone {
+		t.Fatalf("mail peers = %+v, want only the other active account of user 1", peers)
+	}
+	if err := repo.SetActiveStatus(accounts[0].ID, true); err != nil {
+		t.Fatal(err)
+	}
+	var refreshed models.Account
+	if err := db.First(&refreshed, accounts[0].ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if refreshed.JWTErrorCount != 0 {
+		t.Fatalf("manual re-enable left JWT error count at %d", refreshed.JWTErrorCount)
+	}
+}
+
+func TestActiveAccountCursorSurvivesEarlierAccountDisable(t *testing.T) {
+	db := newRepositoryTestDB(t, &models.Account{})
+	repo := NewAccountRepository(db)
+	accounts := []*models.Account{
+		{UserID: 1, Phone: "13800000001", IsActive: true},
+		{UserID: 1, Phone: "13800000002", IsActive: true},
+		{UserID: 1, Phone: "13800000003", IsActive: true},
+	}
+	for _, account := range accounts {
+		if err := db.Create(account).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	first, err := repo.FindActiveAccountsAfterID(0, 2)
+	if err != nil || len(first) != 2 {
+		t.Fatalf("first batch = %+v, err = %v", first, err)
+	}
+	if err := repo.SetActiveStatus(first[0].ID, false); err != nil {
+		t.Fatal(err)
+	}
+	second, err := repo.FindActiveAccountsAfterID(first[1].ID, 2)
+	if err != nil || len(second) != 1 || second[0].ID != accounts[2].ID {
+		t.Fatalf("second batch skipped the remaining account: %+v, err = %v", second, err)
+	}
+}
+
 func TestSystemConfigRepositoryBatchUpdateAndCanceledContext(t *testing.T) {
 	db := newRepositoryTestDB(t, &models.SystemConfig{})
 	repo := NewSystemConfigRepository(db)

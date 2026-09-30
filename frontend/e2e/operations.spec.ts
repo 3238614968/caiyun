@@ -121,7 +121,7 @@ test('首页云朵趋势展示当前范围、最新值和切换天数', async ({
   const summary = page.getByTestId('cloud-trend-summary')
   await expect(summary).toContainText('当前展示 7 天')
   await expect(summary).toContainText('最新云朵 12,345')
-  await expect(summary).toContainText('较前日 +120')
+  await expect(summary).toContainText('较前日余额 +120')
 
   await page.getByText('14天').click()
   await expect(summary).toContainText('当前展示 14 天')

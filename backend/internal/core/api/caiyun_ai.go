@@ -2,6 +2,7 @@ package api
 
 import (
 	"bytes"
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"image"
@@ -177,7 +178,7 @@ func (api *CaiyunAPI) CompleteAICameraTask() error {
 func (api *CaiyunAPI) uploadAICameraSample() (string, string, error) {
 	// 火山方舟视觉模型会拒收 1x1 退化图片，这里生成一张真实的纯色渐变
 	// JPEG，保证 aiRecognize 能正常读图。
-	content, err := encodeSampleJPEG(480, 640)
+	content, err := GenerateUniqueSampleJPEG(480, 640)
 	if err != nil {
 		return "", "", err
 	}
@@ -188,6 +189,7 @@ func (api *CaiyunAPI) uploadAICameraSample() (string, string, error) {
 		ParentFileID: "/",
 		Name:         fileName,
 		Content:      content,
+		ContentType:  "image/jpeg",
 		ChannelSrc:   "10000023",
 		Ext:          ".jpg",
 	})
@@ -203,6 +205,28 @@ func (api *CaiyunAPI) uploadAICameraSample() (string, string, error) {
 // GenerateSampleJPEG 生成一张合法的渐变 JPEG，供 AI 相机识图与备份上传复用。
 func GenerateSampleJPEG(height, width int) ([]byte, error) {
 	return encodeSampleJPEG(height, width)
+}
+
+// GenerateUniqueSampleJPEG keeps the image decodable while changing its content
+// hash for each upload. A JPEG comment marker carries the nonce.
+func GenerateUniqueSampleJPEG(height, width int) ([]byte, error) {
+	image, err := GenerateSampleJPEG(height, width)
+	if err != nil {
+		return nil, err
+	}
+	if len(image) < 2 || image[0] != 0xff || image[1] != 0xd8 {
+		return nil, fmt.Errorf("生成的图片不是 JPEG")
+	}
+	nonce := make([]byte, 16)
+	if _, err := rand.Read(nonce); err != nil {
+		return nil, fmt.Errorf("生成图片唯一标识失败: %w", err)
+	}
+	result := make([]byte, 0, len(image)+len(nonce)+4)
+	result = append(result, image[:2]...)
+	result = append(result, 0xff, 0xfe, 0x00, byte(len(nonce)+2))
+	result = append(result, nonce...)
+	result = append(result, image[2:]...)
+	return result, nil
 }
 
 // encodeSampleJPEG 生成一张宽 height、高 width 的渐变 JPEG（合法可解码图片）。

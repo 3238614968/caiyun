@@ -1,6 +1,8 @@
 package services
 
 import (
+	"caiyun/internal/core/auth"
+	"caiyun/internal/core/tasks"
 	"caiyun/internal/models"
 	"caiyun/internal/ws"
 	"context"
@@ -16,7 +18,11 @@ func (s *TaskService) ExecuteTaskForAccount(account *models.Account) ([]TaskResu
 
 // ExecuteTaskForAccountContext 为指定账号执行所有已配置批量任务，并在任务边界响应取消。
 func (s *TaskService) ExecuteTaskForAccountContext(ctx context.Context, account *models.Account) ([]TaskResult, error) {
-	return s.executeTaskCodesForAccount(ctx, account, resolveConfiguredTaskCodes(s.taskConfigRepo))
+	codes, err := loadConfiguredTaskCodes(s.taskConfigRepo)
+	if err != nil {
+		return nil, err
+	}
+	return s.executeTaskCodesForAccount(ctx, account, codes)
 }
 
 // ExecuteSelectedTaskForAccount 为队列消息执行指定任务类型。
@@ -49,15 +55,39 @@ func (s *TaskService) executeTaskCodesForAccount(ctx context.Context, account *m
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	// 使用 TokenManager 获取有效的 JWT Token
+	if taskCodes != nil && len(taskCodes) == 0 {
+		return []TaskResult{}, nil
+	}
+	// TokenManager 是生产路径中唯一的刷新与停用决策者。
+	var managedSSOToken string
 	if s.tokenMgr != nil {
 		tokenInfo, err := s.tokenMgr.GetToken(account.ID)
-		if err == nil && tokenInfo.JWTToken != "" {
-			account.JWTToken = tokenInfo.JWTToken
+		if err != nil {
+			return nil, fmt.Errorf("刷新账号 Token 失败: %w", err)
 		}
+		if tokenInfo == nil || tokenInfo.JWTToken == "" {
+			return nil, fmt.Errorf("账号 %d 刷新后仍无可用 JWT Token", account.ID)
+		}
+		managedSSOToken = applyManagedTokenInfo(account, tokenInfo)
 	}
 
 	runner := s.NewTaskRunnerWithRetry(account, buildAccountScopedStorage(s.storage, account.ID), s.authMgr, nil)
+	if containsTaskCode(taskCodes, "mail_mutual") || containsTaskCode(taskCodes, "mutual_assist") {
+		peers, err := s.accountRepo.ListActiveMailPeers(account.UserID, account.ID)
+		if err != nil {
+			return nil, fmt.Errorf("获取同用户邮箱互发账号失败: %w", err)
+		}
+		runner.mailPeers = make([]tasks.MailPeer, 0, len(peers))
+		for _, peer := range peers {
+			runner.mailPeers = append(runner.mailPeers, tasks.MailPeer{AccountID: peer.ID, Phone: peer.Phone})
+		}
+		runner.mailDedup = s.mailDedup
+		runner.assistTokenMgr = s.tokenMgr
+		runner.assistAccountRepo = s.accountRepo
+	}
+	if managedSSOToken != "" {
+		runner.httpClient.SetSSOToken(managedSSOToken)
+	}
 	results := runner.RunSelectedContext(ctx, taskCodes)
 
 	// 计算本次获得的云朵数
@@ -188,4 +218,32 @@ func (s *TaskService) executeTaskCodesForAccount(ctx context.Context, account *m
 		return results, err
 	}
 	return results, nil
+}
+
+func applyManagedTokenInfo(account *models.Account, tokenInfo *TokenInfo) string {
+	if account == nil || tokenInfo == nil {
+		return ""
+	}
+	account.JWTToken = tokenInfo.JWTToken
+	if tokenInfo.Auth != "" {
+		account.Auth = tokenInfo.Auth
+		account.Token = ""
+		if parsed, err := auth.ParseToken(tokenInfo.Auth); err == nil && parsed != nil {
+			account.Token = parsed.Token
+			account.ExpireAt = parsed.Expire
+			if parsed.Platform != "" {
+				account.Platform = parsed.Platform
+			}
+		}
+	}
+	return tokenInfo.SSOToken
+}
+
+func containsTaskCode(codes []string, code string) bool {
+	for _, item := range codes {
+		if item == code {
+			return true
+		}
+	}
+	return false
 }

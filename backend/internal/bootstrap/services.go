@@ -21,6 +21,7 @@ type SharedServices struct {
 	Cloud        *services.CloudService
 	TokenManager *services.TokenManager
 	Exchange     *services.ExchangeService
+	PrizeCenter  *services.PrizeCenterService
 	Operation    *services.OperationService
 	TaskQueue    queue.ReliableTaskQueue
 }
@@ -45,6 +46,7 @@ func InitSharedServices(core *Core, eventHubs ...*ws.Hub) (*SharedServices, erro
 
 	taskService := services.NewTaskService(repos.Account, repos.TaskLog, core.TaskStore, core.Auth, repos.TaskConfig, repos.CloudStats)
 	taskService.SetEventHub(eventHub)
+	taskService.SetMailDedupStore(core.Redis)
 	cloudService := services.NewCloudService(repos.Account, repos.CloudStats, repos.TaskLog)
 
 	tokenManager := services.NewTokenManager(repos.Account, repos.ExchangeAccount, core.Auth)
@@ -73,6 +75,7 @@ func InitSharedServices(core *Core, eventHubs ...*ws.Hub) (*SharedServices, erro
 		Cloud:        cloudService,
 		TokenManager: tokenManager,
 		Exchange:     exchangeService,
+		PrizeCenter:  services.NewPrizeCenterService(repos.Account, tokenManager),
 		Operation:    operationService,
 		TaskQueue:    taskQueue,
 	}, nil

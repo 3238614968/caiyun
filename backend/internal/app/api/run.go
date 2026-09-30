@@ -22,7 +22,6 @@ import (
 	"caiyun/pkg/jwt"
 
 	"github.com/gin-gonic/gin"
-	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 )
 
 // Run starts the HTTP API and blocks until ctx is cancelled or the server
@@ -117,6 +116,7 @@ func Run(ctx context.Context, args []string) error {
 	log.Printf("任务队列后端: %s", bootstrap.TaskQueueBackendName())
 
 	adminService := services.NewAdminService(repos.User, repos.Account, repos.TaskLog, repos.TaskConfig)
+	adminService.SetTokenCache(tokenManager)
 	productService := services.NewProductService(repos.Product, repos.Account)
 	announcementService := services.NewAnnouncementService(repos.Announcement)
 
@@ -202,6 +202,7 @@ func Run(ctx context.Context, args []string) error {
 	queueStatusHandler := handlers.NewQueueStatusHandler(taskQueue, taskMonitor)
 	adminHandler := handlers.NewAdminHandler(adminService)
 	exchangeHandler := handlers.NewExchangeHandler(exchangeService, productService)
+	exchangeHandler.SetPrizeCenterService(sharedServices.PrizeCenter)
 	announcementHandler := handlers.NewAnnouncementHandler(announcementService)
 	operationHandler := handlers.NewOperationHandler(operationService)
 	accountHandler.SetOperationService(operationService)
@@ -275,7 +276,7 @@ func Run(ctx context.Context, args []string) error {
 	port := config.Server.Port
 	srv := &http.Server{
 		Addr:        ":" + port,
-		Handler:     otelhttp.NewHandler(r, "caiyun.api"),
+		Handler:     observability.NewHTTPHandler(r, "caiyun.api"),
 		ReadTimeout: 15 * time.Second,
 		// WriteTimeout is intentionally disabled: http.Server has no per-route
 		// write deadline, and a finite value terminates active SSE/WS streams.

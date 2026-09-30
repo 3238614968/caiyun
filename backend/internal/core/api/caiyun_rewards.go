@@ -118,10 +118,17 @@ func (api *CaiyunAPI) GetMsgPushStatus() (*CaiyunResponse, error) {
 
 // ObtainMsgPushOn 领取消息推送奖励
 func (api *CaiyunAPI) ObtainMsgPushOn() (*CaiyunResponse, error) {
+	return api.ObtainMsgPushOnType(2)
+}
+
+func (api *CaiyunAPI) ObtainMsgPushOnType(kind int) (*CaiyunResponse, error) {
+	if kind < 1 || kind > 3 {
+		return nil, fmt.Errorf("无效的消息推送奖励类型: %d", kind)
+	}
 	resp, err := api.client.Post(
 		fmt.Sprintf("%s/msgPushOn/task/obtain", MarketURL),
 		nil,
-		map[string]interface{}{"type": 2},
+		map[string]interface{}{"type": kind},
 	)
 	if err != nil {
 		return nil, err

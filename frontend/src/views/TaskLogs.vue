@@ -324,6 +324,13 @@
             {{ formatLogMessageForDetail(currentLog) }}
           </div>
         </section>
+        <details
+          v-if="isExchangeLog(currentLog) && currentLog.message"
+          class="log-technical-details"
+        >
+          <summary>原始响应与诊断信息</summary>
+          <pre>{{ currentLog.message }}</pre>
+        </details>
       </div>
     </el-dialog>
   </div>
@@ -528,6 +535,9 @@ const getDisplayStatus = (log?: Partial<TaskLog>) => {
 
 const normalizeExchangeResultText = (value: string, status?: string, detail = false) => {
   let text = normalizeLogText(value)
+  if (/Error Code[：:]\s*GK/i.test(text) || /code=610\b/.test(text)) {
+    return detail ? '云盘活动服务返回 610 / GK，兑换未完成；滑块识别成功不代表云盘验证通过。' : '活动服务拒绝（610/GK）'
+  }
   if (!text) {
     if (status === 'success') return '\u5151\u6362\u6210\u529f'
     if (status === 'pending') return '\u7b49\u5f85\u5151\u6362'

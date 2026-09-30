@@ -83,21 +83,15 @@ func (r *TaskRunner) cleanupTempShareLinks() error {
 	return err
 }
 
-// getRawAccountToken 获取账号原始 token（优先数据库 token，其次从 Auth 解析）
+// getRawAccountToken 获取账号原始 token；Auth 是刷新后的权威凭据。
 func (r *TaskRunner) getRawAccountToken() string {
 	if r.account == nil {
 		return ""
 	}
-	if strings.TrimSpace(r.account.Token) != "" {
-		return strings.TrimSpace(r.account.Token)
+	if strings.TrimSpace(r.account.Auth) != "" {
+		if info, err := auth.ParseToken(r.account.Auth); err == nil && info != nil && strings.TrimSpace(info.Token) != "" {
+			return strings.TrimSpace(info.Token)
+		}
 	}
-	if strings.TrimSpace(r.account.Auth) == "" {
-		return ""
-	}
-
-	info, err := auth.ParseToken(r.account.Auth)
-	if err != nil || info == nil {
-		return ""
-	}
-	return strings.TrimSpace(info.Token)
+	return strings.TrimSpace(r.account.Token)
 }

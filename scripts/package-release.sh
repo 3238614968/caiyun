@@ -46,6 +46,7 @@ install -m 0755 "$ROOT/scripts/verify-legacy-list-drain.sh" "$STAGE_DIR/verify-l
 install -m 0755 "$ROOT/scripts/chaos-drill.sh" "$STAGE_DIR/chaos-drill.sh"
 install -m 0755 "$ROOT/scripts/capacity-drill.sh" "$STAGE_DIR/capacity-drill.sh"
 install -m 0644 "$ROOT/scripts/append-quarterly-slo-report.py" "$STAGE_DIR/append-quarterly-slo-report.py"
+install -m 0644 "$ROOT/backend/docs/DEPLOYMENT_CREDENTIAL_HOTFIX.md" "$STAGE_DIR/DEPLOYMENT_CREDENTIAL_HOTFIX.md"
 
 SBOM_FILE="$STAGE_DIR/caiyun-sbom-${VERSION}.json" bash "$ROOT/scripts/generate-sbom.sh" "$STAGE_DIR/caiyun-sbom-${VERSION}.json"
 (

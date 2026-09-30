@@ -19,6 +19,7 @@
         <el-tab-pane
           label="账号概况"
           name="summaries"
+          lazy
         >
           <div class="tab-content">
             <AdminSummaryList
@@ -38,6 +39,7 @@
         <el-tab-pane
           label="任务管理"
           name="tasks"
+          lazy
         >
           <div class="tab-content">
             <p style="color: #666; margin-bottom: 16px">
@@ -57,6 +59,7 @@
         <el-tab-pane
           label="抢兑配置"
           name="exchange"
+          lazy
         >
           <div class="tab-content">
             <AdminExchangeConfig
@@ -77,6 +80,7 @@
         <el-tab-pane
           label="用户管理"
           name="users"
+          lazy
         >
           <div class="tab-content">
             <AdminUserList
@@ -101,6 +105,7 @@
         <el-tab-pane
           label="统计概览"
           name="stats"
+          lazy
         >
           <div class="tab-content">
             <AdminStatsOverview :stats="statsOverview" />
@@ -111,6 +116,7 @@
         <el-tab-pane
           label="公告管理"
           name="announcements"
+          lazy
         >
           <div class="tab-content">
             <AdminAnnouncementList

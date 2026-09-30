@@ -223,7 +223,7 @@ func (s *ExchangeScheduler) checkAndPrepareExchange() {
 	if s.isStopped() {
 		return
 	}
-	now := time.Now()
+	now := time.Now().In(cstZone)
 	if hour, minute, ok := scheduledPrepareSlot(now); ok {
 		if s.isStopped() {
 			return
@@ -375,7 +375,8 @@ func (s *ExchangeScheduler) prepareQueueByTime(hour, minute int) {
 	slot := fmt.Sprintf("%02d:%02d", hour, minute)
 
 	// Load tasks for the target slot.
-	tasks, skipped, err := s.exchangeTaskRepo.GetTasksByTimeAtWithSkips(hour, minute, time.Now())
+	targetDate := time.Now().In(cstZone).Add(time.Duration(constants.ExchangePreInitSeconds) * time.Second)
+	tasks, skipped, err := s.exchangeTaskRepo.GetTasksByTimeAtWithSkips(hour, minute, targetDate)
 	if err != nil {
 		log.Printf("【抢兑调度器】获取 %s 抢兑任务失败: %v", slot, err)
 		return
@@ -383,7 +384,9 @@ func (s *ExchangeScheduler) prepareQueueByTime(hour, minute int) {
 	s.reportScheduleSkips(slot, skipped)
 	s.reportScheduleMatched(slot, tasks)
 
-	log.Printf("【抢兑调度器】查询 %s 找到 %d 个可执行任务，策略跳过 %d 个任务", slot, len(tasks), len(skipped))
+	if len(tasks) > 0 || len(skipped) > 0 {
+		log.Printf("【抢兑调度器】查询 %s 找到 %d 个可执行任务，策略跳过 %d 个任务", slot, len(tasks), len(skipped))
+	}
 
 	if len(tasks) == 0 {
 		return
@@ -425,7 +428,7 @@ func (s *ExchangeScheduler) executeExchangeByTime(hour, minute int) {
 		return
 	}
 	slot := fmt.Sprintf("%02d:%02d", hour, minute)
-	now := time.Now()
+	now := time.Now().In(cstZone)
 
 	s.queueMutex.Lock()
 	var tasksToExecute []*models.ExchangeTask

@@ -8,7 +8,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"math/rand"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -24,13 +23,17 @@ const (
 	exchangeSourceID         = "1097"
 	exchangeTargetSourceID   = "001005"
 	exchangeSlideMaxAttempt  = 3
-	exchangeSlideJitter      = 3
 	exchangeFallbackDeviceID = "BXe6dG5DL447+uIMwsoyfnkg68InzFABuAHx7JkXFgEUJGuHGaU5iU4p7MF5JLgXpxZesH/8QKfck3ViH4MpJEw=="
 )
 
 type exchangeAuthContext struct {
 	jwtToken string
 	ssoToken string
+}
+
+type exchangePreparedSession struct {
+	auth *exchangeAuthContext
+	http *exchangeHTTPSession
 }
 
 type exchangeAttemptResult struct {
@@ -64,6 +67,10 @@ func performExchange(account *models.ExchangeAccount, prizeID string, tokenMgr *
 }
 
 func performExchangeContext(ctx context.Context, account *models.ExchangeAccount, prizeID string, tokenMgr *TokenManager) (bool, string, int) {
+	return performExchangePreparedContext(ctx, account, prizeID, tokenMgr, &exchangePreparedSession{})
+}
+
+func performExchangePreparedContext(ctx context.Context, account *models.ExchangeAccount, prizeID string, tokenMgr *TokenManager, prepared *exchangePreparedSession) (bool, string, int) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -72,30 +79,70 @@ func performExchangeContext(ctx context.Context, account *models.ExchangeAccount
 		return false, err.Error(), int(time.Since(startTime).Milliseconds())
 	}
 
-	authCtx, err := prepareExchangeAuth(account, tokenMgr)
-	if err != nil {
-		return false, err.Error(), int(time.Since(startTime).Milliseconds())
+	if prepared == nil {
+		prepared = &exchangePreparedSession{}
+	}
+	authCtx := prepared.auth
+	if authCtx != nil {
+		expiry := jwtExpiresAt(authCtx.jwtToken)
+		if !expiry.IsZero() && !expiry.After(time.Now().Add(15*time.Second)) {
+			authCtx = nil
+			prepared.auth = nil
+			prepared.http = nil
+		}
+	}
+	if authCtx == nil {
+		var err error
+		authCtx, err = prepareExchangeAuth(account, tokenMgr)
+		if err != nil {
+			return false, err.Error(), int(time.Since(startTime).Milliseconds())
+		}
+		prepared.auth = authCtx
 	}
 	if authCtx.jwtToken == "" {
 		return false, "JWT token 为空", int(time.Since(startTime).Milliseconds())
 	}
 
-	session := newExchangeHTTPSessionContext(ctx, account, authCtx)
+	session := prepared.http
+	if session == nil {
+		session = newExchangeHTTPSessionContext(ctx, account, authCtx)
+		prepared.http = session
+	}
 	result := executeExchangeOnceContext(ctx, prizeID, authCtx, session)
 	return result.success, result.message, result.execTime
 }
 
 func prepareExchangeAuth(account *models.ExchangeAccount, tokenMgr *TokenManager) (*exchangeAuthContext, error) {
+	if tokenMgr == nil {
+		return prepareExchangeAuthWithProvider(account, nil)
+	}
+	return prepareExchangeAuthWithProvider(account, tokenMgr)
+}
+
+type exchangeTokenProvider interface {
+	GetToken(accountID uint) (*TokenInfo, error)
+}
+
+func prepareExchangeAuthWithProvider(account *models.ExchangeAccount, tokenMgr exchangeTokenProvider) (*exchangeAuthContext, error) {
+	if account == nil {
+		return nil, fmt.Errorf("抢兑账号为空")
+	}
 	authStr := sanitizeAuthValue(account.Auth)
 	jwtToken := strings.TrimSpace(account.JWTToken)
 	ssoToken := ""
 
 	if tokenMgr != nil && account.AccountID > 0 {
-		if tokenInfo, err := tokenMgr.GetToken(account.AccountID); err == nil && tokenInfo != nil {
-			if tokenInfo.JWTToken != "" {
-				jwtToken = tokenInfo.JWTToken
-			}
-			ssoToken = tokenInfo.SSOToken
+		tokenInfo, err := tokenMgr.GetToken(account.AccountID)
+		if err != nil {
+			return nil, fmt.Errorf("刷新抢兑账号 Token 失败: %w", err)
+		}
+		if tokenInfo == nil || tokenInfo.JWTToken == "" {
+			return nil, fmt.Errorf("抢兑账号刷新后没有可用 JWT")
+		}
+		jwtToken = tokenInfo.JWTToken
+		ssoToken = tokenInfo.SSOToken
+		if tokenInfo.Auth != "" {
+			authStr = tokenInfo.Auth
 		}
 	}
 
@@ -138,12 +185,9 @@ func executeExchangeOnceContext(ctx context.Context, prizeID string, authCtx *ex
 			execTime: int(time.Since(startTime).Milliseconds()),
 		}
 	}
-	finalOffset := offset + rand.Intn(exchangeSlideJitter*2+1) - exchangeSlideJitter
-	if finalOffset < 0 {
-		finalOffset = 0
-	}
-
-	exchangeURL := buildExchangeURLWithPuzzle(prizeID, finalOffset)
+	// The solver returns the original image coordinate. Altering it afterward
+	// makes a correct match fail the upstream challenge.
+	exchangeURL := buildExchangeURLWithPuzzle(prizeID, offset)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, exchangeURL, nil)
 	if err != nil {
@@ -187,6 +231,9 @@ func executeExchangeOnceContext(ctx context.Context, prizeID string, authCtx *ex
 	}
 	if !strings.EqualFold(strings.TrimSpace(msg), "success") {
 		message := buildExchangeFailureMessage(statusCode, response, body)
+		if solveInfo != "" {
+			message += " | " + solveInfo
+		}
 		return exchangeAttemptResult{success: false, message: message, execTime: execTime, stop: isExchangeTerminalMessage(message)}
 	}
 	if businessFailure := exchangeResponseBusinessFailure(response); businessFailure != "" {

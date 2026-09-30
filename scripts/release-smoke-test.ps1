@@ -108,6 +108,7 @@ $expectedFiles = @(
     'chaos-drill.sh',
     'capacity-drill.sh',
     'nginx-server.conf',
+    'DEPLOYMENT_CREDENTIAL_HOTFIX.md',
     'SHA256SUMS'
 )
 

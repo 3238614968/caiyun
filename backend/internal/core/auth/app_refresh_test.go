@@ -7,6 +7,18 @@ import (
 	"time"
 )
 
+func TestBasicSchemeIsCaseInsensitive(t *testing.T) {
+	canonical := GenerateAuth("fresh-token", "13800000001", "mobile")
+	lowercase := "basic " + strings.TrimPrefix(canonical, "Basic ")
+	parsed, err := ParseToken(lowercase)
+	if err != nil || parsed.Token != "fresh-token" {
+		t.Fatalf("ParseToken(%q) = %+v, %v", lowercase, parsed, err)
+	}
+	if got := ensureBasicAuth(lowercase); got != canonical {
+		t.Fatalf("ensureBasicAuth() = %q, want canonical Basic form", got)
+	}
+}
+
 func TestAppRefreshEncryptDecrypt(t *testing.T) {
 	plain := `{"clientType":"414"}`
 	encrypted, err := appRefreshEncrypt(plain)

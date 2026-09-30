@@ -53,6 +53,10 @@ func obtainExchangeSlideOffsetContext(ctx context.Context, session *exchangeHTTP
 			lastErr = fmt.Errorf("识别接口返回为空")
 			continue
 		}
+		if result.Offset < 0 || result.Offset > payload.picWidth-payload.puzzleWidth {
+			lastErr = fmt.Errorf("识别坐标超出图像范围: offset=%d width=%d puzzle_width=%d", result.Offset, payload.picWidth, payload.puzzleWidth)
+			continue
+		}
 		info := fmt.Sprintf("滑块识别offset=%d", result.Offset)
 		if result.Confidence > 0 {
 			info += fmt.Sprintf(" confidence=%.4f", result.Confidence)
@@ -110,6 +114,7 @@ func fetchExchangeSlideContext(ctx context.Context, session *exchangeHTTPSession
 	if err != nil {
 		return nil, fmt.Errorf("解析滑块验证码响应失败: %w | body=%s", err, summarizeExchangeBody(body))
 	}
+	session.captchaTID = strings.TrimSpace(resp.Header.Get("x-yun-tid"))
 	return payload, nil
 }
 

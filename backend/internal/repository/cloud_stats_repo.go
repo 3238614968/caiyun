@@ -197,6 +197,23 @@ func (r *CloudStatsRepository) UpsertByAccountIDAndDate(stats *models.CloudStats
 	}).Create(stats).Error
 }
 
+func (r *CloudStatsRepository) UpsertBatch(stats []*models.CloudStats) error {
+	if len(stats) == 0 {
+		return nil
+	}
+	return r.db.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "account_id"}, {Name: "date"}}, DoUpdates: clause.AssignmentColumns([]string{"user_id", "cloud_count", "cloud_diff", "cloud_diff_week", "updated_at", "deleted_at"})}).CreateInBatches(stats, 200).Error
+}
+
+func (r *CloudStatsRepository) ComparisonSnapshots(accountIDs []uint, dates []string) ([]*models.CloudStats, error) {
+	var stats []*models.CloudStats
+	if len(accountIDs) == 0 {
+		return stats, nil
+	}
+	err := r.db.Select("account_id,date,cloud_count").Where("account_id IN ? AND date IN ?", accountIDs, dates).Find(&stats).Error
+	normalizeCloudStatsDates(stats)
+	return stats, err
+}
+
 // GetTodayStatsByUserID 获取用户今日的所有统计记录
 func (r *CloudStatsRepository) GetTodayStatsByUserID(userID uint) ([]*models.CloudStats, error) {
 	today := nowCST().Format("2006-01-02")
@@ -245,13 +262,14 @@ func (r *CloudStatsRepository) GetTrendDataByUserID(userID uint, days int) ([]*m
 	startDate := now.AddDate(0, 0, -days+1).Format("2006-01-02")
 
 	err := r.db.Model(&models.CloudStats{}).
-		Where("user_id = ? AND date BETWEEN ? AND ?", userID, startDate, endDate).
-		Group("date").
+		Joins("JOIN accounts ON accounts.id = cloud_stats.account_id AND accounts.deleted_at IS NULL").
+		Where("cloud_stats.user_id = ? AND cloud_stats.date BETWEEN ? AND ?", userID, startDate, endDate).
+		Group("cloud_stats.date").
 		// Trend points intentionally contain only grouped/aggregated fields.
 		// Timestamps from individual account snapshots are not meaningful here
 		// and selecting them violates MySQL ONLY_FULL_GROUP_BY.
-		Select("date, SUM(cloud_count) as cloud_count, 0 as cloud_diff, 0 as cloud_diff_week").
-		Order("date ASC").
+		Select("cloud_stats.date AS date, SUM(cloud_stats.cloud_count) AS cloud_count, COUNT(DISTINCT cloud_stats.account_id) AS sampled_accounts, 0 AS cloud_diff, 0 AS cloud_diff_week").
+		Order("cloud_stats.date ASC").
 		Find(&stats).Error
 	normalizeCloudStatsDates(stats)
 	return stats, err
@@ -265,10 +283,11 @@ func (r *CloudStatsRepository) GetTrendDataGlobal(days int) ([]*models.CloudStat
 	startDate := now.AddDate(0, 0, -days+1).Format("2006-01-02")
 
 	err := r.db.Model(&models.CloudStats{}).
-		Where("date BETWEEN ? AND ?", startDate, endDate).
-		Group("date").
-		Select("date, SUM(cloud_count) as cloud_count, 0 as cloud_diff, 0 as cloud_diff_week").
-		Order("date ASC").
+		Joins("JOIN accounts ON accounts.id = cloud_stats.account_id AND accounts.deleted_at IS NULL").
+		Where("cloud_stats.date BETWEEN ? AND ?", startDate, endDate).
+		Group("cloud_stats.date").
+		Select("cloud_stats.date AS date, SUM(cloud_stats.cloud_count) AS cloud_count, COUNT(DISTINCT cloud_stats.account_id) AS sampled_accounts, 0 AS cloud_diff, 0 AS cloud_diff_week").
+		Order("cloud_stats.date ASC").
 		Find(&stats).Error
 	normalizeCloudStatsDates(stats)
 	return stats, err

@@ -13,6 +13,11 @@ type AccountRepository struct {
 	db *gorm.DB
 }
 
+type AccountMailPeer struct {
+	ID    uint   `gorm:"column:id"`
+	Phone string `gorm:"column:phone"`
+}
+
 // accountListColumns 是账号列表/统计接口需要的非敏感字段集合。
 // 管理端只读页面不需要解密 auth/token/jwt_token，显式列出字段可以避免
 // 历史凭证损坏时触发 AfterFind 解密错误，导致整个列表或仪表盘返回 500。
@@ -63,6 +68,15 @@ func (r *AccountRepository) GetByID(id uint) (*models.Account, error) {
 	return r.FindByID(id)
 }
 
+// FindMetadataByID validates ownership without loading sensitive credentials.
+func (r *AccountRepository) FindMetadataByID(id uint) (*models.Account, error) {
+	var account models.Account
+	if err := accountMetadataQuery(r.db).First(&account, id).Error; err != nil {
+		return nil, err
+	}
+	return &account, nil
+}
+
 // GetAll 获取所有账号
 func (r *AccountRepository) GetAll() ([]*models.Account, error) {
 	var accounts []*models.Account
@@ -106,6 +120,25 @@ func (r *AccountRepository) SumCloudCount() (int, error) {
 		Select("COALESCE(SUM(cloud_count), 0)").
 		Scan(&total).Error
 	return total, err
+}
+
+func (r *AccountRepository) CloudBalanceSummary(userID *uint) (total, count int, err error) {
+	var result struct {
+		Total int
+		Count int
+	}
+	query := r.db.Model(&models.Account{})
+	if userID != nil {
+		query = query.Where("user_id = ?", *userID)
+	}
+	err = query.Select("COALESCE(SUM(cloud_count),0) AS total, COUNT(*) AS count").Scan(&result).Error
+	return result.Total, result.Count, err
+}
+
+func (r *AccountRepository) FindCloudBalancesAfterID(lastID uint, limit int) ([]*models.Account, error) {
+	var accounts []*models.Account
+	err := r.db.Model(&models.Account{}).Select("id,user_id,cloud_count").Where("id > ?", lastID).Order("id ASC").Limit(limit).Find(&accounts).Error
+	return accounts, err
 }
 
 // TopByCloudCount 按云朵数量倒序返回账号榜单，预加载归属用户以避免 N+1 查询。
@@ -212,11 +245,35 @@ func (r *AccountRepository) FindActiveAccountsPaged(offset, limit int) ([]*model
 	return accounts, err
 }
 
+// FindActiveAccountsAfterID uses a stable cursor. Offset pagination can skip
+// accounts when a previous batch is disabled during task execution.
+func (r *AccountRepository) FindActiveAccountsAfterID(lastID uint, limit int) ([]*models.Account, error) {
+	var accounts []*models.Account
+	if limit <= 0 || limit > 1000 {
+		limit = 200
+	}
+	err := r.db.Where("is_active = ? AND id > ?", true, lastID).
+		Order("id ASC").Limit(limit).Find(&accounts).Error
+	return accounts, err
+}
+
 // FindActiveAccountsByUserID 查找指定用户的所有激活账号
 func (r *AccountRepository) FindActiveAccountsByUserID(userID uint) ([]*models.Account, error) {
 	var accounts []*models.Account
 	err := r.db.Where("user_id = ? AND is_active = ?", userID, true).Order("cloud_count DESC").Order("created_at DESC").Find(&accounts).Error
 	return accounts, err
+}
+
+// ListActiveMailPeers returns only identifiers and phone numbers. Mail mutual
+// tasks may pair accounts owned by one user, never accounts across users.
+func (r *AccountRepository) ListActiveMailPeers(userID, excludeID uint) ([]AccountMailPeer, error) {
+	var peers []AccountMailPeer
+	err := r.db.Model(&models.Account{}).
+		Select("id, phone").
+		Where("user_id = ? AND is_active = ? AND id <> ?", userID, true, excludeID).
+		Order("id ASC").
+		Scan(&peers).Error
+	return peers, err
 }
 
 // UpdateCloudCount 更新云朵数量
@@ -400,5 +457,9 @@ func (r *AccountRepository) FindByPhoneAndUserID(phone string, userID uint) (*mo
 
 // SetActiveStatus 设置账号激活状态
 func (r *AccountRepository) SetActiveStatus(id uint, isActive bool) error {
-	return r.db.Model(&models.Account{}).Where("id = ?", id).Update("is_active", isActive).Error
+	updates := map[string]interface{}{"is_active": isActive}
+	if isActive {
+		updates["jwt_error_count"] = 0
+	}
+	return r.db.Model(&models.Account{}).Where("id = ?", id).Updates(updates).Error
 }

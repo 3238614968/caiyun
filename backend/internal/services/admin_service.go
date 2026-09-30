@@ -11,6 +11,11 @@ type AdminService struct {
 	taskLogRepo    *repository.TaskLogRepository
 	taskConfigRepo *repository.TaskConfigRepository
 	unitOfWork     repository.UnitOfWork
+	tokenCache     interface{ ClearToken(uint) }
+}
+
+func (s *AdminService) SetTokenCache(cache interface{ ClearToken(uint) }) {
+	s.tokenCache = cache
 }
 
 // NewAdminService creates an administrator service.

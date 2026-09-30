@@ -33,26 +33,8 @@ func (t *BackupGiftTask) Run() error {
 		return err
 	}
 
-	// 解析响应
-	code := 0
-	switch v := resp.Code.(type) {
-	case int:
-		code = v
-	case float64:
-		code = int(v)
-	case string:
-		if v == "0" {
-			code = 0
-		}
-	}
-
-	if code != 0 {
-		msg := resp.Message
-		if msg == "" {
-			msg = resp.Msg
-		}
-		t.logger.Error("获取备份好礼失败", fmt.Errorf("code=%d, msg=%s", code, msg))
-		return fmt.Errorf("获取备份好礼失败: code=%d, msg=%s", code, msg)
+	if err := rewardResponseError("获取备份好礼", resp); err != nil {
+		return err
 	}
 
 	// 解析结果
@@ -63,8 +45,7 @@ func (t *BackupGiftTask) Run() error {
 
 	resultMap, ok := resp.Result.(map[string]interface{})
 	if !ok {
-		t.logger.Error("解析备份好礼状态失败")
-		return nil
+		return fmt.Errorf("解析备份好礼状态失败")
 	}
 
 	// 获取状态
@@ -106,19 +87,14 @@ func (t *BackupGiftTask) Run() error {
 			return err
 		}
 
-		receiveCode := 0
-		switch v := receiveResp.Code.(type) {
-		case int:
-			receiveCode = v
-		case float64:
-			receiveCode = int(v)
-		case string:
-			if v == "0" {
-				receiveCode = 0
-			}
+		if err := rewardResponseError("领取备份奖励", receiveResp, 504); err != nil {
+			return err
 		}
-
-		if receiveCode == 0 {
+		if responseCodeIs(receiveResp, 504) {
+			t.logger.Info("本月备份奖励已领取")
+			return nil
+		}
+		if responseCodeIs(receiveResp, 0) {
 			// 尝试获取奖励数量
 			if receiveResp.Result != nil {
 				if reward, ok := receiveResp.Result.(float64); ok {

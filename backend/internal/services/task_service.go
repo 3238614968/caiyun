@@ -9,12 +9,14 @@ import (
 	"caiyun/internal/envutil"
 	"caiyun/internal/models"
 	"caiyun/internal/repository"
-	"caiyun/internal/utils"
 	"caiyun/internal/ws"
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
+
+	"gorm.io/gorm"
 )
 
 // TaskResult 任务执行结果
@@ -35,6 +37,7 @@ type TaskService struct {
 	taskConfigRepo *repository.TaskConfigRepository
 	tokenMgr       *TokenManager
 	eventHub       *ws.Hub
+	mailDedup      tasks.MailSendDedupStore
 }
 
 func NewTaskService(
@@ -82,6 +85,14 @@ type TaskRunner struct {
 	initialCloudCount int             // 任务执行前的云朵数
 	finalCloudCount   int             // 任务执行后的云朵数
 	disabledTasks     map[string]bool // 被下架的任务类型
+	mailPeers         []tasks.MailPeer
+	mailDedup         tasks.MailSendDedupStore
+	assistTokenMgr    *TokenManager
+	assistAccountRepo *repository.AccountRepository
+}
+
+func (s *TaskService) SetMailDedupStore(store tasks.MailSendDedupStore) {
+	s.mailDedup = store
 }
 
 // NewTaskRunner 创建任务运行器
@@ -89,17 +100,17 @@ func NewTaskRunner(account *models.Account, storage tasks.Storage, authMgr *auth
 	return buildTaskRunner(nil, account, storage, authMgr, disabledTasks, taskRunnerOptions{maxJWTRetries: 1})
 }
 
-// NewTaskRunnerWithRetry 创建任务运行器（带JWT获取重试和自动禁用功能）
+// NewTaskRunnerWithRetry 创建任务运行器；账号停用统一由 TokenManager 判定。
 func (s *TaskService) NewTaskRunnerWithRetry(account *models.Account, storage tasks.Storage, authMgr *auth.Auth, disabledTasks map[string]bool) *TaskRunner {
 	return buildTaskRunner(s, account, storage, authMgr, disabledTasks, taskRunnerOptions{
-		maxJWTRetries:      3,
-		updateJWTErrorStat: true,
+		maxJWTRetries: 3,
+		useManagedJWT: s.tokenMgr != nil && account != nil && account.JWTToken != "",
 	})
 }
 
 type taskRunnerOptions struct {
-	maxJWTRetries      int
-	updateJWTErrorStat bool
+	maxJWTRetries int
+	useManagedJWT bool
 }
 
 func buildTaskRunner(svc *TaskService, account *models.Account, storage tasks.Storage, authMgr *auth.Auth, disabledTasks map[string]bool, opts taskRunnerOptions) *TaskRunner {
@@ -136,29 +147,23 @@ func buildTaskRunner(svc *TaskService, account *models.Account, storage tasks.St
 		authClient.SetAuth(authStr)
 	}
 	authMgrForJWT := auth.NewAuth(authClient)
+	if opts.useManagedJWT {
+		client.SetJWTToken(account.JWTToken)
+		return runner
+	}
 
 	// 获取 JWT token - 总是尝试获取最新的，因为传入的 account.JWTToken 可能已过期
 	jwtToken := account.JWTToken
 	ssoToken := ""
-	var lastErr error
 
 	for i := 0; i < opts.maxJWTRetries; i++ {
 		if token, matchedSSOToken, err := authMgrForJWT.GetJWTTokenWithSSOToken(account.Phone); err == nil && token != "" {
 			jwtToken = token
 			ssoToken = matchedSSOToken
-			lastErr = nil
 			lg.Info("成功获取 JWT token")
 			account.JWTToken = token
-			// 成功获取后重置错误计数
-			if opts.updateJWTErrorStat && svc != nil && account.JWTErrorCount > 0 {
-				account.JWTErrorCount = 0
-				if err := svc.accountRepo.ResetJWTErrorCount(account.ID); err != nil {
-					lg.Error("重置账号JWT错误计数失败:", err)
-				}
-			}
 			break
 		} else {
-			lastErr = err
 			if opts.maxJWTRetries > 1 {
 				lg.Error(fmt.Sprintf("获取 JWT token 失败 (尝试 %d/%d):", i+1, opts.maxJWTRetries), err)
 			} else {
@@ -170,40 +175,8 @@ func buildTaskRunner(svc *TaskService, account *models.Account, storage tasks.St
 		}
 	}
 
-	if !opts.updateJWTErrorStat && jwtToken == "" {
+	if jwtToken == "" {
 		lg.Error("没有可用的 JWT token，部分任务可能无法执行")
-	}
-
-	// 如果重试后仍然失败
-	if opts.updateJWTErrorStat && svc != nil && (jwtToken == "" || lastErr != nil) {
-		// 增加错误计数
-		newCount, err := svc.accountRepo.IncrementJWTErrorCount(account.ID)
-		if err != nil {
-			lg.Error("更新账号JWT错误计数失败:", err)
-			newCount = account.JWTErrorCount + 1
-		}
-		account.JWTErrorCount = newCount
-		lg.Error(fmt.Sprintf("JWT获取失败次数: %d/%d", account.JWTErrorCount, opts.maxJWTRetries))
-
-		// 如果达到最大重试次数，禁用账号
-		if account.JWTErrorCount >= opts.maxJWTRetries {
-			account.IsActive = false
-			lg.Error(fmt.Sprintf("账号 %s JWT获取失败超过3次，已自动禁用", utils.MaskPhone(account.Phone)))
-			// 发送WebSocket通知
-			if wsHub := svc.eventHub; wsHub != nil {
-				wsHub.SendToUser(account.UserID, ws.Message{
-					Type: "account_disabled",
-					Data: map[string]interface{}{
-						"account_id": account.ID,
-						"phone":      account.Phone,
-						"reason":     "JWT获取失败超过3次",
-					},
-				})
-			}
-			if err := svc.accountRepo.SetActiveStatus(account.ID, false); err != nil {
-				lg.Error("禁用账号失败:", err)
-			}
-		}
 	}
 
 	if jwtToken != "" {
@@ -262,8 +235,14 @@ func (s *TaskService) GetTaskLogsContext(ctx context.Context, userID uint, accou
 		ctx = context.Background()
 	}
 	if accountID != nil {
-		account, err := s.accountRepo.WithContext(ctx).FindByID(*accountID)
-		if err != nil || account.UserID != userID {
+		account, err := s.accountRepo.WithContext(ctx).FindMetadataByID(*accountID)
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, 0, ErrAccountNotFound
+		}
+		if err != nil {
+			return nil, 0, err
+		}
+		if account.UserID != userID {
 			return nil, 0, ErrAccountNotFound
 		}
 	}

@@ -1,6 +1,9 @@
 package reencrypt
 
 import (
+	"crypto/aes"
+	"crypto/cipher"
+	"encoding/base64"
 	"strings"
 	"testing"
 
@@ -97,5 +100,43 @@ func TestRotateCredentialValueUpgradesLegacyCiphertext(t *testing.T) {
 	}
 	if !strings.HasPrefix(rotated, "enc:v2:") {
 		t.Fatalf("rotateCredentialValue() = %q, want enc:v2 prefix", rotated)
+	}
+}
+
+func TestRotateCredentialValueUpgradesLegacyNoAADWithSameKeyVersion(t *testing.T) {
+	const key = "0123456789abcdef0123456789abcdef"
+	t.Setenv("APP_ENV", "production")
+	t.Setenv("DATA_ENCRYPTION_KEY", "")
+	t.Setenv("DATA_ENCRYPTION_KEYS", "v1="+key)
+	t.Setenv("DATA_ENCRYPTION_CURRENT_VERSION", "v1")
+	// Even during compatibility mode, same-version old-format ciphertext must
+	// be rewritten so removing the flag does not break the next deployment.
+	t.Setenv("FIELD_CRYPTO_ALLOW_LEGACY_NO_AAD", "true")
+	security.ResetFieldCryptoForTests()
+	defer security.ResetFieldCryptoForTests()
+	block, err := aes.NewCipher([]byte(key))
+	if err != nil {
+		t.Fatal(err)
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nonce := make([]byte, gcm.NonceSize())
+	payload := append(nonce, gcm.Seal(nil, nonce, []byte("legacy-secret"), nil)...)
+	old := "enc:v1:" + base64.RawStdEncoding.EncodeToString(payload)
+	rotated, changed, state, err := rotateCredentialValue(old, "v1")
+	if err != nil || !changed || state != rotationStateLegacy || rotated == old {
+		t.Fatalf("same-version legacy rotation: changed=%t state=%s err=%v", changed, state, err)
+	}
+	t.Setenv("FIELD_CRYPTO_ALLOW_LEGACY_NO_AAD", "false")
+	security.ResetFieldCryptoForTests()
+	plain, err := security.DecryptString(rotated)
+	if err != nil || plain != "legacy-secret" {
+		t.Fatalf("rotated credential unavailable after compatibility disabled: %v", err)
+	}
+	_, changed, state, err = rotateCredentialValue(rotated, "v1")
+	if err != nil || changed || state != rotationStateCurrent {
+		t.Fatalf("second migration must be idempotent: changed=%t state=%s err=%v", changed, state, err)
 	}
 }

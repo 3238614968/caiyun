@@ -18,10 +18,11 @@ import (
 )
 
 type exchangeHTTPSession struct {
-	client    *http.Client
-	deviceID  string
-	userAgent string
-	referer   string
+	client     *http.Client
+	deviceID   string
+	userAgent  string
+	referer    string
+	captchaTID string
 }
 
 func newExchangeHTTPSession(account *models.ExchangeAccount, authCtx *exchangeAuthContext) *exchangeHTTPSession {
@@ -154,6 +155,9 @@ func buildExchangeHeaders(authCtx *exchangeAuthContext, session *exchangeHTTPSes
 	if authCtx != nil && authCtx.jwtToken != "" {
 		headers["jwttoken"] = authCtx.jwtToken
 		headers["jwtToken"] = authCtx.jwtToken
+	}
+	if session != nil && session.captchaTID != "" {
+		headers["x-yun-tid"] = session.captchaTID
 	}
 	for key, value := range extra {
 		if strings.TrimSpace(value) != "" {

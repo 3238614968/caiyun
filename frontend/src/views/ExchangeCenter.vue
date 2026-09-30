@@ -13,7 +13,6 @@
       <!-- 选项卡 -->
       <el-tabs
         v-model="activeTab"
-        type="border-card"
         class="exchange-tabs"
       >
         <!-- 商品列表 -->
@@ -40,6 +39,7 @@
         <el-tab-pane
           label="抢兑规则"
           name="accounts"
+          lazy
         >
           <ExchangeAccountList
             :is-mobile="isMobile"
@@ -54,6 +54,7 @@
         <el-tab-pane
           label="抢兑任务"
           name="tasks"
+          lazy
         >
           <ExchangeTaskManager
             v-model:filters="taskFilters"
@@ -71,8 +72,9 @@
         <el-tab-pane
           label="领奖专区"
           name="rewards"
+          lazy
         >
-          <ExchangeRewardsPlaceholder />
+          <ExchangeRewardsPanel :is-admin="isAdmin" />
         </el-tab-pane>
       </el-tabs>
     </div>
@@ -131,6 +133,8 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { createCoalescedRefresh } from '@/utils/coalesced-refresh'
+import { isOperationUpdatedMessage, wsClient, type WsMessage } from '@/api/websocket'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   searchProducts,
@@ -167,7 +171,7 @@ import CreateExchangeTaskDialog from '@/components/exchange/CreateExchangeTaskDi
 import ImmediateExchangeDialog from '@/components/exchange/ImmediateExchangeDialog.vue'
 import ExchangeAccountDialog from '@/components/exchange/ExchangeAccountDialog.vue'
 import BatchCreateTaskResultDialog from '@/components/exchange/BatchCreateTaskResultDialog.vue'
-import ExchangeRewardsPlaceholder from '@/components/exchange/ExchangeRewardsPlaceholder.vue'
+import ExchangeRewardsPanel from '@/components/exchange/ExchangeRewardsPanel.vue'
 
 // 状态
 const activeTab = ref('products')
@@ -619,10 +623,18 @@ const executeTask = async (id: number) => {
   }
 }
 
+const exchangeRefresh = createCoalescedRefresh(() => Promise.all([loadAccounts(), loadTasks()]))
+const handleExchangeUpdate = () => exchangeRefresh.trigger()
+const handleExchangeOperation = (message: WsMessage) => {
+  if (isOperationUpdatedMessage(message) && /exchange|product/.test(message.data.type) && ['succeeded', 'failed', 'canceled'].includes(message.data.status)) exchangeRefresh.trigger()
+}
+
 onMounted(async () => {
+  for (const type of ['exchange_result', 'exchange_complete', 'exchange_completed', 'exchange_skipped']) wsClient.on(type, handleExchangeUpdate)
+  wsClient.on('operation.updated', handleExchangeOperation)
   syncViewportState()
   window.addEventListener('resize', syncViewportState)
-  await loadLocalImageMap() // 先加载本地图片映射
+  void loadLocalImageMap()
   loadExchangeConfig() // 加载兑换配置
   loadProducts()
   loadCategories()
@@ -632,6 +644,9 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
+  exchangeRefresh.dispose()
+  for (const type of ['exchange_result', 'exchange_complete', 'exchange_completed', 'exchange_skipped']) wsClient.off(type, handleExchangeUpdate)
+  wsClient.off('operation.updated', handleExchangeOperation)
   window.removeEventListener('resize', syncViewportState)
 })
 </script>

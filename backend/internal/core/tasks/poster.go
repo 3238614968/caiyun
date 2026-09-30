@@ -2,6 +2,7 @@ package tasks
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -11,8 +12,7 @@ import (
 )
 
 // PosterTask 校园海报·AI体验活动（National_PlayAISpecial，newyear 接口族）。
-// “体验AI相机”可全自动；“生成校园海报”需要用户在海报页真实生成，
-// 抓包中未见海报生成接口，只能完成点击并提示。
+// 海报经预签名上传完成；AI 相机执行真实识图和对话。
 type PosterTask struct {
 	*activityActions
 	lastMessage string
@@ -44,35 +44,64 @@ func (t *PosterTask) Run() error {
 		return err
 	}
 
-	manualNames := make([]string, 0, len(tasks))
-	executed := 0
+	initialPending := make(map[int]bool)
 	for _, task := range tasks {
-		if strings.EqualFold(task.State, activityStateFinish) {
-			continue
+		if !strings.EqualFold(task.State, activityStateFinish) {
+			initialPending[task.ID] = true
 		}
-		key := task.StepKey()
-		if key == "" {
-			key = "click"
-		}
-		switch {
-		case task.Flag == "makingPoster" || strings.Contains(task.Name, "海报"):
-			if clickErr := t.api.NewYearStepClick(api.PosterMarketName, task.ID, key); clickErr != nil {
-				t.logger.Debug(fmt.Sprintf("海报任务点击失败: %v", clickErr))
+	}
+	manualNames := make(map[string]bool)
+	executed := 0
+	failedActions := 0
+	for round := 0; round < 3; round++ {
+		if round > 0 {
+			refreshed, err := t.api.NewYearTaskList(api.PosterMarketName)
+			if err != nil {
+				t.logger.Debug(fmt.Sprintf("刷新校园海报任务列表失败: %v", err))
+				break
 			}
-			manualNames = append(manualNames, task.Name+"(需在海报页生成)")
-		case strings.Contains(task.Name, "AI相机"):
-			if err := t.completePosterCameraTask(task.ID, key); err != nil {
-				t.logger.Debug(fmt.Sprintf("AI相机体验任务失败: %v", err))
-			} else {
+			tasks = refreshed
+		}
+		pending := false
+		for _, task := range tasks {
+			if strings.EqualFold(task.State, activityStateFinish) {
+				continue
+			}
+			pending = true
+			key := task.StepKey()
+			if key == "" {
+				key = "click"
+			}
+			switch {
+			case task.ID == 33 || task.Flag == "makingPoster":
+				if err := t.api.CompletePosterTask(); err != nil {
+					failedActions++
+					t.logger.Debug(fmt.Sprintf("生成校园海报失败: %v", err))
+					continue
+				}
 				executed++
-			}
-		case strings.EqualFold(task.State, activityStateSuccess):
-			manualNames = append(manualNames, task.Name+"(待领取)")
-		default:
-			if clickErr := t.api.NewYearStepClick(api.PosterMarketName, task.ID, key); clickErr != nil {
-				t.logger.Debug(fmt.Sprintf("校园海报任务点击失败(%s): %v", task.Name, clickErr))
+				// Some server versions finish on upload completion; others still
+				// need the activity step registered once afterward.
+				if latest, err := t.api.NewYearTaskList(api.PosterMarketName); err == nil && !posterTaskFinished(latest, task.ID) {
+					if clickErr := t.api.NewYearStepClick(api.PosterMarketName, task.ID, key); clickErr != nil {
+						t.logger.Debug(fmt.Sprintf("海报任务步骤登记失败: %v", clickErr))
+					}
+				}
+			case task.ID == 34 || strings.Contains(task.Name, "AI相机"):
+				if err := t.completePosterCameraTask(task.ID, key); err != nil {
+					failedActions++
+					t.logger.Debug(fmt.Sprintf("AI相机体验任务失败: %v", err))
+				} else {
+					executed++
+				}
+			default:
+				manualNames[task.Name] = true
 			}
 		}
+		if !pending {
+			break
+		}
+		time.Sleep(2 * time.Second)
 	}
 
 	time.Sleep(2 * time.Second)
@@ -82,31 +111,59 @@ func (t *PosterTask) Run() error {
 	}
 	prizes := t.runPosterLotteries(chances)
 
+	confirmed := 0
+	if latest, err := t.api.NewYearTaskList(api.PosterMarketName); err == nil {
+		for _, task := range latest {
+			if initialPending[task.ID] && strings.EqualFold(task.State, activityStateFinish) {
+				confirmed++
+			}
+		}
+	}
 	parts := make([]string, 0, 4)
 	if executed > 0 {
-		parts = append(parts, fmt.Sprintf("完成AI体验任务%d项", executed))
+		parts = append(parts, fmt.Sprintf("执行海报/AI动作%d次，服务端新确认%d项", executed, confirmed))
 	}
 	if len(prizes) > 0 {
 		parts = append(parts, fmt.Sprintf("抽奖%d次: %s", len(prizes), strings.Join(prizes, "、")))
 	}
 	if len(manualNames) > 0 {
-		parts = append(parts, "待完成: "+strings.Join(manualNames, "、"))
+		var names []string
+		for name := range manualNames {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		parts = append(parts, "待完成: "+strings.Join(names, "、"))
+	}
+	if failedActions > 0 {
+		parts = append(parts, fmt.Sprintf("%d次自动任务执行失败", failedActions))
 	}
 	if len(parts) == 0 {
 		parts = append(parts, "任务均已完成")
 	}
 	t.lastMessage = strings.Join(parts, "; ")
+	if failedActions > 0 && confirmed == 0 && len(prizes) == 0 {
+		return fmt.Errorf("校园海报活动未完成: %s", t.lastMessage)
+	}
 	t.logger.Success("校园海报活动: " + t.lastMessage)
 	return nil
 }
 
-// completePosterCameraTask 点击任务入口后走一遍真实的 AI 相机识别+对话。
-func (t *PosterTask) completePosterCameraTask(taskID int, key string) error {
-	if err := t.api.NewYearStepClick(api.PosterMarketName, taskID, key); err != nil {
-		return fmt.Errorf("上报任务点击失败: %w", err)
+func posterTaskFinished(items []api.ActivityTask, taskID int) bool {
+	for _, task := range items {
+		if task.ID == taskID {
+			return strings.EqualFold(task.State, activityStateFinish)
+		}
 	}
+	return false
+}
+
+// completePosterCameraTask performs AI recognition before registering the step.
+func (t *PosterTask) completePosterCameraTask(taskID int, key string) error {
 	if err := t.api.CompleteAICameraTask(); err != nil {
 		return err
+	}
+	if err := t.api.NewYearStepClick(api.PosterMarketName, taskID, key); err != nil {
+		return fmt.Errorf("登记 AI 相机任务步骤失败: %w", err)
 	}
 	t.logger.Success("校园海报活动完成AI相机体验任务")
 	return nil

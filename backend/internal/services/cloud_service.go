@@ -41,10 +41,13 @@ type DashboardData struct {
 
 // TrendPoint 趋势点
 type TrendPoint struct {
-	Date       string `json:"date"`
-	CloudCount int    `json:"cloud_count"`
-	CloudDiff  int    `json:"cloud_diff"`
-	HasData    bool   `json:"has_data"`
+	Date            string `json:"date"`
+	CloudCount      int    `json:"cloud_count"`
+	CloudDiff       int    `json:"cloud_diff"`
+	HasData         bool   `json:"has_data"`
+	Comparable      bool   `json:"comparable"`
+	SampledAccounts int    `json:"sampled_accounts"`
+	AccountCount    int    `json:"account_count"`
 }
 
 // AccountRank 账号排名
@@ -80,23 +83,17 @@ func (s *CloudService) GetDashboard(userID uint) (*DashboardData, error) {
 	yesterdayDate := today.AddDate(0, 0, -1).Format("2006-01-02")
 	yesterdayStats, err := s.cloudStatsRepo.FindByUserIDAndDate(userID, yesterdayDate)
 	if err == nil && len(yesterdayStats) > 0 {
-		yesterdayTotal := sumCloudStats(yesterdayStats)
-		data.YesterdayDiff = totalCloud - yesterdayTotal
+		data.YesterdayDiff = comparableCloudBalanceDiff(accounts, yesterdayStats)
 	}
 
-	// 今日获得优先使用当前总数与昨日快照的差值，更贴近首页“当前云朵数”的变化；
-	// 若尚未有昨日快照，则回退到今日任务日志汇总。
-	if data.YesterdayDiff != 0 || len(yesterdayStats) > 0 {
-		data.TodayGained = data.YesterdayDiff
-	} else {
-		data.TodayGained = s.taskLogRepo.GetCloudGainedByUserAndRange(userID, today, tomorrow)
-	}
+	// Task earnings are separate from balance changes and account additions.
+	data.TodayGained = s.taskLogRepo.GetCloudGainedByUserAndRange(userID, today, tomorrow)
 
 	// 获取上周云朵数并计算差异
 	lastWeekDate := today.AddDate(0, 0, -7).Format("2006-01-02")
 	lastWeekStats, err := s.cloudStatsRepo.FindByUserIDAndDate(userID, lastWeekDate)
 	if err == nil && len(lastWeekStats) > 0 {
-		data.WeekDiff = totalCloud - sumCloudStats(lastWeekStats)
+		data.WeekDiff = comparableCloudBalanceDiff(accounts, lastWeekStats)
 	}
 
 	// 获取今日任务成功率，避免历史任务把首页成功率长期稀释。
@@ -109,7 +106,7 @@ func (s *CloudService) GetDashboard(userID uint) (*DashboardData, error) {
 	// 获取趋势数据（最近7天）
 	trendStats, err := s.cloudStatsRepo.GetTrendDataByUserID(userID, 7)
 	if err == nil {
-		data.TrendData = completeTrendData(trendStats, 7, totalCloud)
+		data.TrendData = completeTrendData(trendStats, 7, totalCloud, len(accounts))
 	}
 
 	// 获取账号排名
@@ -155,14 +152,16 @@ func (s *CloudService) GetCloudStatsByUserID(userID uint, page, pageSize int) ([
 // CalculateDailyStats 计算每日统计数据
 func (s *CloudService) CalculateDailyStats() error {
 	const batchSize = 200
-	for offset := 0; ; offset += batchSize {
-		accounts, err := s.accountRepo.FindActiveAccountsPaged(offset, batchSize)
+	var lastID uint
+	for {
+		accounts, err := s.accountRepo.FindCloudBalancesAfterID(lastID, batchSize)
 		if err != nil {
 			return err
 		}
 		if len(accounts) == 0 {
 			return nil
 		}
+		lastID = accounts[len(accounts)-1].ID
 
 		if err := s.calculateDailyStatsForAccounts(accounts); err != nil {
 			return err
@@ -175,7 +174,7 @@ func (s *CloudService) CalculateDailyStats() error {
 
 // CalculateDailyStatsByUserID 仅计算指定用户的每日统计数据。
 func (s *CloudService) CalculateDailyStatsByUserID(userID uint) error {
-	accounts, err := s.accountRepo.FindActiveAccountsByUserID(userID)
+	accounts, err := s.accountRepo.FindByUserID(userID)
 	if err != nil {
 		return err
 	}
@@ -184,39 +183,44 @@ func (s *CloudService) CalculateDailyStatsByUserID(userID uint) error {
 }
 
 func (s *CloudService) calculateDailyStatsForAccounts(accounts []*models.Account) error {
-	// 获取今天的日期
 	now := nowCST()
 	today := now.Format("2006-01-02")
-
-	// 为每个账号创建/更新统计数据
+	yesterday := now.AddDate(0, 0, -1).Format("2006-01-02")
+	lastWeek := now.AddDate(0, 0, -7).Format("2006-01-02")
+	ids := make([]uint, 0, len(accounts))
 	for _, account := range accounts {
-		stats := &models.CloudStats{
-			UserID:     account.UserID,
-			AccountID:  account.ID,
-			Date:       today,
-			CloudCount: account.CloudCount,
-		}
-
-		// 计算对比昨日的变化
-		yesterdayDate := now.AddDate(0, 0, -1).Format("2006-01-02")
-		yesterdayStats, err := s.cloudStatsRepo.FindByAccountIDAndDate(account.ID, yesterdayDate)
-		if err == nil && yesterdayStats != nil {
-			stats.CloudDiff = account.CloudCount - yesterdayStats.CloudCount
-		}
-
-		// 计算对比上周的变化
-		lastWeekDate := now.AddDate(0, 0, -7).Format("2006-01-02")
-		lastWeekStats, err := s.cloudStatsRepo.FindByAccountIDAndDate(account.ID, lastWeekDate)
-		if err == nil && lastWeekStats != nil {
-			stats.CloudDiffWeek = account.CloudCount - lastWeekStats.CloudCount
-		}
-
-		// 插入或更新
-		if err := s.cloudStatsRepo.UpsertByAccountIDAndDate(stats); err != nil {
-			return fmt.Errorf("upsert cloud stats for account %d: %w", account.ID, err)
+		if account != nil {
+			ids = append(ids, account.ID)
 		}
 	}
-
+	previous, err := s.cloudStatsRepo.ComparisonSnapshots(ids, []string{yesterday, lastWeek})
+	if err != nil {
+		return err
+	}
+	baseline := make(map[uint]map[string]int)
+	for _, stat := range previous {
+		if baseline[stat.AccountID] == nil {
+			baseline[stat.AccountID] = make(map[string]int)
+		}
+		baseline[stat.AccountID][stat.Date] = stat.CloudCount
+	}
+	stats := make([]*models.CloudStats, 0, len(accounts))
+	for _, account := range accounts {
+		if account == nil {
+			continue
+		}
+		snapshot := &models.CloudStats{UserID: account.UserID, AccountID: account.ID, Date: today, CloudCount: account.CloudCount}
+		if balance, known := baseline[account.ID][yesterday]; known {
+			snapshot.CloudDiff = account.CloudCount - balance
+		}
+		if balance, known := baseline[account.ID][lastWeek]; known {
+			snapshot.CloudDiffWeek = account.CloudCount - balance
+		}
+		stats = append(stats, snapshot)
+	}
+	if err := s.cloudStatsRepo.UpsertBatch(stats); err != nil {
+		return fmt.Errorf("write daily balance snapshots: %w", err)
+	}
 	return nil
 }
 
@@ -248,12 +252,12 @@ func (s *CloudService) GetTrendData(userID uint, days int) ([]TrendPoint, error)
 		return nil, err
 	}
 
-	totalCloud, err := s.accountRepo.GetTotalCloudCountByUserID(userID)
+	totalCloud, accountCount, err := s.accountRepo.CloudBalanceSummary(&userID)
 	if err != nil {
 		return nil, err
 	}
 
-	return completeTrendData(trendStats, days, totalCloud), nil
+	return completeTrendData(trendStats, days, totalCloud, accountCount), nil
 }
 
 // GetGlobalTrendData 获取全局趋势数据
@@ -264,12 +268,12 @@ func (s *CloudService) GetGlobalTrendData(days int) ([]TrendPoint, error) {
 		return nil, err
 	}
 
-	totalCloud, err := s.accountRepo.SumCloudCount()
+	totalCloud, accountCount, err := s.accountRepo.CloudBalanceSummary(nil)
 	if err != nil {
 		return nil, err
 	}
 
-	return completeTrendData(trendStats, days, totalCloud), nil
+	return completeTrendData(trendStats, days, totalCloud, accountCount), nil
 }
 
 func normalizeTrendDays(days int) int {
@@ -287,49 +291,61 @@ func sumCloudStats(stats []*models.CloudStats) int {
 	return total
 }
 
-func completeTrendData(stats []*models.CloudStats, days int, currentTotal int) []TrendPoint {
+func comparableCloudBalanceDiff(accounts []*models.Account, snapshots []*models.CloudStats) int {
+	baseline := make(map[uint]int, len(snapshots))
+	for _, stat := range snapshots {
+		baseline[stat.AccountID] = stat.CloudCount
+	}
+	diff := 0
+	for _, account := range accounts {
+		if previous, ok := baseline[account.ID]; ok {
+			diff += account.CloudCount - previous
+		}
+	}
+	return diff
+}
+
+func completeTrendData(stats []*models.CloudStats, days, currentTotal int, population ...int) []TrendPoint {
+	count := 0
+	if len(population) > 0 {
+		count = population[0]
+	}
+	return completeTrendDataAt(stats, days, currentTotal, count, nowCST())
+}
+
+func completeTrendDataAt(stats []*models.CloudStats, days, currentTotal, accountCount int, now time.Time) []TrendPoint {
 	days = normalizeTrendDays(days)
-	now := time.Now().In(cstZone)
-	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, cstZone)
+	local := now.In(cstZone)
+	today := time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, cstZone)
 	start := today.AddDate(0, 0, -days+1)
-	todayKey := today.Format("2006-01-02")
-
-	statMap := make(map[string]int, len(stats)+1)
-	hasDataMap := make(map[string]bool, len(stats)+1)
-	firstKnown := currentTotal
-	if len(stats) > 0 {
-		firstKnown = stats[0].CloudCount
-	}
+	byDate := make(map[string]*models.CloudStats, len(stats))
 	for _, stat := range stats {
-		statMap[stat.Date] = stat.CloudCount
-		hasDataMap[stat.Date] = true
+		if stat != nil {
+			byDate[stat.Date] = stat
+		}
 	}
-	// 当天以账号表的实时总数为准，避免统计任务尚未落库导致趋势尾点滞后。
-	statMap[todayKey] = currentTotal
-	hasDataMap[todayKey] = true
-
 	result := make([]TrendPoint, 0, days)
-	lastKnown := firstKnown
-	previous := firstKnown
 	for i := 0; i < days; i++ {
 		date := start.AddDate(0, 0, i).Format("2006-01-02")
-		if cloudCount, ok := statMap[date]; ok {
-			lastKnown = cloudCount
+		point := TrendPoint{Date: date, AccountCount: accountCount}
+		if stat := byDate[date]; stat != nil {
+			point.CloudCount = stat.CloudCount
+			point.SampledAccounts = stat.SampledAccounts
+			point.HasData = accountCount == 0 || stat.SampledAccounts == accountCount
 		}
-
-		diff := 0
-		if i > 0 {
-			diff = lastKnown - previous
+		if i == days-1 {
+			point.CloudCount = currentTotal
+			point.SampledAccounts = accountCount
+			point.HasData = true
 		}
-		result = append(result, TrendPoint{
-			Date:       date,
-			CloudCount: lastKnown,
-			CloudDiff:  diff,
-			HasData:    hasDataMap[date],
-		})
-		previous = lastKnown
+		if i > 0 && point.HasData && result[i-1].HasData {
+			point.CloudDiff = point.CloudCount - result[i-1].CloudCount
+			point.Comparable = true
+		}
+		// Missing or partial snapshots stay marked as such. They are never
+		// backfilled with an invented balance or counted as daily growth.
+		result = append(result, point)
 	}
-
 	return result
 }
 

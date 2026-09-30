@@ -151,8 +151,80 @@ func (api *CaiyunAPI) GetTaskListV2(group string) (*TaskListResponse, error) {
 	return &result, nil
 }
 
+// GetTaskListV3 reads the current task table for either sign-in center channel.
+// V3 returns a flat result array, unlike the grouped V2 response.
+func (api *CaiyunAPI) GetTaskListV3(marketName string) ([]Task, error) {
+	if !isSignInMarket(marketName) {
+		return nil, fmt.Errorf("不支持的云朵中心渠道: %q", marketName)
+	}
+	api.prepareSignInCenterSession(false)
+	headers := api.signInMarketHeaders(marketName)
+	resp, err := api.client.Post(
+		MobileMarketURL+"/signin/task/taskListV3",
+		headers,
+		map[string]interface{}{
+			"marketname":    marketName,
+			"client":        0,
+			"clientVersion": "13.2.2",
+		},
+	)
+	if err != nil {
+		return nil, err
+	}
+	body, err := api.client.ReadResponseBody(resp)
+	if err != nil {
+		return nil, err
+	}
+	return decodeTaskListV3(body)
+}
+
+func decodeTaskListV3(body string) ([]Task, error) {
+	var result struct {
+		Code    interface{} `json:"code"`
+		Message string      `json:"message"`
+		Msg     string      `json:"msg"`
+		Result  []Task      `json:"result"`
+	}
+	if err := json.Unmarshal([]byte(body), &result); err != nil {
+		return nil, fmt.Errorf("解析 V3 任务列表失败: %w", err)
+	}
+	if !isSuccessCode(result.Code) {
+		return nil, fmt.Errorf("V3 任务列表失败: code=%v msg=%s", result.Code, normalizeMessageText(result.Msg, result.Message))
+	}
+	if result.Result == nil {
+		return nil, fmt.Errorf("V3 任务列表缺少 result 数组")
+	}
+	return result.Result, nil
+}
+
+func isSignInMarket(marketName string) bool {
+	return marketName == "sign_in_3" || marketName == "newsign_139mail"
+}
+
+func (api *CaiyunAPI) signInMarketHeaders(marketName string) map[string]string {
+	headers := api.buildReceiveHeaders("")
+	headers["activityId"] = marketName
+	headers["appVersion"] = "13.2.2.0"
+	return headers
+}
+
 // DoTaskPost 注册新版云朵中心任务所需 deviceId。
 func (api *CaiyunAPI) DoTaskPost() (*CaiyunResponse, error) {
+	return api.doTaskPost("sign_in_3", 0)
+}
+
+// DoTaskPostForTask reports a real account action for one task before step registration.
+func (api *CaiyunAPI) DoTaskPostForTask(marketName string, taskID int) (*CaiyunResponse, error) {
+	if !isSignInMarket(marketName) {
+		return nil, fmt.Errorf("不支持的云朵中心渠道: %q", marketName)
+	}
+	if taskID <= 0 {
+		return nil, fmt.Errorf("任务 ID 必须大于 0")
+	}
+	return api.doTaskPost(marketName, taskID)
+}
+
+func (api *CaiyunAPI) doTaskPost(marketName string, taskID int) (*CaiyunResponse, error) {
 	api.prepareSignInCenterSession(false)
 
 	deviceID := strings.TrimSpace(api.client.GetDeviceID())
@@ -161,13 +233,17 @@ func (api *CaiyunAPI) DoTaskPost() (*CaiyunResponse, error) {
 		deviceID = strings.TrimSpace(api.client.GetDeviceID())
 	}
 
+	payload := map[string]interface{}{
+		"client":   "app",
+		"deviceId": deviceID,
+	}
+	if taskID > 0 {
+		payload["taskId"] = taskID
+	}
 	resp, err := api.client.Post(
 		fmt.Sprintf("%s/signin/page/doTaskPost", MobileMarketURL),
-		api.buildReceiveHeaders(""),
-		map[string]interface{}{
-			"client":   "app",
-			"deviceId": deviceID,
-		},
+		api.signInMarketHeaders(marketName),
+		payload,
 	)
 	if err != nil {
 		return nil, err
@@ -189,10 +265,10 @@ func (api *CaiyunAPI) DoTaskPost() (*CaiyunResponse, error) {
 func (api *CaiyunAPI) DoTaskWithMarket(marketName, key, taskID string) error {
 	baseURL := MarketURL
 	headers := api.buildMarketHeaders(nil, "")
-	if strings.TrimSpace(marketName) == "sign_in_3" {
+	if isSignInMarket(strings.TrimSpace(marketName)) {
 		api.ensureMarketDeviceID()
 		baseURL = MobileMarketURL
-		headers = api.buildReceiveHeaders("")
+		headers = api.signInMarketHeaders(marketName)
 	}
 
 	urlStr := fmt.Sprintf("%s/signin/task/click?key=%s&id=%s",
@@ -227,10 +303,10 @@ func (api *CaiyunAPI) DoTask(key, taskID string) error {
 func (api *CaiyunAPI) ReceiveTaskRewardForMarket(marketName, taskID string) error {
 	baseURL := MarketURL
 	headers := api.buildMarketHeaders(nil, "")
-	if strings.TrimSpace(marketName) == "sign_in_3" {
+	if isSignInMarket(strings.TrimSpace(marketName)) {
 		api.ensureMarketDeviceID()
 		baseURL = MobileMarketURL
-		headers = api.buildReceiveHeaders("")
+		headers = api.signInMarketHeaders(marketName)
 	}
 
 	urlStr := fmt.Sprintf("%s/signin/page/receiveTask?taskId=%s",

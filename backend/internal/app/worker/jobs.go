@@ -208,9 +208,10 @@ func registerAccountHealthCheckJob(scheduler *scheduler.Scheduler, tokenManager 
 				healthyCount := 0
 				unhealthyCount := 0
 				const batchSize = 200
+				var lastID uint
 
-				for offset := 0; ; offset += batchSize {
-					accounts, err := accountRepo.FindActiveAccountsPaged(offset, batchSize)
+				for {
+					accounts, err := accountRepo.FindActiveAccountsAfterID(lastID, batchSize)
 					if err != nil {
 						log.Printf("【账号检测】获取账号列表失败: %v", err)
 						return err
@@ -218,6 +219,7 @@ func registerAccountHealthCheckJob(scheduler *scheduler.Scheduler, tokenManager 
 					if len(accounts) == 0 {
 						break
 					}
+					lastID = accounts[len(accounts)-1].ID
 
 					var wg sync.WaitGroup
 					var countMu sync.Mutex

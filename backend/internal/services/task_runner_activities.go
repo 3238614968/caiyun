@@ -5,8 +5,23 @@ import (
 	"strings"
 	"time"
 
+	"caiyun/internal/core/api"
 	coretasks "caiyun/internal/core/tasks"
 )
+
+func (r *TaskRunner) runMakeWishExchangeTask() *TaskResult {
+	startTime := time.Now()
+	r.api.PrepareActivitySession(api.MakeWishMarketName)
+	canExchange, err := r.api.MakeWishCloudExchangeEligibility()
+	if err != nil {
+		return activityTaskResult("makewish_exchange", startTime, err, "", "")
+	}
+	if !canExchange {
+		return activityTaskResult("makewish_exchange", startTime, nil, "当前账号不可兑换，未消耗 AI 豆", "")
+	}
+	err = r.api.ExchangeMakeWishCloud()
+	return activityTaskResult("makewish_exchange", startTime, err, "已发起 300 AI 豆兑换；此操作不改变许愿任务完成位", "")
+}
 
 // activityTaskResult 统一构造活动任务的执行结果：优先使用任务自述消息，
 // 失败时回退到错误信息。
@@ -46,7 +61,11 @@ func (r *TaskRunner) runTokenPKTask() *TaskResult {
 	task.SetStorage(r.storage)
 	task.SetAccountContext(phone, authToken)
 	err = task.Run()
-	return activityTaskResult("token_pk", startTime, err, task.Message(), "算力大作战执行成功")
+	result := activityTaskResult("token_pk", startTime, err, task.Message(), "算力大作战执行成功")
+	if err == nil && task.Pending() {
+		result.Status = "pending"
+	}
+	return result
 }
 
 // runMakeWishTask 执行全网许愿赢好礼任务。
@@ -60,7 +79,11 @@ func (r *TaskRunner) runMakeWishTask() *TaskResult {
 	task.SetStorage(r.storage)
 	task.SetAccountContext(phone, authToken)
 	err = task.Run()
-	return activityTaskResult("make_wish", startTime, err, task.Message(), "许愿赢好礼执行成功")
+	result := activityTaskResult("make_wish", startTime, err, task.Message(), "许愿赢好礼执行成功")
+	if err == nil && task.Pending() {
+		result.Status = "pending"
+	}
+	return result
 }
 
 // runFunAITask 执行趣玩AI抽奖任务。
@@ -74,7 +97,11 @@ func (r *TaskRunner) runFunAITask() *TaskResult {
 	task.SetStorage(r.storage)
 	task.SetAccountContext(phone, authToken)
 	err = task.Run()
-	return activityTaskResult("fun_ai", startTime, err, task.Message(), "趣玩AI抽奖执行成功")
+	result := activityTaskResult("fun_ai", startTime, err, task.Message(), "趣玩AI抽奖执行成功")
+	if err == nil && task.Pending() {
+		result.Status = "pending"
+	}
+	return result
 }
 
 // runPosterTask 执行校园海报·AI体验活动任务。

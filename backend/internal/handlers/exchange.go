@@ -6,6 +6,7 @@ type ExchangeHandler struct {
 	exchangeService  *services.ExchangeService
 	productService   *services.ProductService
 	operationService *services.OperationService
+	prizeService     *services.PrizeCenterService
 }
 
 func NewExchangeHandler(exchangeService *services.ExchangeService, productService *services.ProductService) *ExchangeHandler {
@@ -17,4 +18,8 @@ func NewExchangeHandler(exchangeService *services.ExchangeService, productServic
 
 func (h *ExchangeHandler) SetOperationService(service *services.OperationService) {
 	h.operationService = service
+}
+
+func (h *ExchangeHandler) SetPrizeCenterService(service *services.PrizeCenterService) {
+	h.prizeService = service
 }

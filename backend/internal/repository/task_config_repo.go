@@ -117,6 +117,10 @@ func (r *TaskConfigRepository) List() ([]*models.TaskConfig, error) {
 	return configs, err
 }
 
+func (r *TaskConfigRepository) HasBatchColumn() bool {
+	return r.db.Migrator().HasColumn(&models.TaskConfig{}, "run_in_batch")
+}
+
 // FindByTaskType finds a task config by task type.
 func (r *TaskConfigRepository) FindByTaskType(taskType string) (*models.TaskConfig, error) {
 	var config models.TaskConfig

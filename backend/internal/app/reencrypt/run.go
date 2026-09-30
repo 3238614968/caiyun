@@ -326,7 +326,9 @@ func rotateCredentialValue(value, currentVersion string) (string, bool, rotation
 
 	currentFieldVersion := security.EncryptionVersion(value)
 	if currentFieldVersion == currentVersion && currentFieldVersion != "" {
-		return value, false, rotationStateCurrent, nil
+		if _, err := security.DecryptStringWithAAD(value); err == nil {
+			return value, false, rotationStateCurrent, nil
+		}
 	}
 
 	reencrypted, err := security.EncryptString(plaintext)

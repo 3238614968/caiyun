@@ -2,6 +2,7 @@ package services
 
 import (
 	"encoding/base64"
+	"fmt"
 	"testing"
 	"time"
 )
@@ -26,6 +27,19 @@ func TestAuthorizationShouldRefresh(t *testing.T) {
 				t.Fatalf("authorizationShouldRefresh()=%v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestJWTExpiresAtSupportsSecondsAndMilliseconds(t *testing.T) {
+	for _, expiry := range []int64{1_800_000_000, 1_800_000_000_000} {
+		payload := base64.RawURLEncoding.EncodeToString([]byte(fmt.Sprintf(`{"exp":%d}`, expiry)))
+		got := jwtExpiresAt("header." + payload + ".signature")
+		if got.Unix() != 1_800_000_000 {
+			t.Fatalf("jwtExpiresAt(%d) = %s", expiry, got)
+		}
+	}
+	if !jwtExpiresAt("invalid").IsZero() {
+		t.Fatal("malformed JWT must not be treated as usable")
 	}
 }
 

@@ -218,7 +218,7 @@ func (h *ExchangeHandler) getExchangeTasks(c *gin.Context, isAdmin bool) {
 	filter := parseExchangeTaskFilter(c)
 	tasks, err := h.exchangeService.GetExchangeTasksWithFilter(userID, isAdmin, filter)
 	if err != nil {
-		respondInternalServer(c)
+		respondInternalServer(c, err)
 		return
 	}
 
