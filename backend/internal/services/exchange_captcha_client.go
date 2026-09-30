@@ -92,7 +92,7 @@ func fetchExchangeSlideContext(ctx context.Context, session *exchangeHTTPSession
 	for key, value := range buildExchangeHeaders(authCtx, session, map[string]string{
 		"Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
 	}) {
-		req.Header[key] = []string{value}
+		req.Header.Set(key, value)
 	}
 
 	resp, err := session.client.Do(req)

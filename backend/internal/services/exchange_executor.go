@@ -1,6 +1,7 @@
 package services
 
 import (
+	coreapi "caiyun/internal/core/api"
 	"caiyun/internal/core/auth"
 	corehttp "caiyun/internal/core/http"
 	"caiyun/internal/models"
@@ -9,7 +10,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -17,7 +17,7 @@ import (
 
 const (
 	exchangeRequestTimeout   = time.Minute
-	exchangeClientVersion    = "13.0.0"
+	exchangeClientVersion    = coreapi.MarketClientVersion
 	exchangeAppVersion       = exchangeClientVersion + ".0"
 	exchangeActivityID       = "sign_in_3"
 	exchangeSourceID         = "1097"
@@ -176,6 +176,9 @@ func executeExchangeOnceContext(ctx context.Context, prizeID string, authCtx *ex
 	if session == nil {
 		session = newExchangeHTTPSessionContext(ctx, nil, authCtx)
 	}
+	if _, err := strconv.ParseUint(strings.TrimSpace(prizeID), 10, 64); err != nil {
+		return exchangeAttemptResult{message: "商品 prizeId 格式无效", stop: true}
+	}
 
 	offset, solveInfo, err := obtainExchangeSlideOffsetContext(ctx, session, authCtx)
 	if err != nil {
@@ -187,15 +190,13 @@ func executeExchangeOnceContext(ctx context.Context, prizeID string, authCtx *ex
 	}
 	// The solver returns the original image coordinate. Altering it afterward
 	// makes a correct match fail the upstream challenge.
-	exchangeURL := buildExchangeURLWithPuzzle(prizeID, offset)
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, exchangeURL, nil)
+	req, err := buildExchangeV3Request(ctx, prizeID, offset, session.deviceID)
 	if err != nil {
 		return exchangeAttemptResult{success: false, message: fmt.Sprintf("创建请求失败：%v", err), execTime: int(time.Since(startTime).Milliseconds()), stop: true}
 	}
 	req.Host = "m.mcloud.139.com"
-	for key, value := range buildExchangeHeaders(authCtx, session, nil) {
-		req.Header[key] = []string{value}
+	for key, value := range buildExchangeHeaders(authCtx, session, map[string]string{"isDeviceId": "true", "Origin": "https://m.mcloud.139.com"}) {
+		req.Header.Set(key, value)
 	}
 
 	resp, err := session.client.Do(req)
@@ -221,7 +222,9 @@ func executeExchangeOnceContext(ctx context.Context, prizeID string, authCtx *ex
 	}
 
 	var response map[string]interface{}
-	if err := json.Unmarshal([]byte(body), &response); err != nil {
+	decoder := json.NewDecoder(strings.NewReader(body))
+	decoder.UseNumber()
+	if err := decoder.Decode(&response); err != nil {
 		return exchangeAttemptResult{success: false, message: fmt.Sprintf("解析响应失败：%v | http_status=%d | body=%s", err, statusCode, summarizeExchangeBody(body)), execTime: execTime}
 	}
 
@@ -246,6 +249,13 @@ func executeExchangeOnceContext(ctx context.Context, prizeID string, authCtx *ex
 		return exchangeAttemptResult{success: false, message: message, execTime: execTime, stop: isExchangeTerminalMessage(message)}
 	}
 
+	if firstResponseValue(response, "code") == "" || firstNestedResponseValue(response, []string{"result"}, "oid", "oId") == "" {
+		return exchangeAttemptResult{message: "响应格式错误：兑换结果待确认，成功回包缺少业务码或奖品记录，请先查询领奖专区", execTime: execTime, stop: true}
+	}
+	if returnedID := firstNestedResponseValue(response, []string{"result"}, "prizeId"); returnedID != "" && returnedID != strings.TrimSpace(prizeID) {
+		return exchangeAttemptResult{message: "响应格式错误：兑换结果待确认，回包商品与请求不一致，请先查询领奖专区", execTime: execTime, stop: true}
+	}
+
 	prizeName := firstNestedResponseValue(response, []string{"result"}, "prizeName", "name")
 	if solveInfo != "" {
 		solveInfo = "，" + solveInfo
@@ -256,18 +266,25 @@ func executeExchangeOnceContext(ctx context.Context, prizeID string, authCtx *ex
 	return exchangeAttemptResult{success: true, message: "兑换成功" + solveInfo, execTime: execTime, stop: true}
 }
 
-func buildExchangeURLWithPuzzle(prizeID string, puzzleOffset int) string {
-	values := url.Values{}
-	values.Set("prizeId", prizeID)
-	values.Set("client", "app")
-	values.Set("clientVersion", exchangeClientVersion)
-	values.Set("puzzleOffset", strconv.Itoa(puzzleOffset))
-	values.Set("smsCode", "")
-	return "https://m.mcloud.139.com/ycloud/signin/page/exchangeV2?" + values.Encode()
+func buildExchangeV3Request(ctx context.Context, prizeID string, puzzleOffset int, deviceID string) (*http.Request, error) {
+	if strings.TrimSpace(deviceID) == "" {
+		return nil, fmt.Errorf("设备标识为空")
+	}
+	body, err := json.Marshal(map[string]interface{}{
+		"prizeId": json.Number(strings.TrimSpace(prizeID)), "client": "app",
+		"clientVersion": exchangeClientVersion, "puzzleOffset": puzzleOffset,
+		"smsCode": "", "deviceId": deviceID,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return http.NewRequestWithContext(ctx, http.MethodPost,
+		"https://m.mcloud.139.com/ycloud/signin/page/exchangeV3", strings.NewReader(string(body)))
 }
 
 func isExchangeTerminalMessage(message string) bool {
 	terminalPatterns := []string{
+		"兑换结果待确认",
 		"已兑完",
 		"已耗尽",
 		"奖品单日已耗尽",

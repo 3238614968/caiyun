@@ -36,7 +36,12 @@ func (api *CaiyunAPI) SignIn() (*SignInResponse, error) {
 // GetCloudInfo 获取签到信息
 func (api *CaiyunAPI) GetCloudInfo() (*CloudInfoResponse, error) {
 	api.prepareSignInCenterSession(false)
+	return api.getCloudInfoPrepared()
+}
 
+// getCloudInfoPrepared reuses the account's prepared session while confirming
+// each claim; it must not reopen the portal between the V3 POST and its check.
+func (api *CaiyunAPI) getCloudInfoPrepared() (*CloudInfoResponse, error) {
 	resp, err := api.client.Get(
 		fmt.Sprintf("%s/signin/page/infoV3?client=app", MobileMarketURL),
 		api.buildReceiveHeaders(""),

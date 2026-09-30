@@ -104,7 +104,7 @@ func (s *TaskService) executeTaskCodesForAccount(ctx context.Context, account *m
 	gainAssigned := false
 	hasExplicitGain := false
 	for _, result := range results {
-		if result.Status == "success" && result.CloudGained > 0 {
+		if result.CloudGained > 0 {
 			hasExplicitGain = true
 			break
 		}

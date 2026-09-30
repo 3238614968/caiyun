@@ -13,9 +13,9 @@ const (
 	Market7071URL        = "https://caiyun.feixin.10086.cn:7071/market"
 	MobileMarketURL      = "https://m.mcloud.139.com/ycloud"
 	AIYunURL             = "https://ai.yun.139.com"
-	MarketClientVersion  = "12.5.4"
+	MarketClientVersion  = "13.2.2"
 	MarketSourceID       = "1097"
-	MarketUserAgent      = "Mozilla/5.0 (Linux; Android 10; MI 8 Build/QKQ1.190828.002; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/143.0.7499.146 Mobile Safari/537.36 MCloudApp/12.5.4 AppLanguage/zh-CN"
+	MarketUserAgent      = "Mozilla/5.0 (Linux; Android 13; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/108.0.5359.128 Mobile Safari/537.36 MCloudApp/13.2.2 AppLanguage/zh-CN"
 	ShareUserAgent       = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36"
 	AICameraSampleBase64 = "data:image/jpg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/2wCEAAkGBxAQEBUQEBAVFRUVFRUVFRUVFRUVFRUVFRUWFhUVFRUYHSggGBolHRUVITEhJSkrLi4uFx8zODMsNygtLisBCgoKDg0OGhAQGi0lHyUtLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLf/AABEIAAEAAQMBIgACEQEDEQH/xAAXAAEBAQEAAAAAAAAAAAAAAAAAAQID/8QAFhEBAQEAAAAAAAAAAAAAAAAAABEh/9oADAMBAAIQAxAAAAHhAH//xAAZEAEBAQEBAQAAAAAAAAAAAAABEQIhMUH/2gAIAQEAAT8A2M4Kxqf/xAAWEQEBAQAAAAAAAAAAAAAAAAAAESH/2gAIAQIBAT8Ap//EABYRAQEBAAAAAAAAAAAAAAAAAAABEf/aAAgBAwEBPwCf/9k="
 )
@@ -67,8 +67,17 @@ type SignInResult struct {
 }
 
 type CloudReceiveItem struct {
-	CloudNum  int `json:"cloudNum"`
-	CloudType int `json:"cloudType"`
+	CloudNum  int   `json:"cloudNum"`
+	CloudType int   `json:"cloudType"`
+	RecordID  int64 `json:"recordId"`
+	CloudID   int64 `json:"cloudId"`
+}
+
+func (item CloudReceiveItem) RewardID() int64 {
+	if item.RecordID > 0 {
+		return item.RecordID
+	}
+	return item.CloudID
 }
 
 func (r SignInResult) TodaySigned() bool {

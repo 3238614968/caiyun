@@ -59,6 +59,13 @@ func (r *TaskRunner) runReceiveTask() *TaskResult {
 		TaskType:      "receive",
 		ExecutionTime: int(duration),
 	}
+	if resp != nil {
+		if payload, ok := resp.Result.(map[string]interface{}); ok {
+			if received, ok := payload["receivedCloud"].(int); ok {
+				result.CloudGained = received
+			}
+		}
+	}
 
 	if err != nil {
 		result.Status = "failed"
@@ -72,16 +79,10 @@ func (r *TaskRunner) runReceiveTask() *TaskResult {
 		}
 	} else {
 		result.Status = "success"
-		messageParts := []string{"领取云朵执行成功"}
-		if payload, ok := resp.Result.(map[string]interface{}); ok {
-			if total, ok := payload["total"]; ok {
-				messageParts = append(messageParts, fmt.Sprintf("当前云朵%v", total))
-			}
-			if pendingPrizeCount, ok := payload["pendingPrizeCount"]; ok {
-				messageParts = append(messageParts, fmt.Sprintf("待领奖品%v项", pendingPrizeCount))
-			}
-		}
-		result.Message = strings.Join(messageParts, "，")
+		result.Message = resp.MessageText()
+	}
+	if result.Status == "failed" && result.CloudGained > 0 {
+		result.Message += fmt.Sprintf("；已确认部分到账%d云朵", result.CloudGained)
 	}
 
 	return result
@@ -143,5 +144,8 @@ func (r *TaskRunner) runTaskListTask() *TaskResult {
 		SetStorage(r.storage).
 		SetAccountContext(r.account.Phone, r.getRawAccountToken())
 	err := task.Run()
-	return taskResultFromErr("tasklist", startTime, err, "任务列表巡检已执行，逐项完成状态以服务端为准")
+	result := taskResultFromErr("tasklist", startTime, err, "任务列表巡检已执行，逐项完成状态以服务端为准")
+	result.CloudGained = task.ClaimedCloud()
+	result.Message += fmt.Sprintf("；已确认领取%d云朵", result.CloudGained)
+	return result
 }

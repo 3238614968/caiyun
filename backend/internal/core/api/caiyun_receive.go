@@ -78,62 +78,12 @@ func (api *CaiyunAPI) GetReceiveSummary() (*CaiyunResponse, error) {
 
 // ReceivePendingCloudRewards 领取待领取云朵
 func (api *CaiyunAPI) ReceivePendingCloudRewards() (*CaiyunResponse, error) {
-	api.prepareSignInCenterSession(true)
-
-	resp, err := api.client.Get(
-		fmt.Sprintf("%s/signin/page/receiveV2?client=app", MobileMarketURL),
-		api.buildReceiveHeaders(""),
-	)
-	if err != nil {
-		return nil, err
-	}
-
-	body, err := api.client.ReadResponseBody(resp)
-	if err != nil {
-		return nil, err
-	}
-
-	var result CaiyunResponse
-	if err := json.Unmarshal([]byte(body), &result); err != nil {
-		return nil, err
-	}
-	return &result, nil
+	return api.receivePendingCloudRewardsV3()
 }
 
 // Receive 领取云朵
 func (api *CaiyunAPI) Receive() (*CaiyunResponse, error) {
-	claimResp, err := api.ReceivePendingCloudRewards()
-	if err != nil {
-		return nil, err
-	}
-	if claimResp == nil {
-		return nil, fmt.Errorf("receive pending rewards failed: empty response")
-	}
-	if !claimResp.IsSuccess() {
-		return claimResp, nil
-	}
-
-	summaryResp, err := api.GetReceiveSummary()
-	if err != nil {
-		return nil, err
-	}
-	if summaryResp == nil {
-		return nil, fmt.Errorf("get receive summary failed: empty response")
-	}
-	if !summaryResp.IsSuccess() {
-		return summaryResp, nil
-	}
-
-	if payload, ok := summaryResp.Result.(map[string]interface{}); ok {
-		payload["receiveMessage"] = claimResp.MessageText()
-	}
-	if msg := summaryResp.MessageText(); msg != "" {
-		summaryResp.Msg = msg
-		if claimMsg := claimResp.MessageText(); claimMsg != "" && !strings.EqualFold(claimMsg, "success") {
-			summaryResp.Msg = fmt.Sprintf("%s，%s", claimMsg, msg)
-		}
-	}
-	return summaryResp, nil
+	return api.ReceivePendingCloudRewards()
 }
 
 // GetTaskExpansion 获取备份翻倍奖励信息

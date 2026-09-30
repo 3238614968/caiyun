@@ -1,9 +1,10 @@
 package services
 
 import (
+	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
-	"net/url"
 	"strings"
 	"testing"
 
@@ -63,30 +64,20 @@ func TestSummarizeExchangeBodyCompactsWhitespaceAndTruncates(t *testing.T) {
 	}
 }
 
-func TestBuildExchangeURLWithPuzzleUsesNewYCloudEndpoint(t *testing.T) {
-	rawURL := buildExchangeURLWithPuzzle("12345", 327)
-	parsed, err := url.Parse(rawURL)
+func TestBuildExchangeV3RequestMatchesCapturedContract(t *testing.T) {
+	req, err := buildExchangeV3Request(context.Background(), "12345", 327, "fixture-device")
 	if err != nil {
-		t.Fatalf("parse exchange url: %v", err)
+		t.Fatal(err)
 	}
-
-	if parsed.Scheme != "https" || parsed.Host != "m.mcloud.139.com" || parsed.Path != "/ycloud/signin/page/exchangeV2" {
-		t.Fatalf("unexpected exchange URL: %s", rawURL)
+	if req.Method != "POST" || req.URL.Host != "m.mcloud.139.com" || req.URL.Path != "/ycloud/signin/page/exchangeV3" || req.URL.RawQuery != "" {
+		t.Fatalf("unexpected exchange request: %s %s", req.Method, req.URL)
 	}
-
-	query := parsed.Query()
-	assertQuery := func(key, want string) {
-		t.Helper()
-		if got := query.Get(key); got != want {
-			t.Fatalf("query[%s] = %q, want %q", key, got, want)
-		}
+	var body map[string]interface{}
+	if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+		t.Fatal(err)
 	}
-	assertQuery("prizeId", "12345")
-	assertQuery("client", "app")
-	assertQuery("clientVersion", exchangeClientVersion)
-	assertQuery("puzzleOffset", "327")
-	if _, ok := query["smsCode"]; !ok {
-		t.Fatal("expected smsCode query key to be present")
+	if body["prizeId"] != float64(12345) || body["client"] != "app" || body["puzzleOffset"] != float64(327) || body["clientVersion"] != "13.2.2" || body["smsCode"] != "" || body["deviceId"] != "fixture-device" {
+		t.Fatalf("unexpected exchange body: %+v", body)
 	}
 }
 

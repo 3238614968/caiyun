@@ -58,9 +58,10 @@ func (api *CaiyunAPI) buildMarketHeaders(extraHeaders map[string]string, referer
 
 func (api *CaiyunAPI) buildReceiveHeaders(sourceID string) map[string]string {
 	headers := api.buildMarketHeaders(map[string]string{
-		"showLoading": "true",
-		"appVersion":  MarketClientVersion + ".0",
-		"activityId":  "sign_in_3",
+		"showLoading":   "true",
+		"appVersion":    MarketClientVersion + ".0",
+		"activityId":    "sign_in_3",
+		"Cache-Control": "no-cache",
 	}, api.buildMarketPageURL(sourceID))
 	if deviceID := strings.TrimSpace(api.client.GetDeviceID()); deviceID != "" {
 		headers["deviceId"] = deviceID

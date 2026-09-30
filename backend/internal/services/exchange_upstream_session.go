@@ -4,6 +4,7 @@
 package services
 
 import (
+	coreapi "caiyun/internal/core/api"
 	"caiyun/internal/core/shumei"
 	"caiyun/internal/models"
 	"context"
@@ -39,7 +40,7 @@ func newExchangeHTTPSessionContext(ctx context.Context, account *models.Exchange
 		Jar:     jar,
 	}
 
-	userAgent := shumei.RandomMarketUserAgent()
+	userAgent := coreapi.MarketUserAgent
 	deviceID := exchangeFallbackDeviceID
 	deviceCtx, cancel := context.WithTimeout(ctx, 12*time.Second)
 	if fetchedDeviceID, err := shumei.FetchDeviceID(deviceCtx, client, ""); err == nil && strings.TrimSpace(fetchedDeviceID) != "" {
@@ -118,7 +119,7 @@ func sanitizeExchangeCookieName(value string) string {
 
 func buildExchangeHeaders(authCtx *exchangeAuthContext, session *exchangeHTTPSession, extra map[string]string) map[string]string {
 	deviceID := exchangeFallbackDeviceID
-	userAgent := shumei.RandomMarketUserAgent()
+	userAgent := coreapi.MarketUserAgent
 	referer := buildExchangeReferer(authCtx)
 	if session != nil {
 		if session.deviceID != "" {

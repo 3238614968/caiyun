@@ -43,14 +43,17 @@ var taskListReminderSkipTaskIDs = map[int]bool{
 
 // TaskListTask 任务列表任务（含翻倍奖励和常规任务自动执行）
 type TaskListTask struct {
-	client    *http.Client
-	logger    *logger.Logger
-	api       *api.CaiyunAPI
-	fileAPI   *api.FileAPI
-	storage   Storage
-	phone     string
-	authToken string
+	client       *http.Client
+	logger       *logger.Logger
+	api          *api.CaiyunAPI
+	fileAPI      *api.FileAPI
+	storage      Storage
+	phone        string
+	authToken    string
+	claimedCloud int
 }
+
+func (t *TaskListTask) ClaimedCloud() int { return t.claimedCloud }
 
 type taskListItem struct {
 	MarketName string
@@ -86,6 +89,7 @@ func (t *TaskListTask) SetAccountContext(phone, authToken string) *TaskListTask 
 // Run 执行任务列表任务
 func (t *TaskListTask) Run() error {
 	t.logger.Start("------【任务列表】------")
+	t.claimedCloud = 0
 
 	// 1. 先尝试领取已完成未领取的任务奖励
 	_ = t.receiveCompletedTaskRewards()
@@ -296,8 +300,9 @@ func (t *TaskListTask) receiveCompletedTaskRewards() error {
 	var claimErrors []error
 	for _, item := range items {
 		task := item.Task
-		if (task.State != "" && !taskHasClaimableReward(task)) ||
-			(task.State == "" && task.Status != 1) {
+		// V3 task IDs are not cloud reward IDs. Completed V3 tasks use the
+		// receiveList bubbles below, including those without canReceive flags.
+		if task.State != "" || task.Status != 1 {
 			continue
 		}
 
@@ -309,6 +314,16 @@ func (t *TaskListTask) receiveCompletedTaskRewards() error {
 
 		t.logger.Success(fmt.Sprintf("领取任务奖励成功：%s(%d)", task.Name, task.ID))
 		time.Sleep(300 * time.Millisecond)
+	}
+	response, claimErr := t.api.ReceivePendingCloudRewards()
+	if response != nil {
+		if payload, ok := response.Result.(map[string]interface{}); ok {
+			t.claimedCloud += responseNumber(payload["receivedCloud"])
+		}
+		t.logger.Info(response.MessageText())
+	}
+	if claimErr != nil {
+		claimErrors = append(claimErrors, claimErr)
 	}
 	return errors.Join(claimErrors...)
 }

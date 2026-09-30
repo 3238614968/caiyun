@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"crypto/tls"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -37,9 +38,16 @@ func newMockExchangeTLSServer(t *testing.T, exchangeStatus int, exchangeBody str
 			w.Header().Set("Content-Type", "application/json")
 			w.Header().Set("x-yun-tid", "fixture-challenge")
 			_, _ = io.WriteString(w, `{"code":0,"msg":"ok","result":{"puzzle":"cHV6emxl","picture":"cGljdHVyZQ==","picWidth":680,"picHeight":400,"puzzleWidth":96}}`)
-		case "/ycloud/signin/page/exchangeV2":
-			if r.URL.Query().Get("puzzleOffset") != "18" {
-				t.Errorf("recognized offset was changed: %s", r.URL.RawQuery)
+		case "/ycloud/signin/page/exchangeV3":
+			if r.Method != http.MethodPost || r.URL.RawQuery != "" || r.Header.Get("isDeviceId") != "true" {
+				t.Error("exchange must use the captured V3 POST contract")
+			}
+			var payload map[string]interface{}
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				t.Fatal(err)
+			}
+			if payload["puzzleOffset"] != float64(18) || payload["deviceId"] != "mock-device-id" || payload["prizeId"] != float64(12345) || payload["clientVersion"] != "13.2.2" {
+				t.Errorf("unexpected V3 payload: %+v", payload)
 			}
 			if r.Header.Get("x-yun-tid") != "fixture-challenge" {
 				t.Error("exchange did not reuse the challenge trace")
@@ -76,7 +84,7 @@ func newMockExchangeSession(t *testing.T, server *httptest.Server) *exchangeHTTP
 }
 
 func TestObtainExchangeSlideOffsetWithMockServer(t *testing.T) {
-	server := newMockExchangeTLSServer(t, http.StatusOK, `{"msg":"success","result":{"prizeName":"测试商品"}}`)
+	server := newMockExchangeTLSServer(t, http.StatusOK, `{"code":0,"msg":"success","result":{"oid":"fixture-order","prizeId":12345,"prizeName":"测试商品"}}`)
 	defer server.Close()
 
 	t.Setenv("CAIYUN_SMS_API_BASE_URL", server.URL)
@@ -102,7 +110,7 @@ func TestPreparedRetryKeepsAccountSessionAndReportsGKDiagnostics(t *testing.T) {
 	session := newMockExchangeSession(t, server)
 	prepared := &exchangePreparedSession{auth: &exchangeAuthContext{jwtToken: "fixture-jwt"}, http: session}
 	for i := 0; i < 2; i++ {
-		ok, message, _ := performExchangePreparedContext(context.Background(), nil, "prize", nil, prepared)
+		ok, message, _ := performExchangePreparedContext(context.Background(), nil, "12345", nil, prepared)
 		if ok || !strings.Contains(message, "code=610") || !strings.Contains(message, "offset=18") {
 			t.Fatalf("GK outcome=%v %s", ok, message)
 		}
@@ -158,7 +166,7 @@ func TestExecuteExchangeOnceClassifiesMockedHTTPResponses(t *testing.T) {
 			t.Setenv("CAIYUN_SMS_API_BASE_URL", server.URL)
 			t.Setenv("CAIYUN_SMS_INSECURE_SKIP_VERIFY", "true")
 
-			result := executeExchangeOnce("prize-1", &exchangeAuthContext{jwtToken: "jwt-token"}, newMockExchangeSession(t, server))
+			result := executeExchangeOnce("12345", &exchangeAuthContext{jwtToken: "jwt-token"}, newMockExchangeSession(t, server))
 			if result.success {
 				t.Fatalf("executeExchangeOnce() success = true, want false, result=%+v", result)
 			}
@@ -176,13 +184,13 @@ func TestExecuteExchangeOnceClassifiesMockedHTTPResponses(t *testing.T) {
 }
 
 func TestExecuteExchangeOnceSuccessWithMockServer(t *testing.T) {
-	server := newMockExchangeTLSServer(t, http.StatusOK, `{"msg":"success","result":{"prizeName":"测试商品"}}`)
+	server := newMockExchangeTLSServer(t, http.StatusOK, `{"code":0,"msg":"success","result":{"oid":"fixture-order","prizeId":12345,"prizeName":"测试商品"}}`)
 	defer server.Close()
 
 	t.Setenv("CAIYUN_SMS_API_BASE_URL", server.URL)
 	t.Setenv("CAIYUN_SMS_INSECURE_SKIP_VERIFY", "true")
 
-	result := executeExchangeOnce("prize-1", &exchangeAuthContext{jwtToken: "jwt-token"}, newMockExchangeSession(t, server))
+	result := executeExchangeOnce("12345", &exchangeAuthContext{jwtToken: "jwt-token"}, newMockExchangeSession(t, server))
 	if !result.success {
 		t.Fatalf("executeExchangeOnce() success = false, result=%+v", result)
 	}
@@ -207,7 +215,7 @@ func TestExecuteExchangeOnceRejectsNestedBusinessFailure(t *testing.T) {
 		t.Setenv("CAIYUN_SMS_API_BASE_URL", server.URL)
 		t.Setenv("CAIYUN_SMS_INSECURE_SKIP_VERIFY", "true")
 
-		result := executeExchangeOnce("prize-1", &exchangeAuthContext{jwtToken: "jwt-token"}, newMockExchangeSession(t, server))
+		result := executeExchangeOnce("12345", &exchangeAuthContext{jwtToken: "jwt-token"}, newMockExchangeSession(t, server))
 		server.Close()
 		if result.success {
 			t.Fatalf("executeExchangeOnce() success = true, want false, result=%+v", result)
@@ -239,7 +247,7 @@ func TestExecuteExchangeOncePropagatesSlideErrors(t *testing.T) {
 	t.Setenv("CAIYUN_SMS_API_BASE_URL", server.URL)
 	t.Setenv("CAIYUN_SMS_INSECURE_SKIP_VERIFY", "true")
 
-	result := executeExchangeOnce("prize-1", &exchangeAuthContext{jwtToken: "jwt-token"}, newMockExchangeSession(t, server))
+	result := executeExchangeOnce("12345", &exchangeAuthContext{jwtToken: "jwt-token"}, newMockExchangeSession(t, server))
 	if result.success {
 		t.Fatalf("executeExchangeOnce() success = true, want false, result=%+v", result)
 	}
@@ -248,6 +256,23 @@ func TestExecuteExchangeOncePropagatesSlideErrors(t *testing.T) {
 	}
 	if got := exchangeFailureReasonLabel(result.message); got != "other" {
 		t.Fatalf("exchangeFailureReasonLabel(%q) = %q, want %q", result.message, got, "other")
+	}
+}
+
+func TestExchangeV3AmbiguousSuccessStopsWithoutClaimingCompletion(t *testing.T) {
+	for _, body := range []string{
+		`{"code":0,"msg":"success","result":{}}`,
+		`{"msg":"success","result":{"oid":"fixture-order"}}`,
+		`{"code":0,"msg":"success","result":{"oid":"fixture-order","prizeId":999}}`,
+	} {
+		server := newMockExchangeTLSServer(t, http.StatusOK, body)
+		t.Setenv("CAIYUN_SMS_API_BASE_URL", server.URL)
+		t.Setenv("CAIYUN_SMS_INSECURE_SKIP_VERIFY", "true")
+		result := executeExchangeOnce("12345", &exchangeAuthContext{jwtToken: "fixture-jwt"}, newMockExchangeSession(t, server))
+		server.Close()
+		if result.success || !result.stop || !strings.Contains(result.message, "兑换结果待确认") || !isExchangeTerminalMessage(result.message) {
+			t.Fatalf("ambiguous success would be retried or counted: %+v", result)
+		}
 	}
 }
 
