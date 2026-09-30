@@ -259,8 +259,8 @@ func (s *TaskService) HasExecutedToday(accountID uint) bool {
 	return s.HasExecutedTodayForTaskTypes(accountID, s.DailyTaskTypes())
 }
 
-// HasExecutedTodayForTaskTypes 检查账号今日是否已执行过指定日常任务类型。
-// 只统计当前日常任务注册表中的任务类型，避免兑换、健康检查等系统日志误判为“今日已执行”。
+// HasExecutedTodayForTaskTypes requires all configured daily task types to have
+// succeeded today. A failed/pending task must not block retrying the batch.
 func (s *TaskService) HasExecutedTodayForTaskTypes(accountID uint, taskTypes []string) bool {
 	executed, _ := s.HasExecutedTodayForTaskTypesContext(context.Background(), accountID, taskTypes)
 	return executed
@@ -277,9 +277,21 @@ func (s *TaskService) HasExecutedTodayForTaskTypesContext(ctx context.Context, a
 	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, cstZone)
 	tomorrow := today.Add(24 * time.Hour)
 
-	var count int64
-	if err := s.taskLogRepo.WithContext(ctx).CountByAccountIDTaskTypesAndDateRangeWithError(accountID, taskTypes, today, tomorrow, &count); err != nil {
+	done, err := s.taskLogRepo.WithContext(ctx).SuccessfulTaskTypesInRange(accountID, taskTypes, today, tomorrow)
+	if err != nil {
 		return false, err
 	}
-	return count > 0, nil
+	completed := make(map[string]bool)
+	for _, code := range done {
+		completed[code] = true
+	}
+	if len(taskTypes) == 0 {
+		return false, nil
+	}
+	for _, code := range taskTypes {
+		if !completed[code] {
+			return false, nil
+		}
+	}
+	return true, nil
 }

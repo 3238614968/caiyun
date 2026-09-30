@@ -125,6 +125,24 @@ func (s *ExchangeScheduler) preheatAccountsForTasks(slot string, tasks []*models
 				resultMu.Unlock()
 				return
 			}
+			authCtx := &exchangeAuthContext{jwtToken: tokenInfo.JWTToken, ssoToken: tokenInfo.SSOToken}
+			// Device profiling and HTTP/cookie initialization happen before :00,
+			// leaving the live captcha and submission on the critical path.
+			limiter <- struct{}{}
+			warmHTTP := newExchangeHTTPSessionContext(s.executionContext(), &exchangeAccount, authCtx)
+			warmExchangePortal(s.executionContext(), warmHTTP, authCtx)
+			<-limiter
+			sourceAuth := tokenInfo.Auth
+			if sourceAuth == "" {
+				sourceAuth = exchangeAccount.Auth
+			}
+			prepared := &exchangePreparedSession{auth: authCtx, http: warmHTTP, sourceAuth: sourceAuth}
+			for _, task := range tasks {
+				if task != nil && task.ExchangeAccount.AccountID == accountID {
+					s.storeWarmSession(task.ID, accountID, cloneExchangeWarmSession(prepared))
+				}
+			}
+			elapsed = time.Since(start).Milliseconds()
 
 			log.Printf(
 				"【抢兑调度器】%s JWT 预热完成: 账号=%s, account=%d, 状态=%s, 过期时间=%s, 耗时=%dms",

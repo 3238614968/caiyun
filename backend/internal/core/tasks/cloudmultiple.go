@@ -14,6 +14,7 @@ type CloudMultipleTask struct {
 	logger      *logger.Logger
 	api         *api.CaiyunAPI
 	lastMessage string
+	pending     bool
 }
 
 func NewCloudMultipleTask(client *http.Client, log *logger.Logger) *CloudMultipleTask {
@@ -24,6 +25,7 @@ func NewCloudMultipleTask(client *http.Client, log *logger.Logger) *CloudMultipl
 }
 
 func (t *CloudMultipleTask) Run() error {
+	t.pending = false
 	resp, err := t.api.CloudMultiple()
 	if err != nil {
 		t.logger.Error("云朵翻倍失败", err)
@@ -57,6 +59,12 @@ func (t *CloudMultipleTask) Run() error {
 		t.logger.Success(msg)
 		return nil
 	}
+	if strings.Contains(msg, "未自动备份") || strings.Contains(msg, "未开启备份") {
+		t.pending = true
+		t.lastMessage = msg + "；待账号完成真实自动备份"
+		t.logger.Warn(t.lastMessage)
+		return nil
+	}
 
 	if msg == "" {
 		msg = fmt.Sprintf("code=%v", resp.Code)
@@ -70,6 +78,8 @@ func (t *CloudMultipleTask) Run() error {
 func (t *CloudMultipleTask) Message() string {
 	return strings.TrimSpace(t.lastMessage)
 }
+
+func (t *CloudMultipleTask) Pending() bool { return t.pending }
 
 func isCloudMultipleAlreadyClaimed(message string) bool {
 	normalized := strings.ReplaceAll(strings.TrimSpace(message), " ", "")

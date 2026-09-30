@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"time"
 )
 
 // ExecuteTaskForAccount 为指定账号执行所有已配置批量任务。
@@ -57,6 +58,15 @@ func (s *TaskService) executeTaskCodesForAccount(ctx context.Context, account *m
 	}
 	if taskCodes != nil && len(taskCodes) == 0 {
 		return []TaskResult{}, nil
+	}
+	if len(taskCodes) > 1 {
+		today := nowCST()
+		start := time.Date(today.Year(), today.Month(), today.Day(), 0, 0, 0, 0, cstZone)
+		done, err := s.taskLogRepo.WithContext(ctx).SuccessfulTaskTypesInRange(account.ID, taskCodes, start, start.AddDate(0, 0, 1))
+		if err != nil {
+			return nil, fmt.Errorf("读取已完成任务失败: %w", err)
+		}
+		taskCodes = remainingBatchTaskCodes(taskCodes, done)
 	}
 	// TokenManager 是生产路径中唯一的刷新与停用决策者。
 	var managedSSOToken string
@@ -217,7 +227,7 @@ func (s *TaskService) executeTaskCodesForAccount(ctx context.Context, account *m
 	if err := ctx.Err(); err != nil {
 		return results, err
 	}
-	return results, nil
+	return results, taskBatchOutcome(results)
 }
 
 func applyManagedTokenInfo(account *models.Account, tokenInfo *TokenInfo) string {

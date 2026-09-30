@@ -456,7 +456,7 @@ func (rm *RetryManager) ExecuteWithRetry(
 				onProgress(0.5, fmt.Sprintf("第 %d 次执行失败: %v", attempt+1, err))
 			}
 
-			if attempt == rm.maxRetries {
+			if attempt == rm.maxRetries || isNonRetryableTaskError(err) {
 				// 最后一次尝试失败
 				rm.monitor.FailTask(accountID, taskType, err)
 				return err

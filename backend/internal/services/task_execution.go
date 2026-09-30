@@ -97,6 +97,7 @@ func (r *TaskRunner) RunSelectedContext(ctx context.Context, taskCodes []string)
 	if taskCodes == nil {
 		taskCodes = defaultTaskCatalog.DefaultBatchCodes()
 	}
+	taskCodes = orderTaskCompletionPhases(taskCodes)
 
 	results := make([]TaskResult, 0, len(taskCodes))
 	if len(taskCodes) == 0 {
@@ -174,6 +175,10 @@ func (r *TaskRunner) runTaskExpansionRewardTask() *TaskResult {
 	} else {
 		result.Status = "success"
 		result.Message = "备份翻倍奖励执行成功"
+		if task.Pending() {
+			result.Status = "pending"
+			result.Message = "本月尚未满足真实自动备份条件，待完成后领取翻倍奖励"
+		}
 	}
 	return result
 }
@@ -196,6 +201,9 @@ func (r *TaskRunner) runCloudMultipleTask() *TaskResult {
 
 	result.Status = "success"
 	result.Message = task.Message()
+	if task.Pending() {
+		result.Status = "pending"
+	}
 	if strings.TrimSpace(result.Message) == "" {
 		result.Message = "云朵翻倍执行成功"
 	}

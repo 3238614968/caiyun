@@ -43,14 +43,15 @@ var taskListReminderSkipTaskIDs = map[int]bool{
 
 // TaskListTask 任务列表任务（含翻倍奖励和常规任务自动执行）
 type TaskListTask struct {
-	client       *http.Client
-	logger       *logger.Logger
-	api          *api.CaiyunAPI
-	fileAPI      *api.FileAPI
-	storage      Storage
-	phone        string
-	authToken    string
-	claimedCloud int
+	client           *http.Client
+	logger           *logger.Logger
+	api              *api.CaiyunAPI
+	fileAPI          *api.FileAPI
+	storage          Storage
+	phone            string
+	authToken        string
+	claimedCloud     int
+	expansionPending bool
 }
 
 func (t *TaskListTask) ClaimedCloud() int { return t.claimedCloud }
@@ -127,6 +128,7 @@ func (t *TaskListTask) registerTaskDevice() {
 
 // receiveTaskExpansion 领取翻倍奖励（参考原版 taskExpansionTask，支持一次自动备份重试）
 func (t *TaskListTask) receiveTaskExpansion() {
+	t.expansionPending = false
 	retryCount := t.getEnvInt("CAIYUN_TASK_BACKUP_RETRY_COUNT", taskListDefaultBackupRetryCount)
 	if retryCount < 0 {
 		retryCount = 0
@@ -166,6 +168,7 @@ func (t *TaskListTask) receiveTaskExpansion() {
 			}
 
 			t.logger.Warn("本月未开启备份，将无法获取翻倍奖励，需要手动开启")
+			t.expansionPending = true
 			return
 		}
 

@@ -203,6 +203,10 @@ func (w *Worker) handleOperationFailure(message *queue.TaskMessage, operation *m
 // that cannot succeed on retry. Retrying them only creates duplicate outbox
 // deliveries and hides the actionable error from the operation record.
 func isTerminalOperationError(err error) bool {
+	var terminal interface{ Retryable() bool }
+	if errors.As(err, &terminal) && !terminal.Retryable() {
+		return true
+	}
 	return errors.Is(err, services.ErrExchangeTaskConflict) ||
 		errors.Is(err, services.ErrExchangeTaskAlreadyExists) ||
 		errors.Is(err, services.ErrExchangeMonthlyLimitReached) ||
@@ -249,20 +253,15 @@ func (w *Worker) executeOperation(operation *models.Operation) error {
 		if len(payload.AccountIDs) == 0 || len(payload.AccountIDs) > 1000 {
 			return errors.New("invalid account batch payload")
 		}
-		var failures []error
-		for _, accountID := range payload.AccountIDs {
+		return runAccountBatch(w.ctx, payload.AccountIDs, w.concurrency, func(accountID uint) error {
 			if err := w.ctx.Err(); err != nil {
 				return err
 			}
 			if err := w.requireAccountOwner(accountID, operation.UserID); err != nil {
-				failures = append(failures, err)
-				continue
+				return err
 			}
-			if err := w.ExecuteQueueAccountTask(accountID, "all_tasks"); err != nil {
-				failures = append(failures, fmt.Errorf("account %d: %w", accountID, err))
-			}
-		}
-		return errors.Join(failures...)
+			return w.ExecuteQueueAccountTask(accountID, "all_tasks")
+		})
 
 	case models.OperationTypeExchangeTask:
 		if w.exchangeService == nil {

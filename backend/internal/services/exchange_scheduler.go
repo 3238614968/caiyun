@@ -34,6 +34,7 @@ type ExchangeScheduler struct {
 
 	// 抢兑队列
 	preparedQueue []*models.ExchangeTask
+	warmSessions  map[uint]exchangeWarmSession
 	queueMutex    sync.RWMutex
 
 	// 每副本独立的调度去重状态：preparedSlots 记录本副本已预热入队的时间槽，
@@ -233,8 +234,9 @@ func (s *ExchangeScheduler) checkAndPrepareExchange() {
 		// 同步预热，把首个请求拖慢数秒。跨副本执行去重由 TryMarkRunning 保证。
 		if s.markPreparedOnce(now, hour, minute) {
 			log.Printf("【抢兑调度器】准备 %02d:%02d 抢兑队列...", hour, minute)
-			s.prepareQueueByTime(hour, minute)
 			s.schedulePreciseFire(now, hour, minute)
+			s.executionWG.Add(1)
+			go func() { defer s.executionWG.Done(); s.prepareQueueByTime(hour, minute) }()
 		}
 	}
 	if hour, minute, ok := scheduledExecuteSlot(now); ok {
@@ -405,6 +407,11 @@ func (s *ExchangeScheduler) prepareQueueByTime(hour, minute int) {
 		log.Printf("【抢兑调度器】%s 预热后没有可执行账号，本次不加入抢兑队列", slot)
 		return
 	}
+	slotStart := time.Date(targetDate.Year(), targetDate.Month(), targetDate.Day(), hour, minute, 0, 0, cstZone)
+	if !time.Now().Before(slotStart) {
+		log.Printf("【抢兑调度器】%s 预热超过触发时间，已完成的热会话供执行阶段使用", slot)
+		return
+	}
 
 	s.queueMutex.Lock()
 	// Merge into the shared in-memory queue.
@@ -445,7 +452,6 @@ func (s *ExchangeScheduler) executeExchangeByTime(hour, minute int) {
 	s.preparedQueue = remainingTasks
 	s.queueMutex.Unlock()
 
-	fromPreparedQueue := len(tasksToExecute) > 0
 	if len(tasksToExecute) == 0 {
 		var err error
 		var skipped []repository.ExchangeTaskScheduleSkip
@@ -467,14 +473,8 @@ func (s *ExchangeScheduler) executeExchangeByTime(hour, minute int) {
 		return
 	}
 
-	if !fromPreparedQueue {
-		readyAccounts := s.preheatAccountsForTasks(slot, tasksToExecute)
-		tasksToExecute = filterTasksByReadyAccounts(slot, tasksToExecute, readyAccounts)
-		if len(tasksToExecute) == 0 {
-			log.Printf("【抢兑调度器】%s 补查任务预热后没有可执行账号，跳过本次执行", slot)
-			return
-		}
-	}
+	// Do not hold the first wave behind synchronous preparation of every
+	// account. executeTask consumes available warm sessions independently.
 
 	if s.isStopped() {
 		return

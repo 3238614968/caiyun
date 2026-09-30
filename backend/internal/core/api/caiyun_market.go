@@ -71,25 +71,36 @@ func (api *CaiyunAPI) buildReceiveHeaders(sourceID string) map[string]string {
 
 func (api *CaiyunAPI) prepareSignInCenterSession(forReceive bool) {
 	api.ensureMarketDeviceID()
-
-	pageURL := api.buildMarketPageURL("")
-	if resp, err := api.client.Get(pageURL, api.buildMarketHeaders(nil, pageURL)); err == nil && resp != nil {
-		_, _ = api.client.ReadResponseBody(resp)
-	}
-
-	keywords := []string{
-		"newsignin_index_pv",
-		"newsignin_index_client",
-		"newsignin_index_app_client",
-		"newsignin_index_cookie_login",
-		"newsignin_index_cookie",
-		"newsignin_index_app_cookie_login",
-	}
-	for _, keyword := range keywords {
-		api.postSignInJournaling(keyword)
-	}
+	_ = api.client.PrepareSessionOnce("sign-in-center", func() error {
+		pageURL := api.buildMarketPageURL("")
+		resp, err := api.client.Get(pageURL, api.buildMarketHeaders(nil, pageURL))
+		if err != nil {
+			return err
+		}
+		if resp == nil {
+			return fmt.Errorf("活动入口响应为空")
+		}
+		if _, err = api.client.ReadResponseBody(resp); err != nil {
+			return err
+		}
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			return fmt.Errorf("活动入口 HTTP %d", resp.StatusCode)
+		}
+		keywords := []string{
+			"newsignin_index_pv",
+			"newsignin_index_client",
+			"newsignin_index_app_client",
+			"newsignin_index_cookie_login",
+			"newsignin_index_cookie",
+			"newsignin_index_app_cookie_login",
+		}
+		for _, keyword := range keywords {
+			api.postSignInJournaling(keyword)
+		}
+		return nil
+	})
 	if forReceive {
-		api.postSignInJournaling("newsignin_index_receive_type")
+		_ = api.client.PrepareSessionOnce("sign-in-receive", func() error { api.postSignInJournaling("newsignin_index_receive_type"); return nil })
 	}
 }
 

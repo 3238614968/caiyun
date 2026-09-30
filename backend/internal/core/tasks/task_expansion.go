@@ -31,3 +31,7 @@ func (t *TaskExpansionRewardTask) Run() error {
 	t.base.receiveTaskExpansion()
 	return nil
 }
+
+func (t *TaskExpansionRewardTask) Pending() bool {
+	return t != nil && t.base != nil && t.base.expansionPending
+}

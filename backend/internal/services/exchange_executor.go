@@ -32,8 +32,9 @@ type exchangeAuthContext struct {
 }
 
 type exchangePreparedSession struct {
-	auth *exchangeAuthContext
-	http *exchangeHTTPSession
+	auth       *exchangeAuthContext
+	http       *exchangeHTTPSession
+	sourceAuth string
 }
 
 type exchangeAttemptResult struct {

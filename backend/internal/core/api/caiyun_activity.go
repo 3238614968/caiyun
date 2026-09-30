@@ -81,10 +81,24 @@ func (api *CaiyunAPI) buildActivityHeaders(marketName, referer string, extraHead
 func (api *CaiyunAPI) PrepareActivitySession(marketName string) {
 	api.ensureMarketDeviceID()
 
-	pageURL := api.buildActivityPageURL(marketName, "")
-	if resp, err := api.client.Get(pageURL, api.buildActivityHeaders(marketName, pageURL, nil)); err == nil && resp != nil {
-		_, _ = api.client.ReadResponseBody(resp)
-	}
+	_ = api.client.PrepareSessionOnce("activity:"+marketName, func() error {
+		pageURL := api.buildActivityPageURL(marketName, "")
+		resp, err := api.client.Get(pageURL, api.buildActivityHeaders(marketName, pageURL, nil))
+		if err != nil {
+			return err
+		}
+		if resp == nil {
+			return fmt.Errorf("活动入口响应为空")
+		}
+		_, err = api.client.ReadResponseBody(resp)
+		if err != nil {
+			return err
+		}
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			return fmt.Errorf("活动入口 HTTP %d", resp.StatusCode)
+		}
+		return nil
+	})
 }
 
 // activityGetBody 请求活动 GET 接口并返回响应正文。

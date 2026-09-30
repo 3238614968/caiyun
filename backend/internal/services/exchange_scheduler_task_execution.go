@@ -97,7 +97,7 @@ func (s *ExchangeScheduler) executeTask(ctx context.Context, task *models.Exchan
 	}()
 
 	maxRetries := effectiveExchangeMaxRetries(task.MaxRetries)
-	preparedSession := &exchangePreparedSession{}
+	preparedSession := s.takeWarmSession(task.ID, account.AccountID, account.Auth)
 	success, message, execTime, task.RetryCount, err = runExchangeWithRetries(
 		ctx,
 		maxRetries,

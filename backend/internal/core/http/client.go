@@ -171,26 +171,28 @@ func WithIdempotencyKey(key string) RequestOption {
 
 // Client HTTP 客户端
 type Client struct {
-	client     *http.Client
-	maxRetries int
-	retryDelay time.Duration
-	userAgent  string
-	auth       string // Basic Auth
-	jwtToken   string
-	ssoToken   string
-	userDomain string
-	clientInfo string
-	deviceInfo string
-	deviceID   string
-	deviceMu   sync.RWMutex
-	deviceOnce sync.Once
-	deviceErr  error
-	deviceLive bool
-	account    string
-	netType    string
-	channelSrc string
-	cookieJar  *cookiejar.Jar
-	breaker    *circuitBreaker
+	client           *http.Client
+	maxRetries       int
+	retryDelay       time.Duration
+	userAgent        string
+	auth             string // Basic Auth
+	jwtToken         string
+	ssoToken         string
+	userDomain       string
+	clientInfo       string
+	deviceInfo       string
+	deviceID         string
+	deviceMu         sync.RWMutex
+	deviceOnce       sync.Once
+	deviceErr        error
+	deviceLive       bool
+	account          string
+	netType          string
+	channelSrc       string
+	cookieJar        *cookiejar.Jar
+	breaker          *circuitBreaker
+	sessionMu        sync.Mutex
+	preparedSessions map[string]time.Time
 }
 
 // NewClient 创建 HTTP 客户端

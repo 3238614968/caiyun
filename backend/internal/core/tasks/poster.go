@@ -16,6 +16,7 @@ import (
 type PosterTask struct {
 	*activityActions
 	lastMessage string
+	pending     bool
 }
 
 func NewPosterTask(client *http.Client, log *logger.Logger) *PosterTask {
@@ -35,6 +36,7 @@ func (t *PosterTask) SetAccountContext(phone, authToken string) *PosterTask {
 const posterMaxLotteries = 5
 
 func (t *PosterTask) Run() error {
+	t.pending = false
 	t.logger.Start("------【校园海报活动】------")
 	t.api.PrepareActivitySession(api.PosterMarketName)
 
@@ -53,6 +55,9 @@ func (t *PosterTask) Run() error {
 	manualNames := make(map[string]bool)
 	executed := 0
 	failedActions := 0
+	blocked := make(map[int]bool)
+	var actionIssues []string
+	acted := make(map[string]bool)
 	for round := 0; round < 3; round++ {
 		if round > 0 {
 			refreshed, err := t.api.NewYearTaskList(api.PosterMarketName)
@@ -67,16 +72,26 @@ func (t *PosterTask) Run() error {
 			if strings.EqualFold(task.State, activityStateFinish) {
 				continue
 			}
-			pending = true
+			if blocked[task.ID] {
+				continue
+			}
 			key := task.StepKey()
 			if key == "" {
 				key = "click"
 			}
+			stepIdentity := fmt.Sprintf("%d:%s", task.ID, key)
+			if acted[stepIdentity] {
+				continue
+			}
 			switch {
 			case task.ID == 33 || task.Flag == "makingPoster":
+				pending = true
+				acted[stepIdentity] = true
 				if err := t.api.CompletePosterTask(); err != nil {
 					failedActions++
-					t.logger.Debug(fmt.Sprintf("生成校园海报失败: %v", err))
+					blocked[task.ID] = true
+					actionIssues = append(actionIssues, fmt.Sprintf("海报任务%d: %v", task.ID, err))
+					t.logger.Warn(fmt.Sprintf("生成校园海报失败: %v", err))
 					continue
 				}
 				executed++
@@ -88,9 +103,13 @@ func (t *PosterTask) Run() error {
 					}
 				}
 			case task.ID == 34 || strings.Contains(task.Name, "AI相机"):
+				pending = true
+				acted[stepIdentity] = true
 				if err := t.completePosterCameraTask(task.ID, key); err != nil {
 					failedActions++
-					t.logger.Debug(fmt.Sprintf("AI相机体验任务失败: %v", err))
+					blocked[task.ID] = true
+					actionIssues = append(actionIssues, fmt.Sprintf("AI任务%d: %v", task.ID, err))
+					t.logger.Warn(fmt.Sprintf("AI相机体验任务失败: %v", err))
 				} else {
 					executed++
 				}
@@ -101,10 +120,11 @@ func (t *PosterTask) Run() error {
 		if !pending {
 			break
 		}
-		time.Sleep(2 * time.Second)
+		if round < 2 {
+			time.Sleep(350 * time.Millisecond)
+		}
 	}
 
-	time.Sleep(2 * time.Second)
 	chances, err := t.api.NewYearLotteryCount(api.PosterMarketName)
 	if err != nil {
 		t.logger.Debug(fmt.Sprintf("查询校园海报抽奖次数失败: %v", err))
@@ -114,10 +134,15 @@ func (t *PosterTask) Run() error {
 	confirmed := 0
 	if latest, err := t.api.NewYearTaskList(api.PosterMarketName); err == nil {
 		for _, task := range latest {
+			if !strings.EqualFold(task.State, activityStateFinish) {
+				t.pending = true
+			}
 			if initialPending[task.ID] && strings.EqualFold(task.State, activityStateFinish) {
 				confirmed++
 			}
 		}
+	} else {
+		return fmt.Errorf("校园海报状态确认失败: %w", err)
 	}
 	parts := make([]string, 0, 4)
 	if executed > 0 {
@@ -135,18 +160,23 @@ func (t *PosterTask) Run() error {
 		parts = append(parts, "待完成: "+strings.Join(names, "、"))
 	}
 	if failedActions > 0 {
-		parts = append(parts, fmt.Sprintf("%d次自动任务执行失败", failedActions))
+		parts = append(parts, fmt.Sprintf("%d次自动任务执行失败: %s", failedActions, strings.Join(actionIssues, "、")))
+	}
+	if t.pending {
+		parts = append(parts, "仍有任务待完成或待服务端确认")
 	}
 	if len(parts) == 0 {
 		parts = append(parts, "任务均已完成")
 	}
 	t.lastMessage = strings.Join(parts, "; ")
-	if failedActions > 0 && confirmed == 0 && len(prizes) == 0 {
+	if failedActions > 0 {
 		return fmt.Errorf("校园海报活动未完成: %s", t.lastMessage)
 	}
 	t.logger.Success("校园海报活动: " + t.lastMessage)
 	return nil
 }
+
+func (t *PosterTask) Pending() bool { return t.pending }
 
 func posterTaskFinished(items []api.ActivityTask, taskID int) bool {
 	for _, task := range items {

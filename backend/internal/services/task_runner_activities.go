@@ -115,5 +115,9 @@ func (r *TaskRunner) runPosterTask() *TaskResult {
 	task.SetStorage(r.storage)
 	task.SetAccountContext(phone, authToken)
 	err = task.Run()
-	return activityTaskResult("poster_activity", startTime, err, task.Message(), "校园海报活动执行成功")
+	result := activityTaskResult("poster_activity", startTime, err, task.Message(), "校园海报活动执行成功")
+	if err == nil && task.Pending() {
+		result.Status = "pending"
+	}
+	return result
 }

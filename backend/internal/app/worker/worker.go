@@ -31,6 +31,7 @@ type Worker struct {
 	notifier         notification.Notifier
 	metrics          *monitor.Metrics
 	concurrency      int
+	accountSlots     chan struct{}
 	wg               sync.WaitGroup
 	ctx              context.Context
 	cancel           context.CancelFunc
@@ -86,6 +87,7 @@ func NewWorkerContext(
 		notifier:       notifier,
 		metrics:        metricsCollector,
 		concurrency:    concurrency,
+		accountSlots:   make(chan struct{}, max(1, concurrency)),
 		ctx:            ctx,
 		cancel:         cancel,
 	}
@@ -170,6 +172,14 @@ func (w *Worker) ExecuteSingleAccount(accountID uint) error {
 
 // ExecuteQueueAccountTask 执行队列指定的账号任务，支持具体任务类型。
 func (w *Worker) ExecuteQueueAccountTask(accountID uint, taskType string) error {
+	if w.accountSlots != nil {
+		select {
+		case <-w.ctx.Done():
+			return w.ctx.Err()
+		case w.accountSlots <- struct{}{}:
+		}
+		defer func() { <-w.accountSlots }()
+	}
 	taskType = strings.TrimSpace(taskType)
 	if taskType == "" {
 		taskType = "all_tasks"
