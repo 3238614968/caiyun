@@ -89,31 +89,24 @@ func (s *AdminService) DeleteAccount(accountID uint) error {
 	return s.DeleteAccountContext(context.Background(), accountID)
 }
 
-// DeleteAccountContext atomically removes all data derived from a cloud
-// account and overwrites credentials before physically deleting the account.
+// DeleteAccountContext removes active access and credentials, preserving the
+// account identity, logs, statistics and exchange history for restoration.
 func (s *AdminService) DeleteAccountContext(ctx context.Context, accountID uint) error {
 	if s.unitOfWork == nil {
 		return errors.New("unit of work is not configured")
 	}
-	return s.unitOfWork.WithinTransaction(ctx, func(repos repository.TransactionRepositories) error {
-		if _, err := repos.Account.FindByID(accountID); err != nil {
+	err := s.unitOfWork.WithinTransaction(ctx, func(repos repository.TransactionRepositories) error {
+		if _, err := repos.Account.FindMetadataByID(accountID); err != nil {
 			return ErrAccountNotFound
 		}
 
-		cleanup := []func(uint) error{
-			repos.Operation.DeleteByAccountID,
-			repos.ExchangeRecord.DeleteByAccountID,
-			repos.ExchangeTask.DeleteByAccountID,
-			repos.ExchangeAccount.DeleteByAccountID,
-			repos.TaskLog.DeleteByAccountID,
-			repos.CloudStats.DeleteByAccountID,
-			repos.Account.AnonymizeAndDeleteByID,
+		if err := repos.ExchangeAccount.ReplaceLoginByAccountID(accountID, "", "", ""); err != nil {
+			return err
 		}
-		for _, erase := range cleanup {
-			if err := erase(accountID); err != nil {
-				return err
-			}
-		}
-		return nil
+		return repos.Account.Delete(accountID)
 	})
+	if err == nil && s.tokenCache != nil {
+		s.tokenCache.ClearToken(accountID)
+	}
+	return err
 }

@@ -202,7 +202,7 @@ func TestAdminDeleteUserContextRollsBackAllCleanup(t *testing.T) {
 	}
 }
 
-func TestAdminDeleteAccountContextCascadesAndRollsBack(t *testing.T) {
+func TestAdminDeleteAccountContextPreservesHistoryAndRollsBack(t *testing.T) {
 	t.Run("commit", func(t *testing.T) {
 		f := newAdminCleanupFixture(t)
 		if err := f.service.DeleteAccountContext(t.Context(), f.account.ID); err != nil {
@@ -221,7 +221,14 @@ func TestAdminDeleteAccountContextCascadesAndRollsBack(t *testing.T) {
 			{&models.CloudStats{}, "account_id = ?", []interface{}{f.account.ID}},
 			{&models.Account{}, "id = ?", []interface{}{f.account.ID}},
 		} {
-			assertRowCount(t, f.db, check.model, check.query, check.args, 0)
+			assertRowCount(t, f.db, check.model, check.query, check.args, 1)
+		}
+		var removed models.Account
+		if err := f.db.Unscoped().First(&removed, f.account.ID).Error; err != nil {
+			t.Fatal(err)
+		}
+		if !removed.DeletedAt.Valid || removed.IsActive || removed.Auth != "" || removed.Token != "" || removed.JWTToken != "" {
+			t.Fatalf("removed account retained active access: %+v", removed)
 		}
 		assertRowCount(t, f.db, &models.User{}, "id = ?", []interface{}{f.user.ID}, 1)
 		assertRowCount(t, f.db, &models.RefreshSession{}, "id = ?", []interface{}{f.session.ID}, 1)

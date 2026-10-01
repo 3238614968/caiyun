@@ -122,7 +122,7 @@ func (api *CaiyunAPI) Login139Mail(phone, authorization string) (*Mail139Session
 			RMKey string `json:"rmkey"`
 		} `json:"var"`
 	}
-	if err := json.Unmarshal([]byte(loginBody), &result); err != nil {
+	if err := decode139MailResponse(loginBody, &result); err != nil {
 		return nil, fmt.Errorf("解析 139 邮箱登录响应失败: %w", err)
 	}
 	if result.Code != "S_OK" || result.Var.SID == "" || result.Var.RMKey == "" {
@@ -162,8 +162,12 @@ func mail139URL(path string, session *Mail139Session, operation string) (string,
 	if err != nil {
 		return "", err
 	}
+	from := "5"
+	if strings.HasPrefix(operation, "disk:") {
+		from = "54"
+	}
 	return mail139BaseURL + path + "?func=" + operation + "&sid=" + url.QueryEscape(session.SID) +
-		"&comefrom=5&cguid=" + guid, nil
+		"&comefrom=" + from + "&cguid=" + guid, nil
 }
 
 // Send139Mail sends one real message. It does not retry an ambiguous transport
@@ -195,8 +199,11 @@ func (api *CaiyunAPI) Send139Mail(session *Mail139Session, senderPhone, recipien
 			TID string `json:"tid"`
 		} `json:"var"`
 	}
-	if err := json.Unmarshal([]byte(body), &result); err != nil {
+	if err := decode139MailResponse(body, &result); err != nil {
 		return fmt.Errorf("解析发信响应失败，投递状态不确定: %w", err)
+	}
+	if result.Code == "" {
+		return fmt.Errorf("发信响应缺少结果码，投递状态不确定")
 	}
 	if result.Code != "S_OK" {
 		return fmt.Errorf("%w: code=%s", ErrMail139Rejected, result.Code)
@@ -210,7 +217,7 @@ func (api *CaiyunAPI) Send139Mail(session *Mail139Session, senderPhone, recipien
 // Report139MailTask mirrors the mailbox's activity callback. Its failure does
 // not mean the email failed to send.
 func (api *CaiyunAPI) Report139MailTask(session *Mail139Session) error {
-	endpoint, err := mail139URL("/mw2/disk/disk", session, "disk:mailReportToMQ")
+	endpoint, err := mail139URL("/mw2/file/disk", session, "disk:mailReportToMQ")
 	if err != nil {
 		return err
 	}
@@ -224,12 +231,53 @@ func (api *CaiyunAPI) Report139MailTask(session *Mail139Session) error {
 	if err != nil {
 		return err
 	}
-	_, err = api.client.ReadResponseBody(resp)
+	body, err := api.client.ReadResponseBody(resp)
 	if err != nil {
 		return err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return fmt.Errorf("邮箱任务上报 HTTP %d", resp.StatusCode)
+	}
+	var result struct {
+		Code string `json:"code"`
+	}
+	if err := decode139MailResponse(body, &result); err != nil {
+		return fmt.Errorf("解析邮箱上报结果失败: %w", err)
+	}
+	if result.Code != "S_OK" {
+		return fmt.Errorf("邮箱任务上报未成功: code=%s", result.Code)
+	}
+	return nil
+}
+
+// Backup139Mail stores real mailbox messages in the cloud (task 1020).
+func (api *CaiyunAPI) Backup139Mail(session *Mail139Session) error {
+	endpoint, err := mail139URL("/mw2/file/disk", session, "disk:backupMail")
+	if err != nil {
+		return err
+	}
+	resp, err := api.client.Post(endpoint, map[string]string{
+		"Content-Type": "text/xml", "Cookie": "RMKEY=" + session.RMKey,
+		"User-Agent": mail139UserAgent, "Referer": mail139BaseURL + "/m6/html/index.html",
+	}, `<object></object>`)
+	if err != nil {
+		return err
+	}
+	body, err := api.client.ReadResponseBody(resp)
+	if err != nil {
+		return err
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("邮箱转存 HTTP %d", resp.StatusCode)
+	}
+	var result struct {
+		Code string `json:"code"`
+	}
+	if err := decode139MailResponse(body, &result); err != nil {
+		return err
+	}
+	if result.Code != "S_OK" {
+		return fmt.Errorf("邮箱转存未成功: code=%s", result.Code)
 	}
 	return nil
 }

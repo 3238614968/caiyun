@@ -42,6 +42,7 @@ type MailMutualTask struct {
 	phone     string
 	auth      string
 	message   string
+	pending   bool
 }
 
 func NewMailMutualTask(client *corehttp.Client, log *logger.Logger) *MailMutualTask {
@@ -66,6 +67,7 @@ func (t *MailMutualTask) SetDedupStore(store MailSendDedupStore) *MailMutualTask
 }
 
 func (t *MailMutualTask) Message() string { return t.message }
+func (t *MailMutualTask) Pending() bool   { return t.pending }
 
 func mailMutualPeriod(now time.Time) (string, time.Duration) {
 	zone := time.FixedZone("CST", 8*3600)
@@ -98,16 +100,33 @@ func mailMutualMaxSends() int {
 // same platform user. A successful claim remains until next month; ambiguous
 // transport failures also retain the claim to avoid duplicate real emails.
 func (t *MailMutualTask) Run() error {
+	t.pending = false
 	t.logger.Start("------【139 邮箱账号互发】------")
-	if len(t.peers) == 0 {
-		t.message = "同一用户下没有其他活跃账号"
-		return nil
-	}
 	if t.dedup == nil {
 		return fmt.Errorf("邮箱互发去重存储不可用")
 	}
 	if t.userID == 0 || t.accountID == 0 || t.phone == "" || t.auth == "" {
 		return fmt.Errorf("邮箱互发缺少发件账号信息")
+	}
+	// The mailbox callback is only credited after the cloud task's front steps.
+	// Register the current task before sending; a late registration loses credit.
+	taskList, err := t.api.GetTaskListV3("newsign_139mail")
+	if err != nil {
+		return fmt.Errorf("读取邮箱任务前置步骤: %w", err)
+	}
+	needsBackup := false
+	for _, task := range taskList {
+		if strings.EqualFold(task.State, "FINISH") {
+			continue
+		}
+		if task.ID == 1020 {
+			needsBackup = true
+		}
+		if task.ID == 1004 || task.ID == 1020 {
+			if err := t.api.DoTaskWithMarket("newsign_139mail", "task", strconv.Itoa(task.ID)); err != nil {
+				return fmt.Errorf("邮箱任务前置登记: %w", err)
+			}
+		}
 	}
 
 	session, err := t.api.Login139Mail(t.phone, t.auth)
@@ -123,26 +142,34 @@ func (t *MailMutualTask) Run() error {
 	}
 
 	parts := []string{fmt.Sprintf("本月新发 %d 封，已处理 %d 对，失败 %d 对", sent, already, failed)}
-	if sent > 0 {
+	if len(t.peers) == 0 {
+		parts = append(parts, "没有其他活跃账号，未发互助邮件")
+	}
+	if sent > 0 || already > 0 {
 		if err := t.api.Report139MailTask(session); err != nil {
 			parts = append(parts, "邮件已发出，云盘活动上报未成功: "+err.Error())
+			t.pending = true
 		}
-		if response, err := t.api.DoTaskPostForTask("newsign_139mail", 1004); err == nil && response != nil && response.IsSuccess() {
-			if clickErr := t.api.DoTaskWithMarket("newsign_139mail", "task", "1004"); clickErr != nil {
-				parts = append(parts, "任务步骤登记失败: "+clickErr.Error())
-			}
-		} else if err != nil {
-			parts = append(parts, "任务行为上报失败: "+err.Error())
+	}
+	if needsBackup {
+		if err := t.api.Backup139Mail(session); err != nil {
+			parts = append(parts, "邮箱转存未成功: "+err.Error())
+			t.pending = true
+		} else {
+			parts = append(parts, "邮箱转存接口已接受")
 		}
+	}
+	if sent > 0 || already > 0 || needsBackup {
 		if latest, err := t.api.GetTaskListV3("newsign_139mail"); err == nil {
 			for _, task := range latest {
-				if task.ID == 1004 && !strings.EqualFold(task.State, "FINISH") {
-					parts = append(parts, "邮件已发出，但邮箱任务尚未计入完成")
-					break
+				if (task.ID == 1004 || task.ID == 1020) && !strings.EqualFold(task.State, "FINISH") {
+					parts = append(parts, fmt.Sprintf("邮箱任务%d待服务端确认", task.ID))
+					t.pending = true
 				}
 			}
 		} else {
 			parts = append(parts, "无法复查邮箱任务状态: "+err.Error())
+			t.pending = true
 		}
 	}
 	t.message = strings.Join(parts, "；")

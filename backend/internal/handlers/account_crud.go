@@ -27,15 +27,7 @@ func (h *AccountHandler) CreateAccount(c *gin.Context) {
 
 	account, err := h.accountService.CreateAccountContext(c.Request.Context(), userID, &req)
 	if err != nil {
-		if err == services.ErrInvalidPhone {
-			respondError(c, http.StatusBadRequest, "手机号格式不正确")
-			return
-		}
-		if err == services.ErrAccountExists {
-			respondError(c, http.StatusConflict, "账号已存在")
-			return
-		}
-		respondInternalServer(c)
+		respondAccountWriteError(c, err)
 		return
 	}
 

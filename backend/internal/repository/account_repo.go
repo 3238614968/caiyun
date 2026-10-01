@@ -4,6 +4,7 @@ import (
 	"caiyun/internal/models"
 	"context"
 	"strings"
+	"time"
 
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -178,9 +179,14 @@ func (r *AccountRepository) Update(account *models.Account) error {
 	return r.db.Save(account).Error
 }
 
-// Delete 删除账号
+// Delete removes the account from active views while retaining its identity
+// and related history for a later login by the same owner.
 func (r *AccountRepository) Delete(id uint) error {
-	return r.db.Delete(&models.Account{}, id).Error
+	return r.db.Model(&models.Account{}).Where("id = ?", id).
+		Updates(map[string]interface{}{
+			"deleted_at": time.Now(), "is_active": false,
+			"auth": "", "token": "", "jwt_token": "", "jwt_error_count": 0,
+		}).Error
 }
 
 // List 列出所有账号（管理员用），可选按手机号模糊筛选。
@@ -209,7 +215,7 @@ func (r *AccountRepository) ListByUserID(userID uint, offset, limit int, phone s
 	var accounts []*models.Account
 	var total int64
 
-	query := r.db.Model(&models.Account{}).Where("user_id = ?", userID)
+	query := r.db.Model(&models.Account{}).Select(accountListColumns).Where("user_id = ?", userID)
 
 	// 如果提供了手机号，添加模糊搜索条件
 	if phone != "" {
@@ -437,7 +443,7 @@ func (r *AccountRepository) ExistsByPhone(phone string) (bool, error) {
 // ExistsByPhoneAndUserID 检查指定用户是否已存在该手机号
 func (r *AccountRepository) ExistsByPhoneAndUserID(phone string, userID uint) (bool, error) {
 	var count int64
-	err := r.db.Model(&models.Account{}).Where("phone = ? AND user_id = ?", phone, userID).Count(&count).Error
+	err := r.db.Unscoped().Model(&models.Account{}).Where("phone = ? AND user_id = ?", phone, userID).Count(&count).Error
 	return count > 0, err
 }
 

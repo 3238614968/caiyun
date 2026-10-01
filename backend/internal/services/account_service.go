@@ -12,9 +12,10 @@ import (
 )
 
 var (
-	ErrAccountNotFound = errors.New("账号不存在")
-	ErrAccountExists   = errors.New("账号已存在")
-	ErrInvalidPhone    = errors.New("手机号格式不正确")
+	ErrAccountNotFound      = errors.New("账号不存在")
+	ErrAccountExists        = errors.New("账号已存在")
+	ErrInvalidPhone         = errors.New("手机号格式不正确")
+	ErrInvalidAuthorization = errors.New("账号认证信息不能为空")
 )
 
 type AccountService struct {

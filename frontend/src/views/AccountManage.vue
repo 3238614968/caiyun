@@ -573,7 +573,7 @@ const handleTriggerTask = async (row: Account & { executing?: boolean }) => {
 // 删除
 const handleDelete = async (row: Account) => {
   try {
-    await ElMessageBox.confirm('确定要删除该账号吗？', '提示', {
+    await ElMessageBox.confirm('确定要移除该账号吗？账号将停止参与任务，历史日志和统计保留。同一用户重新添加此手机号可恢复。', '移除账号', {
       confirmButtonText: '确定',
       cancelButtonText: '取消',
       type: 'warning'

@@ -2,12 +2,14 @@ package services
 
 import (
 	"context"
+	"errors"
 	"strings"
 
 	"caiyun/internal/core/auth"
 	"caiyun/internal/models"
 	"caiyun/internal/repository"
 	"caiyun/pkg/validator"
+	"gorm.io/gorm"
 )
 
 // CreateAccountRequest 创建账号请求
@@ -42,6 +44,10 @@ func (s *AccountService) CreateAccountContext(ctx context.Context, userID uint, 
 	if !validator.IsValidPhone(req.Phone) {
 		return nil, ErrInvalidPhone
 	}
+	req.Auth = strings.TrimSpace(req.Auth)
+	if req.Auth == "" {
+		return nil, ErrInvalidAuthorization
+	}
 
 	// 验证用户存在
 	_, err := userRepo.FindByID(userID)
@@ -50,6 +56,11 @@ func (s *AccountService) CreateAccountContext(ctx context.Context, userID uint, 
 			return nil, ctxErr
 		}
 		return nil, ErrAccountNotFound
+	}
+	// Production repositories replace credentials without decrypting old ones,
+	// and restore a removed account's original ID rather than losing its history.
+	if s.unitOfWork != nil {
+		return s.saveAccountLoginContext(ctx, userID, req)
 	}
 
 	// 检查该用户是否已存在该手机号
@@ -245,32 +256,29 @@ func (s *AccountService) DeleteAccountContext(ctx context.Context, userID, accou
 		return err
 	}
 	if s.unitOfWork != nil {
-		return s.unitOfWork.WithinTransaction(ctx, func(repos repository.TransactionRepositories) error {
-			account, err := repos.Account.FindByID(accountID)
-			if err != nil || account.UserID != userID {
+		err := s.unitOfWork.WithinTransaction(ctx, func(repos repository.TransactionRepositories) error {
+			account, err := repos.Account.FindMetadataByID(accountID)
+			if errors.Is(err, gorm.ErrRecordNotFound) || (err == nil && account.UserID != userID) {
 				return ErrAccountNotFound
 			}
-
-			cleanup := []func(uint) error{
-				repos.Operation.DeleteByAccountID,
-				repos.ExchangeRecord.DeleteByAccountID,
-				repos.ExchangeTask.DeleteByAccountID,
-				repos.ExchangeAccount.DeleteByAccountID,
-				repos.TaskLog.DeleteByAccountID,
-				repos.CloudStats.DeleteByAccountID,
-				repos.Account.AnonymizeAndDeleteByID,
+			if err != nil {
+				return err
 			}
-			for _, erase := range cleanup {
-				if err := erase(accountID); err != nil {
-					return err
-				}
+			if err := repos.ExchangeAccount.ReplaceLoginByAccountID(accountID, "", "", ""); err != nil {
+				return err
 			}
-			return nil
+			return repos.Account.Delete(accountID)
 		})
+		if err == nil {
+			if clearer, ok := s.tokenProvider.(interface{ ClearToken(uint) }); ok {
+				clearer.ClearToken(accountID)
+			}
+		}
+		return err
 	}
 
 	// 保留面向测试替身和离线工具的兼容路径；生产仓库由构造函数自动
-	// 绑定 UnitOfWork，走上面的完整清理事务。
+	// 绑定 UnitOfWork，走上面的可恢复删除事务。
 	accountRepo := s.accountRepositoryWithContext(ctx)
 	account, err := accountRepo.FindByID(accountID)
 	if err != nil {

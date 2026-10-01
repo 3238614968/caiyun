@@ -103,6 +103,10 @@ func (metadataFixtureConn) QueryContext(_ context.Context, query string, _ []dri
 }
 
 func newMetadataFixtureDB(t *testing.T) *gorm.DB {
+	return newMetadataFixtureDBWithConnector(t, metadataFixtureConnector{})
+}
+
+func newMetadataFixtureDBWithConnector(t *testing.T, connector driver.Connector) *gorm.DB {
 	t.Helper()
 	t.Setenv("APP_ENV", "production")
 	t.Setenv("DATA_ENCRYPTION_KEY", "")
@@ -111,7 +115,7 @@ func newMetadataFixtureDB(t *testing.T) *gorm.DB {
 	t.Setenv("FIELD_CRYPTO_ALLOW_LEGACY_NO_AAD", "false")
 	security.ResetFieldCryptoForTests()
 	t.Cleanup(security.ResetFieldCryptoForTests)
-	conn := sql.OpenDB(metadataFixtureConnector{})
+	conn := sql.OpenDB(connector)
 	t.Cleanup(func() { _ = conn.Close() })
 	db, err := gorm.Open(mysql.New(mysql.Config{Conn: conn, SkipInitializeWithVersion: true}), &gorm.Config{
 		DisableAutomaticPing: true, Logger: logger.Default.LogMode(logger.Silent),
@@ -135,6 +139,22 @@ func TestTaskLogsAndOwnershipReadWithoutDecryptingCredentials(t *testing.T) {
 	logs, count, err := NewTaskLogRepository(db).FindByFilter(7, nil, "", "", 0, 20)
 	if err != nil || count != 1 || len(logs) != 1 || logs[0].Account.Phone != "fixture-phone" || logs[0].Account.Auth != "" {
 		t.Fatalf("task log display failed on credential errors: logs=%+v count=%d err=%v", logs, count, err)
+	}
+}
+
+func TestLoginLookupDoesNotDecryptObsoleteCredentials(t *testing.T) {
+	repo := NewAccountRepository(newMetadataFixtureDB(t))
+	account, err := repo.FindLoginMetadata("fixture-phone", 7)
+	if err != nil || account == nil || account.ID != 1 || account.Auth != "" || account.Token != "" || account.JWTToken != "" {
+		t.Fatalf("login lookup decrypted old credentials: %+v, %v", account, err)
+	}
+}
+
+func TestAccountUserListDoesNotDecryptOtherStoredCredentials(t *testing.T) {
+	repo := NewAccountRepository(newMetadataFixtureDB(t))
+	accounts, count, err := repo.ListByUserID(7, 0, 20, "")
+	if err != nil || count != 1 || len(accounts) != 1 || accounts[0].Auth != "" || accounts[0].Token != "" {
+		t.Fatalf("account list failed after login because of old stored credentials: count=%d len=%d err=%v", count, len(accounts), err)
 	}
 }
 

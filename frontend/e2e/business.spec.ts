@@ -31,7 +31,9 @@ test('账号管理支持创建、编辑和删除账号', async ({ page }) => {
 
   const editedRow = page.getByRole('row', { name: /E2E编辑账号/ })
   await editedRow.getByRole('button', { name: '删除' }).click()
-  await page.getByRole('dialog', { name: '提示' }).getByRole('button', { name: '确定' }).click()
+  const removeDialog = page.getByRole('dialog', { name: '移除账号' })
+  await expect(removeDialog).toContainText('历史日志和统计保留')
+  await removeDialog.getByRole('button', { name: '确定' }).click()
 
   await expect(page.getByText('E2E编辑账号')).toBeHidden()
 })

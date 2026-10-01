@@ -55,7 +55,7 @@ func TestMail139LoginComposeAndReportProtocol(t *testing.T) {
 				t.Fatalf("compose protocol mismatch: url=%s body=%s", req.URL, body)
 			}
 			return mailTestResponse(req, 200, `{"code":"S_OK","var":{"tid":"delivery-id"}}`), nil
-		case "/mw2/disk/disk":
+		case "/mw2/file/disk":
 			reportSeen = true
 			return mailTestResponse(req, 500, `upstream unavailable`), nil
 		default:

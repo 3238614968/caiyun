@@ -14,6 +14,9 @@ func (r *TaskRunner) runMailMutualTask() *TaskResult {
 		SetDedupStore(r.mailDedup)
 	err := job.Run()
 	result := taskResultFromErr("mail_mutual", started, err, job.Message())
+	if result.Status == "success" && job.Pending() {
+		result.Status = "pending"
+	}
 	if result.Status == "success" && result.Message == "" {
 		result.Message = "邮箱互发任务已检查"
 	}
