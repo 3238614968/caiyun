@@ -23,10 +23,6 @@ func maskExchangeAccountName(name string) string {
 	return utils.MaskAccountName(name)
 }
 
-func isSingleRunExchangeTask(taskType string) bool {
-	return taskType == string(models.ExchangeTaskFixed) || taskType == "immediate"
-}
-
 func sanitizeExchangeMessageForDisplay(message string) string {
 	cleaned := strings.TrimSpace(message)
 	if cleaned == "" {

@@ -139,19 +139,18 @@ export function useExchangeTaskActions(options: UseExchangeTaskActionsOptions) {
     options.taskForm.value.account_ids = Array.from(new Set((options.taskForm.value.account_ids || []).filter(Boolean)))
     options.taskForm.value.account_id = options.taskForm.value.account_ids[0] ?? options.taskForm.value.account_id ?? null
 
+    let schedule: ReturnType<typeof normalizeExchangeSchedule>
+    try {
+      schedule = normalizeExchangeSchedule(options.taskForm.value)
+    } catch (error) {
+      ElMessage.warning((error as Error).message)
+      return null
+    }
     const payload: CreateExchangeTaskRequest = {
-      ...normalizeExchangeSchedule(options.taskForm.value),
+      ...schedule,
       product_id: productId,
       task_type: options.taskForm.value.task_type,
-      max_attempts: options.taskForm.value.task_type === 'long_term'
-        ? Math.max(Number(options.taskForm.value.max_attempts) || 10, 10)
-        : Math.max(Number(options.taskForm.value.max_attempts) || 1, 1),
-      restock_cycle: options.taskForm.value.task_type === 'long_term' ? options.taskForm.value.restock_cycle : undefined,
-      restock_weekday: options.taskForm.value.task_type === 'long_term' && options.taskForm.value.restock_cycle === 'weekly' ? options.taskForm.value.restock_weekday : undefined,
-      restock_day_of_month: options.taskForm.value.task_type === 'long_term' && options.taskForm.value.restock_cycle === 'monthly' ? options.taskForm.value.restock_day_of_month : undefined,
-      calendar_policy: options.taskForm.value.task_type === 'long_term' ? options.taskForm.value.calendar_policy : undefined,
-      holiday_dates: options.taskForm.value.task_type === 'long_term' && options.taskForm.value.holiday_dates.length > 0 ? options.taskForm.value.holiday_dates : undefined,
-      workday_dates: options.taskForm.value.task_type === 'long_term' && options.taskForm.value.workday_dates.length > 0 ? options.taskForm.value.workday_dates : undefined
+      max_attempts: 1
     }
 
     const accountIds = options.taskForm.value.account_ids

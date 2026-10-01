@@ -32,7 +32,7 @@ func NewExchangeTaskRepository(db *gorm.DB) *ExchangeTaskRepository {
 	return &ExchangeTaskRepository{db: db}
 }
 
-// CalculateNextRun 使用真实节假日表计算任务下一次预计触发时间。
+// CalculateNextRun 计算任务下一次每日抢兑时间，不读取节假日表。
 func (r *ExchangeTaskRepository) CalculateNextRun(task *models.ExchangeTask, from time.Time) *time.Time {
 	return CalculateExchangeTaskNextRunWithCalendar(task, from, r.lookupCalendarHoliday)
 }

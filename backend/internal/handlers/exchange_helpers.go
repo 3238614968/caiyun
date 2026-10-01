@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/robfig/cron/v3"
 )
 
 const maxExchangeScheduleListItems = 100
@@ -52,10 +51,6 @@ func normalizeMaxAttempts(maxAttempts int) (int, error) {
 	return maxAttempts, nil
 }
 
-var exchangeTaskCronParser = cron.NewParser(
-	cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow | cron.Descriptor,
-)
-
 func parseExchangeTaskFilter(c *gin.Context) repository.ExchangeTaskFilter {
 	filter := repository.ExchangeTaskFilter{
 		AccountKeyword: strings.TrimSpace(c.Query("account_keyword")),
@@ -85,35 +80,14 @@ func parseOptionalIntQuery(raw string) (int, bool) {
 	return value, err == nil
 }
 
-func normalizeExchangeScheduleExtras(restockTimesValue any, customCron, calendarPolicy string, holidayDatesValue any, workdayDatesValue any) (string, string, string, string, string, error) {
+// Historical advanced options are accepted but ignored; selected daily slots
+// remain authoritative even when an old client sends a Cron or holiday rule.
+func normalizeExchangeScheduleExtras(restockTimesValue any, _, _ string, _, _ any) (string, string, string, string, string, error) {
 	restockTimes, err := normalizeTimeList(restockTimesValue)
 	if err != nil {
-		return "", "", "", "", "", fmt.Errorf("补货时间点%s", err.Error())
+		return "", "", "", "", "", fmt.Errorf("抢兑时间点%s", err.Error())
 	}
-	customCron = strings.TrimSpace(customCron)
-	if customCron != "" {
-		if _, err := exchangeTaskCronParser.Parse(customCron); err != nil {
-			return "", "", "", "", "", fmt.Errorf("自定义 cron 格式错误: %v", err)
-		}
-	}
-	calendarPolicy = strings.ToLower(strings.TrimSpace(calendarPolicy))
-	if calendarPolicy == "" {
-		calendarPolicy = "all"
-	}
-	switch calendarPolicy {
-	case "all", "workday", "holiday":
-	default:
-		return "", "", "", "", "", fmt.Errorf("日历策略不合法")
-	}
-	holidayDates, err := normalizeDateList(holidayDatesValue)
-	if err != nil {
-		return "", "", "", "", "", fmt.Errorf("节假日日期%s", err.Error())
-	}
-	workdayDates, err := normalizeDateList(workdayDatesValue)
-	if err != nil {
-		return "", "", "", "", "", fmt.Errorf("调休工作日日期%s", err.Error())
-	}
-	return restockTimes, customCron, calendarPolicy, holidayDates, workdayDates, nil
+	return restockTimes, "", "all", "", "", nil
 }
 
 func normalizeTimeList(value any) (string, error) {
@@ -131,25 +105,6 @@ func normalizeTimeList(value any) (string, error) {
 			return "", err
 		}
 		normalized = append(normalized, timeValue)
-	}
-	return strings.Join(uniqueStrings(normalized), ","), nil
-}
-
-func normalizeDateList(value any) (string, error) {
-	items := normalizeLooseStringList(value)
-	if len(items) == 0 {
-		return "", nil
-	}
-	if len(items) > maxExchangeScheduleListItems {
-		return "", fmt.Errorf("数量不能超过 %d 项", maxExchangeScheduleListItems)
-	}
-	normalized := make([]string, 0, len(items))
-	for _, item := range items {
-		parsed, err := time.Parse("2006-01-02", item)
-		if err != nil {
-			return "", fmt.Errorf("格式错误，应为 YYYY-MM-DD")
-		}
-		normalized = append(normalized, parsed.Format("2006-01-02"))
 	}
 	return strings.Join(uniqueStrings(normalized), ","), nil
 }
@@ -197,37 +152,8 @@ func uniqueStrings(values []string) []string {
 	return result
 }
 
-func normalizeRestockConfig(cycle string, weekday *int, dayOfMonth *int) (string, *int, *int, error) {
-	cycle = strings.ToLower(strings.TrimSpace(cycle))
-	if cycle == "" {
-		cycle = "daily"
-	}
-	switch cycle {
-	case "daily":
-		return cycle, nil, nil, nil
-	case "weekly":
-		if weekday == nil {
-			currentWeekday := int(time.Now().Weekday())
-			weekday = &currentWeekday
-		}
-		if *weekday < 0 || *weekday > 6 {
-			return "", nil, nil, fmt.Errorf("补货周期为 weekly 时星期必须在 0-6 之间")
-		}
-		return cycle, weekday, nil, nil
-	case "monthly":
-		if dayOfMonth == nil {
-			currentDay := time.Now().Day()
-			dayOfMonth = &currentDay
-		}
-		if *dayOfMonth < 1 || *dayOfMonth > 31 {
-			return "", nil, nil, fmt.Errorf("补货周期为 monthly 时日期必须在 1-31 之间")
-		}
-		return cycle, nil, dayOfMonth, nil
-	case "once":
-		return cycle, nil, nil, nil
-	default:
-		return "", nil, nil, fmt.Errorf("补货周期不合法")
-	}
+func normalizeRestockConfig(_ string, _, _ *int) (string, *int, *int, error) {
+	return "daily", nil, nil, nil
 }
 
 func normalizePageLimit(page, limit, defaultLimit, maxLimit int) (int, int) {

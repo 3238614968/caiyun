@@ -54,23 +54,18 @@ func (options ExchangeTaskCreateOptions) withDefaults() ExchangeTaskCreateOption
 	if options.MaxAttempts <= 0 {
 		options.MaxAttempts = 1
 	}
-	if strings.TrimSpace(options.RestockCycle) == "" {
-		options.RestockCycle = "daily"
-	}
-	if strings.TrimSpace(options.CalendarPolicy) == "" {
-		options.CalendarPolicy = "all"
-	}
+	// New and legacy callers use daily time slots; obsolete recurrence options
+	// must not erase or override the explicitly selected exchange times.
+	options.RestockCycle = "daily"
+	options.RestockWeekday = nil
+	options.RestockDayOfMonth = nil
+	options.CustomCron = ""
+	options.CalendarPolicy = "all"
+	options.HolidayDates = ""
+	options.WorkdayDates = ""
 	options.ScheduledExchangeTime = strings.TrimSpace(options.ScheduledExchangeTime)
-	options.RestockCycle = strings.TrimSpace(strings.ToLower(options.RestockCycle))
 	options.RestockTimes = strings.TrimSpace(options.RestockTimes)
-	options.CustomCron = strings.TrimSpace(options.CustomCron)
-	options.CalendarPolicy = strings.TrimSpace(strings.ToLower(options.CalendarPolicy))
-	options.HolidayDates = strings.TrimSpace(options.HolidayDates)
-	options.WorkdayDates = strings.TrimSpace(options.WorkdayDates)
-	if options.CustomCron != "" {
-		options.ScheduledExchangeTime = ""
-		options.RestockTimes = ""
-	} else if options.ScheduledExchangeTime != "" && len(strings.FieldsFunc(options.RestockTimes, func(r rune) bool { return r == ',' || r == '，' || r == ';' || r == '；' || r == '\n' })) <= 1 {
+	if options.ScheduledExchangeTime != "" && len(strings.FieldsFunc(options.RestockTimes, func(r rune) bool { return r == ',' || r == '，' || r == ';' || r == '；' || r == '\n' })) <= 1 {
 		options.ScheduledExchangeTime = normalizeExchangeSlotTime(options.ScheduledExchangeTime)
 		if options.RestockTimes != "" {
 			options.RestockTimes = options.ScheduledExchangeTime

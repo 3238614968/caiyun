@@ -2,33 +2,17 @@ import { describe, expect, it } from 'vitest'
 import { createExchangeReservationPreset, isDrinkCouponProduct } from './useExchangeReservationPreset'
 
 describe('useExchangeReservationPreset', () => {
-  const fixedNow = new Date('2026-07-10T09:00:00+08:00')
-
-  it('prefills drink coupon products with Friday weekly restock window', () => {
-    const preset = createExchangeReservationPreset({ category: '奶茶饮品权益', prize_name: '喜茶兑换券' } as any, fixedNow)
+  it('prefills drink coupon time without imposing a weekly schedule', () => {
+    const preset = createExchangeReservationPreset({ category: '奶茶饮品权益', prize_name: '喜茶兑换券' })
 
     expect(isDrinkCouponProduct({ category: '视频类会员', prize_name: '蜜雪冰城券' } as any)).toBe(true)
-    expect(preset).toMatchObject({
-      exchangeTime: '10:30:00',
-      restockCycle: 'weekly',
-      restockWeekday: 5,
-      restockDayOfMonth: 10,
-      restockTimes: ['10:30:00'],
-      customCron: '',
-      calendarPolicy: 'all'
-    })
+    expect(preset).toEqual({ restockTimes: ['10:30:00'] })
   })
 
-  it('keeps generic products on daily default using the current weekday', () => {
-    const preset = createExchangeReservationPreset({ category: '视频类会员', prize_name: '腾讯视频会员' } as any, fixedNow)
+  it('keeps generic products at 10:00 without calendar options', () => {
+    const preset = createExchangeReservationPreset({ category: '视频类会员', prize_name: '腾讯视频会员' })
 
     expect(isDrinkCouponProduct({ category: '视频类会员', prize_name: '腾讯视频会员' } as any)).toBe(false)
-    expect(preset).toMatchObject({
-      exchangeTime: '10:00:00',
-      restockCycle: 'daily',
-      restockWeekday: 5,
-      restockDayOfMonth: 10,
-      restockTimes: ['10:00:00']
-    })
+    expect(preset).toEqual({ restockTimes: ['10:00:00'] })
   })
 })

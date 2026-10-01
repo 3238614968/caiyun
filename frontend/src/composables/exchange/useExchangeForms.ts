@@ -11,15 +11,7 @@ export interface ExchangeTaskForm {
   product_id: number | null
   task_type: 'fixed' | 'long_term'
   max_attempts: number
-  scheduled_exchange_time: string
-  restock_cycle: 'daily' | 'weekly' | 'monthly' | 'once'
-  restock_weekday: number | null
-  restock_day_of_month: number | null
   restock_times: string[]
-  custom_cron: string
-  calendar_policy: 'all' | 'workday' | 'holiday'
-  holiday_dates: string[]
-  workday_dates: string[]
 }
 
 export interface ExchangeRuleForm {
@@ -71,15 +63,7 @@ function createTaskForm(): ExchangeTaskForm {
     product_id: null,
     task_type: 'fixed',
     max_attempts: 1,
-    scheduled_exchange_time: '10:00:00',
-    restock_cycle: 'daily',
-    restock_weekday: new Date().getDay(),
-    restock_day_of_month: new Date().getDate(),
-    restock_times: [],
-    custom_cron: '',
-    calendar_policy: 'all',
-    holiday_dates: [],
-    workday_dates: []
+    restock_times: ['10:00:00']
   }
 }
 

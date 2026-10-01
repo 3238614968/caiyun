@@ -1,16 +1,23 @@
 import { expect, it } from 'vitest'
-import { normalizeExchangeSchedule } from './exchange-schedule'
+import { normalizeExchangeSchedule, normalizeExchangeTime } from './exchange-schedule'
 
-it('does not let a hidden reservation preset override an edited single time', () => {
-  expect(normalizeExchangeSchedule({ task_type: 'long_term', scheduled_exchange_time: '17:51:00', restock_times: ['10:30:00'], custom_cron: '' })).toEqual({ scheduled_exchange_time: '17:51:00', restock_times: ['17:51:00'], custom_cron: undefined })
+it('normalizes one daily slot', () => {
+  expect(normalizeExchangeSchedule({ restock_times: ['17:51'] })).toEqual({
+    scheduled_exchange_time: '17:51:00', restock_times: ['17:51:00'], restock_cycle: 'daily', calendar_policy: 'all'
+  })
 })
 
-it('sends one authoritative schedule for multiple times and cron', () => {
-  const form = { task_type: 'long_term', scheduled_exchange_time: '17:51:00', restock_times: ['10:30', '16:00'], custom_cron: '' }
-  expect(normalizeExchangeSchedule(form).scheduled_exchange_time).toBeUndefined()
-  expect(normalizeExchangeSchedule({ ...form, custom_cron: '30 10 * * 5' })).toEqual({ scheduled_exchange_time: undefined, restock_times: undefined, custom_cron: '30 10 * * 5' })
+it.each(['fixed', 'long_term'])('supports multiple slots for %s and ignores obsolete hidden fields', (taskType) => {
+  const form = { task_type: taskType, scheduled_exchange_time: '17:51:00', restock_times: ['16:00', '10:00', '16:00:00'], custom_cron: '30 10 * * 5', calendar_policy: 'workday' }
+  expect(normalizeExchangeSchedule(form)).toEqual({
+    scheduled_exchange_time: undefined, restock_times: ['10:00:00', '16:00:00'], restock_cycle: 'daily', calendar_policy: 'all'
+  })
 })
 
-it('does not submit invisible recurrence options for a fixed task', () => {
-  expect(normalizeExchangeSchedule({ task_type: 'fixed', scheduled_exchange_time: '17:51:00', restock_times: ['10:30'], custom_cron: '30 10 * * 5' })).toEqual({ scheduled_exchange_time: '17:51:00', restock_times: undefined, custom_cron: undefined })
+it('requires valid minute slots and accepts midnight', () => {
+  expect(normalizeExchangeTime('00:00')).toBe('00:00:00')
+  expect(() => normalizeExchangeSchedule({ restock_times: [] })).toThrow('至少选择')
+  for (const time of ['25:00', '10:60', '10:00:05', 'invalid']) {
+    expect(() => normalizeExchangeSchedule({ restock_times: [time] })).toThrow('时间格式')
+  }
 })

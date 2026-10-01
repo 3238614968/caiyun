@@ -9,12 +9,12 @@
       type="info"
       :closable="false"
       show-icon
-      title="可直接选择一个或多个云盘账号创建抢兑任务，系统会自动复用或生成抢兑规则。"
+      title="选择商品与账号，添加抢兑时间即可。"
     />
 
     <el-form
       :model="form"
-      :label-width="isMobile ? '96px' : '128px'"
+      :label-width="isMobile ? '80px' : '104px'"
     >
       <el-form-item
         label="兑换商品"
@@ -167,179 +167,52 @@
       />
 
       <el-form-item
-        label="任务类型"
+        label="抢兑时间"
         required
       >
-        <el-radio-group v-model="form.task_type">
-          <el-radio label="fixed">
-            单次/固定次数
-          </el-radio>
-          <el-radio label="long_term">
-            长期抢兑
-          </el-radio>
-        </el-radio-group>
-      </el-form-item>
-      <el-form-item
-        v-if="form.task_type === 'fixed'"
-        label="最大次数"
-      >
-        <el-input-number
-          v-model="form.max_attempts"
-          :min="1"
-          :max="100"
-        />
-      </el-form-item>
-      <el-form-item
-        v-else
-        label="长期策略"
-      >
-        <span class="hint-text">长期任务会持续尝试，适合售罄商品预定和周期性补货商品。</span>
-      </el-form-item>
-
-      <el-form-item label="指定抢兑时间">
-        <el-time-picker
-          v-model="form.scheduled_exchange_time"
-          :disabled="form.task_type === 'long_term' && (!!form.custom_cron.trim() || form.restock_times.length > 1)"
-          value-format="HH:mm:ss"
-          format="HH:mm"
-          placeholder="选择抢兑时间"
-          style="width: 180px;"
-          @change="syncSingleTime"
-        />
-        <span class="inline-hint">为空时使用抢兑规则时间；配置多个时间点或 cron 时优先生效</span>
+        <div class="time-select-block">
+          <div class="selected-times">
+            <el-tag
+              v-for="time in form.restock_times"
+              :key="time"
+              closable
+              size="large"
+              @close="removeTime(time)"
+            >
+              {{ time.slice(0, 5) }}
+            </el-tag>
+            <span
+              v-if="form.restock_times.length === 0"
+              class="hint-text"
+            >请添加至少一个时间点</span>
+          </div>
+          <div class="time-input-row">
+            <input
+              v-model="pendingTime"
+              type="time"
+              step="60"
+              aria-label="新增抢兑时间"
+              class="time-picker"
+            >
+            <el-button
+              :disabled="!pendingTime"
+              @click="addTime"
+            >
+              添加时间
+            </el-button>
+          </div>
+          <span class="hint-text">支持多个时间点，每天执行，提前一分钟预热。</span>
+        </div>
       </el-form-item>
 
-      <el-form-item
-        v-if="form.task_type === 'long_term'"
-        label="补货周期"
-      >
-        <div class="cycle-row">
-          <el-select
-            v-model="form.restock_cycle"
-            style="width: 160px;"
-          >
-            <el-option
-              label="每日"
-              value="daily"
-            />
-            <el-option
-              label="每周"
-              value="weekly"
-            />
-            <el-option
-              label="每月"
-              value="monthly"
-            />
-            <el-option
-              label="仅一次"
-              value="once"
-            />
-          </el-select>
-          <el-select
-            v-if="form.restock_cycle === 'weekly'"
-            v-model="form.restock_weekday"
-            style="width: 140px;"
-            placeholder="选择星期"
-          >
-            <el-option
-              v-for="day in weekdayOptions"
-              :key="day.value"
-              :label="day.label"
-              :value="day.value"
-            />
-          </el-select>
-          <el-input-number
-            v-if="form.restock_cycle === 'monthly'"
-            v-model="form.restock_day_of_month"
-            :min="1"
-            :max="31"
-            controls-position="right"
+      <el-form-item label="长期抢兑">
+        <div class="long-term-option">
+          <el-switch
+            v-model="longTerm"
+            aria-label="长期抢兑"
           />
+          <span class="hint-text">{{ longTerm ? '每天按所选时间持续抢兑' : '只执行一次抢兑' }}</span>
         </div>
-      </el-form-item>
-
-      <el-form-item
-        v-if="form.task_type === 'long_term'"
-        label="多个时间点"
-      >
-        <el-select
-          v-model="form.restock_times"
-          :disabled="!!form.custom_cron.trim()"
-          multiple
-          filterable
-          allow-create
-          default-first-option
-          placeholder="输入 HH:mm 后回车，例如 10:00、16:00"
-          style="width: 100%;"
-          @change="syncSingleRestockTime"
-        />
-      </el-form-item>
-
-      <el-form-item
-        v-if="form.task_type === 'long_term'"
-        label="自定义 Cron"
-      >
-        <el-input
-          v-model="form.custom_cron"
-          placeholder="可选，例如 30 10 * * 5；填写后优先于时间点"
-          clearable
-        />
-      </el-form-item>
-
-      <el-form-item
-        v-if="form.task_type === 'long_term'"
-        label="日历策略"
-      >
-        <div class="cycle-row">
-          <el-select
-            v-model="form.calendar_policy"
-            style="width: 180px;"
-          >
-            <el-option
-              label="每天执行"
-              value="all"
-            />
-            <el-option
-              label="仅工作日"
-              value="workday"
-            />
-            <el-option
-              label="仅节假日/周末"
-              value="holiday"
-            />
-          </el-select>
-          <span class="inline-hint">节假日默认按周末识别，可用下方日期覆盖</span>
-        </div>
-      </el-form-item>
-
-      <el-form-item
-        v-if="form.task_type === 'long_term'"
-        label="节假日覆盖"
-      >
-        <el-select
-          v-model="form.holiday_dates"
-          multiple
-          filterable
-          allow-create
-          default-first-option
-          placeholder="输入 YYYY-MM-DD 后回车"
-          style="width: 100%;"
-        />
-      </el-form-item>
-
-      <el-form-item
-        v-if="form.task_type === 'long_term'"
-        label="调休工作日"
-      >
-        <el-select
-          v-model="form.workday_dates"
-          multiple
-          filterable
-          allow-create
-          default-first-option
-          placeholder="输入 YYYY-MM-DD 后回车"
-          style="width: 100%;"
-        />
       </el-form-item>
     </el-form>
     <template #footer>
@@ -358,7 +231,9 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref, watch } from 'vue'
+import { ElMessage } from 'element-plus'
+import { normalizeExchangeTime } from '@/utils/exchange-schedule'
 import { clearExchangeRuleSelection, syncCloudAccountSelection, syncExchangeRuleSelection, type ExchangeTaskForm } from '@/composables/exchange/useExchangeForms'
 import type { Account } from '@/api/account'
 import type { ExchangeRule, Product } from '@/api/exchange'
@@ -379,28 +254,41 @@ defineEmits<{
   submit: []
 }>()
 
-const weekdayOptions = [
-  { label: '周日', value: 0 },
-  { label: '周一', value: 1 },
-  { label: '周二', value: 2 },
-  { label: '周三', value: 3 },
-  { label: '周四', value: 4 },
-  { label: '周五', value: 5 },
-  { label: '周六', value: 6 }
-]
+const pendingTime = ref('16:00')
+const longTerm = computed({
+  get: () => form.value.task_type === 'long_term',
+  set: (value: boolean) => { form.value.task_type = value ? 'long_term' : 'fixed' }
+})
+watch(visible, (open) => { if (open) pendingTime.value = '16:00' })
 
 const hasCloudAccounts = computed(() => props.userAccounts.length > 0)
 const currentProduct = computed(() => props.products.find(product => product.id === form.value.product_id) || props.selectedProduct)
 const selectedAccountCount = computed(() => (
   hasCloudAccounts.value ? form.value.account_ids.length : form.value.exchange_rule_ids.length
 ))
-const canSubmit = computed(() => Boolean(form.value.product_id && selectedAccountCount.value > 0))
+const canSubmit = computed(() => Boolean(form.value.product_id && selectedAccountCount.value > 0 && form.value.restock_times.length > 0))
 
-const syncSingleTime = () => {
-  if (form.value.restock_times.length <= 1) form.value.restock_times = form.value.scheduled_exchange_time ? [form.value.scheduled_exchange_time] : []
+const addTime = () => {
+  if (!pendingTime.value) return
+  try {
+    const time = normalizeExchangeTime(pendingTime.value)
+    if (form.value.restock_times.includes(time)) {
+      ElMessage.info('该时间已添加')
+      return
+    }
+    if (form.value.restock_times.length >= 100) {
+      ElMessage.warning('抢兑时间不能超过 100 个')
+      return
+    }
+    form.value.restock_times = [...form.value.restock_times, time].sort()
+    pendingTime.value = ''
+  } catch (error) {
+    ElMessage.warning((error as Error).message)
+  }
 }
-const syncSingleRestockTime = () => {
-  if (form.value.restock_times.length === 1) form.value.scheduled_exchange_time = form.value.restock_times[0]
+
+const removeTime = (time: string) => {
+  form.value.restock_times = form.value.restock_times.filter(value => value !== time)
 }
 
 const handleCloudAccountChange = () => {
@@ -411,6 +299,9 @@ const handleCloudAccountChange = () => {
 const handleExchangeRuleChange = () => {
   form.value.account_id = null
   form.value.account_ids = []
+  form.value.exchange_rule_id = form.value.exchange_rule_ids[0] ?? null
+  form.value.exchange_account_id = null
+  form.value.exchange_account_ids = []
   syncExchangeRuleSelection(form.value)
 }
 
@@ -440,7 +331,14 @@ const clearSelectedAccounts = () => {
 .account-select-block { width:100%; display:flex; flex-direction:column; gap:8px; }
 .account-actions { display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
 .selected-count { color:#64748b; font-size:13px; margin-right:auto; }
-.hint-text, .inline-hint { color:#64748b; font-size:13px; line-height:1.6; }
-.inline-hint { margin-left:10px; }
-.cycle-row { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+.hint-text { color:#64748b; font-size:13px; line-height:1.6; }
+.time-select-block { width:100%; display:flex; flex-direction:column; gap:10px; }
+.selected-times { display:flex; flex-wrap:wrap; gap:8px; }
+.time-input-row, .long-term-option { display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
+.time-picker { width:160px; height:32px; box-sizing:border-box; padding:0 10px; border:1px solid #dcdfe6; border-radius:4px; background:white; color:#334155; font:inherit; outline:none; }
+.time-picker:focus { border-color:#409eff; }
+@media (max-width:520px) {
+  .time-input-row { gap:8px; }
+  .time-picker { width:124px; }
+}
 </style>

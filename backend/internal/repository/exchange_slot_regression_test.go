@@ -21,8 +21,11 @@ func TestWarmupDecisionUsesRequestedMinuteAndIgnoresUnrelatedTasks(t *testing.T)
 		t.Fatalf("unrelated slot was recorded as a skip: %v %q", ok, reason)
 	}
 	task.CalendarPolicy = "workday"
-	if ok, reason := exchangeTaskSlotDecision(task, slot, func(time.Time) (bool, bool) { return true, true }); ok || reason == "" {
-		t.Fatal("actual calendar rejection must remain visible")
+	if ok, reason := exchangeTaskSlotDecision(task, slot, func(time.Time) (bool, bool) {
+		t.Fatal("daily scheduling queried the holiday database")
+		return true, true
+	}); !ok || reason != "" {
+		t.Fatal("obsolete calendar settings restricted daily exchange")
 	}
 }
 

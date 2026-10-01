@@ -76,12 +76,14 @@ test('领奖专区展示凭据迁移错误并在恢复后重新加载', async ({
   await expect(page.locator('.prize-error')).toHaveCount(0)
 })
 
-test('预定任务修改指定时间后不会被旧补货时间覆盖', async ({ page }) => {
+test('预定任务移除默认时间后只提交新选择的时间', async ({ page }) => {
   await page.goto('/exchange')
   await page.locator('.product-card').filter({ hasText: 'E2E售罄券' }).getByRole('button', { name: '预定' }).click()
   const dialog = page.getByRole('dialog', { name: '创建抢兑任务' })
-  await dialog.getByPlaceholder('选择抢兑时间').fill('17:51')
-  await dialog.getByPlaceholder('选择抢兑时间').press('Tab')
+  await dialog.locator('.selected-times .el-tag__close').click()
+  await dialog.getByLabel('新增抢兑时间').fill('17:51')
+  await dialog.getByLabel('新增抢兑时间').press('Tab')
+  await dialog.getByRole('button', { name: '添加时间' }).click()
   const submitted = page.waitForRequest(request => new URL(request.url()).pathname === '/api/v1/exchange/tasks' && request.method() === 'POST')
   await dialog.getByRole('button', { name: '确定', exact: true }).click()
   const payload = (await submitted).postDataJSON()

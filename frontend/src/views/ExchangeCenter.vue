@@ -485,15 +485,8 @@ const handleReserveProduct = async (product: Product) => {
   const prepared = await prepareTaskForm(product, 'long_term', 10)
   if (!prepared) return
 
-  taskForm.value.scheduled_exchange_time = preset.exchangeTime
-  taskForm.value.restock_cycle = preset.restockCycle
-  taskForm.value.restock_weekday = preset.restockWeekday
-  taskForm.value.restock_day_of_month = preset.restockDayOfMonth
   taskForm.value.restock_times = preset.restockTimes
-  taskForm.value.custom_cron = preset.customCron
-  taskForm.value.calendar_policy = preset.calendarPolicy
   taskDialogVisible.value = true
-  ElMessage.info(`请确认预定配置：抢兑时间 ${preset.exchangeTime.substring(0, 5)}，补货周期可在弹窗中调整`)
 }
 
 const submitCreateTask = async () => {

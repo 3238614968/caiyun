@@ -316,23 +316,13 @@ func (s *ExchangeService) executeSingleTaskContext(ctx context.Context, task *mo
 		}
 	}
 
-	finalStatus := models.ExchangeTaskPending
+	finalStatus := exchangeTaskFinalStatus(task, success, message, attemptsUsed)
 	if success {
 		log.Printf("【抢兑任务】任务 %d 执行成功，账号: %s", task.ID, maskedAccountName)
-		if isSingleRunExchangeTask(task.TaskType) && task.MaxAttempts > 0 && task.AttemptedCount+1 >= task.MaxAttempts {
-			finalStatus = models.ExchangeTaskCompleted
-		}
 	} else {
 		log.Printf("【抢兑任务】任务 %d 执行失败，账号: %s，原因: %s", task.ID, maskedAccountName, message)
-		switch {
-		case strings.Contains(message, "奖品单日已耗尽"),
-			strings.Contains(message, "奖品已兑完"),
-			strings.Contains(message, "商品已下架或不存在"),
-			strings.Contains(message, "商品ID不是可兑换 prizeId"):
-			finalStatus = models.ExchangeTaskCompleted
-		case attemptsUsed >= maxRetries:
-			finalStatus = models.ExchangeTaskFailed
-			log.Printf("【抢兑任务】任务 %d 重试次数已用尽，标记为失败", task.ID)
+		if finalStatus == models.ExchangeTaskPending {
+			log.Printf("【抢兑任务】任务 %d 本场失败，等待下一个抢兑时间", task.ID)
 		}
 	}
 

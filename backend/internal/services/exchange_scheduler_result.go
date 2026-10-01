@@ -98,19 +98,7 @@ func (s *ExchangeScheduler) finalizeTaskResult(task *models.ExchangeTask, execut
 		return
 	}
 
-	status := models.ExchangeTaskPending
-	if success {
-		if isSingleRunExchangeTask(task.TaskType) && task.AttemptedCount+1 >= task.MaxAttempts {
-			status = models.ExchangeTaskCompleted
-		}
-	} else if s.shouldStopExchange(message) || strings.Contains(message, "商品已下架或不存在") || strings.Contains(message, "商品ID不是可兑换 prizeId") {
-		status = models.ExchangeTaskCompleted
-	} else if task.RetryCount >= effectiveExchangeMaxRetries(task.MaxRetries) {
-		// The scheduled path uses the same retry state machine as an immediate
-		// execution. A transient failure that exhausted its configured attempts
-		// is terminal rather than silently returning to the next schedule slot.
-		status = models.ExchangeTaskFailed
-	}
+	status := exchangeTaskFinalStatus(task, success, message, task.RetryCount)
 
 	if err := s.exchangeTaskRepo.FinalizeOwned(task, executionToken, success, message, status, execTime); err != nil {
 		log.Printf("【抢兑调度器】保存任务结果失败: task_id=%d err=%v", task.ID, err)

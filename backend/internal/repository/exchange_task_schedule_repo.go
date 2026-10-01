@@ -22,8 +22,7 @@ func (r *ExchangeTaskRepository) GetTasksByTimeAtWithSkips(hour, minute int, now
 		Joins("JOIN accounts ON accounts.id = exchange_rules.account_id").
 		Where("exchange_tasks.status = ?", string(models.ExchangeTaskPending)).
 		Where(`(
-			(exchange_tasks.custom_cron IS NOT NULL AND exchange_tasks.custom_cron <> '')
-			OR (exchange_tasks.restock_times IS NOT NULL AND exchange_tasks.restock_times LIKE ?)
+			(exchange_tasks.restock_times IS NOT NULL AND exchange_tasks.restock_times LIKE ?)
 			OR (exchange_tasks.scheduled_exchange_time IS NOT NULL AND exchange_tasks.scheduled_exchange_time <> '' AND exchange_tasks.scheduled_exchange_time IN ?)
 			OR ((exchange_tasks.scheduled_exchange_time IS NULL OR exchange_tasks.scheduled_exchange_time = '') AND (exchange_rules.exchange_time_1 IN ? OR exchange_rules.exchange_time_2 IN ?))
 		)`, "%"+timeStr[:5]+"%", clockValues, clockValues, clockValues).

@@ -23,7 +23,7 @@
                 :type="task.task_type === 'long_term' ? 'warning' : 'primary'"
                 size="small"
               >
-                {{ task.task_type === 'long_term' ? '长期' : '固定' }}
+                {{ task.task_type === 'long_term' ? '长期' : '单次' }}
               </el-tag>
               <el-tag
                 :type="taskStatus(task).type"
@@ -160,7 +160,7 @@
                 :type="row.task_type === 'long_term' ? 'warning' : 'primary'"
                 size="small"
               >
-                {{ row.task_type === 'long_term' ? '长期' : '固定' }}
+                {{ row.task_type === 'long_term' ? '长期' : '单次' }}
               </el-tag>
               <el-tag
                 :type="taskStatus(row).type"
@@ -307,9 +307,6 @@ defineEmits<{
   delete: [id: number]
 }>()
 
-const cycleLabelMap: Record<string, string> = { daily: '每日', weekly: '每周', monthly: '每月', once: '仅一次' }
-const calendarPolicyMap: Record<string, string> = { all: '每天', workday: '工作日', holiday: '节假日' }
-const weekdayLabels = ['周日', '周一', '周二', '周三', '周四', '周五', '周六']
 const statusMap: Record<string, { label: string; type: TagProps['type'] }> = {
   pending: { label: '待执行', type: 'info' },
   running: { label: '执行中', type: 'warning' },
@@ -333,14 +330,10 @@ const formatTime = (value?: string) => value ? value.slice(0, 5) : '规则时间
 
 const formatTaskSchedule = (task: ExchangeTask) => {
   const slots = task.restock_times ? String(task.restock_times).split(',').map(item => item.trim()).filter(Boolean) : []
-  const time = task.custom_cron ? `Cron ${task.custom_cron}` : slots.length > 1 ? slots.map(item => item.slice(0, 5)).join(' / ') : task.scheduled_exchange_time ? formatTime(task.scheduled_exchange_time) : slots[0]?.slice(0, 5) || '规则时间'
-  if (task.task_type !== 'long_term') return time
-  const cycle = task.restock_cycle || 'daily'
-  let suffix = cycleLabelMap[cycle] || cycle
-  if (cycle === 'weekly' && Number.isInteger(task.restock_weekday)) suffix += ` ${weekdayLabels[task.restock_weekday as number] || ''}`
-  if (cycle === 'monthly' && task.restock_day_of_month) suffix += ` ${task.restock_day_of_month}日`
-  const policy = calendarPolicyMap[task.calendar_policy || 'all'] || task.calendar_policy || '每天'
-  return `${time} · ${suffix} · ${policy}`
+  const rule = task.exchange_rule || task.exchange_account
+  const ruleTimes = [rule?.exchange_time_1, rule?.exchange_time_2].filter(Boolean).map(value => formatTime(value))
+  const time = slots.length > 1 ? slots.map(item => item.slice(0, 5)).join(' / ') : task.scheduled_exchange_time ? formatTime(task.scheduled_exchange_time) : slots[0]?.slice(0, 5) || ruleTimes.join(' / ') || '规则时间'
+  return `${time} · 每天`
 }
 
 const formatNextRun = (value?: string) => {
@@ -355,7 +348,7 @@ const formatTaskProgress = (task: ExchangeTask) => {
   const maxAttempts = Number(task.max_attempts || 0)
   const success = Number(task.success_count || 0)
   const failed = Number(task.fail_count || 0)
-  const limit = maxAttempts > 0 ? ` / ${maxAttempts}` : ''
+  const limit = task.task_type !== 'long_term' && maxAttempts > 0 ? ` / ${maxAttempts}` : ''
   return `尝试 ${attempted}${limit} · 成功 ${success} · 失败 ${failed}`
 }
 

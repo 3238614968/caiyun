@@ -456,7 +456,7 @@ func TestExchangeTaskRepositoryGetByUserIDWithFilterSupportsKeywordCloudAndActiv
 	})
 }
 
-func TestExchangeTaskRepositoryGetTasksByTimeAtWithSkipsPersistsCalendarReason(t *testing.T) {
+func TestExchangeTaskRepositoryDailySlotsClearLegacyCalendarReasons(t *testing.T) {
 	db := newRepositoryTestDB(t,
 		&models.User{},
 		&models.Account{},
@@ -490,21 +490,8 @@ func TestExchangeTaskRepositoryGetTasksByTimeAtWithSkipsPersistsCalendarReason(t
 	if err != nil {
 		t.Fatalf("GetTasksByTimeAtWithSkips error: %v", err)
 	}
-	if len(runnable) != 1 || runnable[0].ID != holidayTask.ID {
-		t.Fatalf("runnable IDs = %#v, want [%d]", exchangeTaskIDs(runnable), holidayTask.ID)
-	}
-	if len(skipped) != 2 {
-		t.Fatalf("len(skipped) = %d, want 2", len(skipped))
-	}
-	reasonByTaskID := map[uint]string{}
-	for _, item := range skipped {
-		reasonByTaskID[item.TaskID] = item.Reason
-	}
-	if !strings.Contains(reasonByTaskID[workdayTask.ID], "工作日") {
-		t.Fatalf("workday skip reason = %q, want contains 工作日", reasonByTaskID[workdayTask.ID])
-	}
-	if !strings.Contains(reasonByTaskID[weeklySkipTask.ID], "补货周期为每周") {
-		t.Fatalf("weekly skip reason = %q, want contains 补货周期为每周", reasonByTaskID[weeklySkipTask.ID])
+	if len(runnable) != 3 || len(skipped) != 0 {
+		t.Fatalf("daily candidates = %#v, skips = %#v; want all three tasks", exchangeTaskIDs(runnable), skipped)
 	}
 
 	var refreshedWorkday, refreshedHoliday, refreshedWeekly models.ExchangeTask
@@ -520,15 +507,20 @@ func TestExchangeTaskRepositoryGetTasksByTimeAtWithSkipsPersistsCalendarReason(t
 	if refreshedHoliday.SkipReason != "" {
 		t.Fatalf("holiday task skip_reason = %q, want empty after runnable", refreshedHoliday.SkipReason)
 	}
-	if !strings.Contains(refreshedWorkday.SkipReason, "工作日") {
-		t.Fatalf("persisted workday skip_reason = %q, want contains 工作日", refreshedWorkday.SkipReason)
+	if refreshedWorkday.SkipReason != "" || refreshedWeekly.SkipReason != "" {
+		t.Fatalf("obsolete skip reasons remain: %q %q", refreshedWorkday.SkipReason, refreshedWeekly.SkipReason)
 	}
-	if !strings.Contains(refreshedWeekly.SkipReason, "补货周期为每周") {
-		t.Fatalf("persisted weekly skip_reason = %q, want contains 补货周期为每周", refreshedWeekly.SkipReason)
+	claimed, _, err := repo.TryMarkRunning(workdayTask.ID)
+	if err != nil || !claimed {
+		t.Fatalf("claim task: %v", err)
+	}
+	runnable, _, err = repo.GetTasksByTimeAtWithSkips(now.Hour(), now.Minute(), now)
+	if err != nil || len(runnable) != 2 {
+		t.Fatalf("running task was selected again: %#v, %v", exchangeTaskIDs(runnable), err)
 	}
 }
 
-func TestExchangeTaskRepositoryCalculateNextRunUsesCalendarOverride(t *testing.T) {
+func TestExchangeTaskRepositoryCalculateNextRunIgnoresCalendarOverride(t *testing.T) {
 	db := newRepositoryTestDB(t,
 		&models.CalendarDate{},
 		&models.ExchangeAccount{},
@@ -540,7 +532,7 @@ func TestExchangeTaskRepositoryCalculateNextRunUsesCalendarOverride(t *testing.T
 	for from.Weekday() != time.Saturday {
 		from = from.AddDate(0, 0, 1)
 	}
-	workdayOverride := &models.CalendarDate{Date: from.Format("2006-01-02"), DayType: "workday", Name: "调休工作日", Source: "test"}
+	workdayOverride := &models.CalendarDate{Date: from.Format("2006-01-02"), DayType: "holiday", Name: "历史节假日", Source: "test"}
 	mustCreateRecords(t, db, workdayOverride)
 
 	task := &models.ExchangeTask{

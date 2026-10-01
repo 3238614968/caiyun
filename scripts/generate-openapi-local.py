@@ -434,6 +434,11 @@ def resource_schemas() -> dict[str, dict[str, Any]]:
         "UpdateAnnouncementRequest": {"type": "object", "required": ["title", "content", "is_popup", "is_top", "is_published"], "properties": {"title": {"type": "string", "minLength": 1, "maxLength": 200}, "content": {"type": "string", "minLength": 1}, "is_popup": {"type": "boolean"}, "is_top": {"type": "boolean"}, "is_published": {"type": "boolean"}}},
         "ReplayDeadLetterRequest": {"type": "object", "required": ["approval", "reason"], "properties": {"approval": {"type": "string", "const": "approved"}, "reason": {"type": "string", "minLength": 8, "maxLength": 500}}},
     }
+    for schema_name in ("CreateExchangeTaskRequest", "ExchangeTask"):
+        properties = schemas[schema_name]["properties"]
+        for field in ("restock_cycle", "restock_weekday", "restock_day_of_month", "custom_cron", "calendar_policy", "holiday_dates", "workday_dates"):
+            properties[field]["deprecated"] = True
+            properties[field]["description"] = "历史兼容字段，抢兑调度忽略此设置，按所选时间点每天执行。"
     return schemas
 
 
