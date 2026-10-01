@@ -52,8 +52,8 @@ const (
 	// ExchangeTimeWindowMinutes 兑换时间窗口（分钟）
 	ExchangeTimeWindowMinutes = 5
 
-	// ExchangePreInitSeconds 提前初始化秒数（提前30秒准备 JWT 与队列）
-	ExchangePreInitSeconds = 30
+	// ExchangePreInitSeconds 系统场次与自定义场次均提前一分钟准备。
+	ExchangePreInitSeconds = 60
 )
 
 // 定时任务配置

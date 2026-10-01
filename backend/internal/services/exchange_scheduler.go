@@ -37,11 +37,12 @@ type ExchangeScheduler struct {
 	warmSessions  map[uint]exchangeWarmSession
 	queueMutex    sync.RWMutex
 
-	// 每副本独立的调度去重状态：preparedSlots 记录本副本已预热入队的时间槽，
-	// scheduledFires 记录已挂上精确触发定时器的时间槽，防止重复预热与重复触发。
+	// 每副本独立的调度状态：preparedSlots 防止同一场次同时预热，完成后可增量补热；
+	// scheduledFires 防止重复挂定时器，dispatchedTasks 防止精确触发与兜底重复派发。
 	// 跨副本的执行去重仍由 TryMarkRunning 兜底。
-	preparedSlots  map[string]bool
-	scheduledFires map[string]*time.Timer
+	preparedSlots   map[string]bool
+	scheduledFires  map[string]*time.Timer
+	dispatchedTasks map[string]map[uint]bool
 
 	// 停止信号
 	stopChan        chan struct{}
@@ -91,6 +92,7 @@ func NewExchangeScheduler(
 		cancelExecution:     cancelExecution,
 		preparedSlots:       make(map[string]bool),
 		scheduledFires:      make(map[string]*time.Timer),
+		dispatchedTasks:     make(map[string]map[uint]bool),
 	}
 }
 
@@ -160,6 +162,8 @@ func (s *ExchangeScheduler) Stop() {
 
 // scheduleLoop 调度循环
 func (s *ExchangeScheduler) scheduleLoop() {
+	// A worker restarted inside the one-minute window prepares immediately.
+	s.checkAndPrepareExchange()
 	wakeTimer := time.NewTimer(nextSchedulerWakeDelay(time.Now()))
 	recoverTicker := time.NewTicker(time.Minute)
 	defer wakeTimer.Stop()
@@ -233,10 +237,14 @@ func (s *ExchangeScheduler) checkAndPrepareExchange() {
 		// 无跨副本副作用），避免未抢到 prepare 租约的副本在 :00 触发时才
 		// 同步预热，把首个请求拖慢数秒。跨副本执行去重由 TryMarkRunning 保证。
 		if s.markPreparedOnce(now, hour, minute) {
-			log.Printf("【抢兑调度器】准备 %02d:%02d 抢兑队列...", hour, minute)
 			s.schedulePreciseFire(now, hour, minute)
 			s.executionWG.Add(1)
-			go func() { defer s.executionWG.Done(); s.prepareQueueByTime(hour, minute) }()
+			slotStart := now.Truncate(time.Minute).Add(time.Minute)
+			go func() {
+				defer s.executionWG.Done()
+				defer s.finishPreparingSlot(slotStart)
+				s.prepareQueueForSlot(slotStart)
+			}()
 		}
 	}
 	if hour, minute, ok := scheduledExecuteSlot(now); ok {
@@ -245,12 +253,11 @@ func (s *ExchangeScheduler) checkAndPrepareExchange() {
 		}
 		// 执行阶段不再使用整分钟租约。多副本同时触发时由 TryMarkRunning 抢占任务执行权，
 		// 避免拿到租约的实例在真正执行前崩溃导致整个时间槽漏执行。
-		log.Printf("【抢兑调度器】执行 %02d:%02d 抢兑（兜底 tick）...", hour, minute)
 		s.executeExchangeByTime(hour, minute)
 	}
 }
 
-// markPreparedOnce 保证同一副本对同一时间槽只预热入队一次（按日期+时分去重）。
+// markPreparedOnce 保证同一副本对同一场次不同时预热，完成后允许补热新增任务。
 func (s *ExchangeScheduler) markPreparedOnce(now time.Time, hour, minute int) bool {
 	executeTime := now.Add(time.Duration(constants.ExchangePreInitSeconds) * time.Second)
 	key := fmt.Sprintf("%s:%02d%02d", executeTime.Format("20060102"), hour, minute)
@@ -303,8 +310,7 @@ func (s *ExchangeScheduler) schedulePreciseFire(now time.Time, hour, minute int)
 		if s.isStopped() {
 			return
 		}
-		log.Printf("【抢兑调度器】精确触发 %02d:%02d 抢兑", hour, minute)
-		s.executeExchangeByTime(hour, minute)
+		s.executeExchangeForSlot(slotStart)
 	})
 	s.scheduledFires[key] = timer
 	s.queueMutex.Unlock()
@@ -371,14 +377,19 @@ func (s *ExchangeScheduler) claimSchedulerSlot(kind string, now time.Time, hour,
 
 // prepareQueueByTime 根据指定时间准备抢兑队列
 func (s *ExchangeScheduler) prepareQueueByTime(hour, minute int) {
+	now := time.Now().In(cstZone).Add(time.Duration(constants.ExchangePreInitSeconds) * time.Second)
+	s.prepareQueueForSlot(time.Date(now.Year(), now.Month(), now.Day(), hour, minute, 0, 0, cstZone))
+}
+
+func (s *ExchangeScheduler) prepareQueueForSlot(slotStart time.Time) {
 	if s.isStopped() {
 		return
 	}
+	hour, minute := slotStart.Hour(), slotStart.Minute()
 	slot := fmt.Sprintf("%02d:%02d", hour, minute)
 
 	// Load tasks for the target slot.
-	targetDate := time.Now().In(cstZone).Add(time.Duration(constants.ExchangePreInitSeconds) * time.Second)
-	tasks, skipped, err := s.exchangeTaskRepo.GetTasksByTimeAtWithSkips(hour, minute, targetDate)
+	tasks, skipped, err := s.exchangeTaskRepo.WithContext(s.executionContext()).GetTasksByTimeAtWithSkips(hour, minute, slotStart)
 	if err != nil {
 		log.Printf("【抢兑调度器】获取 %s 抢兑任务失败: %v", slot, err)
 		return
@@ -400,14 +411,12 @@ func (s *ExchangeScheduler) prepareQueueByTime(hour, minute int) {
 		return
 	}
 
-	s.logQueuedTasks(slot, tasks)
-	readyAccounts := s.preheatAccountsForTasks(slot, tasks)
-	tasks = filterTasksByReadyAccounts(slot, tasks, readyAccounts)
-	if len(tasks) == 0 {
-		log.Printf("【抢兑调度器】%s 预热后没有可执行账号，本次不加入抢兑队列", slot)
-		return
+	newTasks := s.tasksNeedingWarmup(tasks)
+	if len(newTasks) > 0 {
+		s.logQueuedTasks(slot, newTasks)
+		log.Printf("【抢兑调度器】开始预热 %s 场次，目标=%s，剩余=%dms，新增或待预热任务=%d", slot, slotStart.Format("2006-01-02 15:04:05"), time.Until(slotStart).Milliseconds(), len(newTasks))
+		s.preheatAccountsForTasks(slot, newTasks)
 	}
-	slotStart := time.Date(targetDate.Year(), targetDate.Month(), targetDate.Day(), hour, minute, 0, 0, cstZone)
 	if !time.Now().Before(slotStart) {
 		log.Printf("【抢兑调度器】%s 预热超过触发时间，已完成的热会话供执行阶段使用", slot)
 		return
@@ -418,6 +427,9 @@ func (s *ExchangeScheduler) prepareQueueByTime(hour, minute int) {
 	s.preparedQueue = mergeExchangeTasks(s.preparedQueue, tasks)
 	s.queueMutex.Unlock()
 
+	if len(newTasks) == 0 {
+		return
+	}
 	log.Printf("【抢兑调度器】%s 抢兑队列已准备，共 %d 个任务", slot, len(tasks))
 
 	s.broadcast(ws.Message{
@@ -431,11 +443,20 @@ func (s *ExchangeScheduler) prepareQueueByTime(hour, minute int) {
 }
 
 func (s *ExchangeScheduler) executeExchangeByTime(hour, minute int) {
+	now := time.Now().In(cstZone)
+	s.executeExchangeForSlot(time.Date(now.Year(), now.Month(), now.Day(), hour, minute, 0, 0, cstZone))
+}
+
+func (s *ExchangeScheduler) executeExchangeForSlot(slotStart time.Time) {
 	if s.isStopped() {
 		return
 	}
+	if time.Now().Before(slotStart.Add(exchangeFireOffset())) {
+		return
+	}
+	hour, minute := slotStart.Hour(), slotStart.Minute()
 	slot := fmt.Sprintf("%02d:%02d", hour, minute)
-	now := time.Now().In(cstZone)
+	now := slotStart
 
 	s.queueMutex.Lock()
 	var tasksToExecute []*models.ExchangeTask
@@ -452,10 +473,12 @@ func (s *ExchangeScheduler) executeExchangeByTime(hour, minute int) {
 	s.preparedQueue = remainingTasks
 	s.queueMutex.Unlock()
 
-	if len(tasksToExecute) == 0 {
+	// Refresh pending tasks once at firing so deleted/rescheduled definitions
+	// are not executed from a stale snapshot, and late-created tasks are included.
+	{
 		var err error
 		var skipped []repository.ExchangeTaskScheduleSkip
-		tasksToExecute, skipped, err = s.exchangeTaskRepo.GetTasksByTimeAtWithSkips(hour, minute, now)
+		tasksToExecute, skipped, err = s.exchangeTaskRepo.WithContext(s.executionContext()).GetTasksByTimeAtWithSkips(hour, minute, now)
 		if err != nil {
 			log.Printf("【抢兑调度器】补查 %s 抢兑任务失败: %v", slot, err)
 			return
@@ -479,8 +502,12 @@ func (s *ExchangeScheduler) executeExchangeByTime(hour, minute int) {
 	if s.isStopped() {
 		return
 	}
+	tasksToExecute = s.undispatchedSlotTasks(slotStart, tasksToExecute)
+	if len(tasksToExecute) == 0 {
+		return
+	}
 
-	log.Printf("【抢兑调度器】开始执行 %s 抢兑，共 %d 个任务", slot, len(tasksToExecute))
+	log.Printf("【抢兑调度器】开始执行 %s 抢兑，共 %d 个任务，触发偏差=%dms", slot, len(tasksToExecute), time.Since(slotStart).Milliseconds())
 	s.executionWG.Add(1)
 	go func() {
 		defer s.executionWG.Done()

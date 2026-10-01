@@ -77,7 +77,7 @@ func (s *ExchangeScheduler) preheatAccountsForTasks(slot string, tasks []*models
 		limit = 10
 	}
 
-	log.Printf("【抢兑调度器】%s 开始预热 JWT，共 %d 个云盘账号，预热并发 %d", slot, len(uniqueAccounts), limit)
+	log.Printf("【抢兑调度器】%s 开始预热 JWT、设备和 HTTP 会话，共 %d 个云盘账号，预热并发 %d", slot, len(uniqueAccounts), limit)
 
 	limiter := make(chan struct{}, limit)
 	var wg sync.WaitGroup
@@ -145,7 +145,7 @@ func (s *ExchangeScheduler) preheatAccountsForTasks(slot string, tasks []*models
 			elapsed = time.Since(start).Milliseconds()
 
 			log.Printf(
-				"【抢兑调度器】%s JWT 预热完成: 账号=%s, account=%d, 状态=%s, 过期时间=%s, 耗时=%dms",
+				"【抢兑调度器】%s JWT/设备/HTTP 预热完成: 账号=%s, account=%d, 状态=%s, 过期时间=%s, 耗时=%dms",
 				slot,
 				maskedAccountName,
 				accountID,
@@ -161,7 +161,7 @@ func (s *ExchangeScheduler) preheatAccountsForTasks(slot string, tasks []*models
 	}
 
 	wg.Wait()
-	log.Printf("【抢兑调度器】%s JWT 预热完成，成功 %d/%d 个云盘账号，失败 %d 个", slot, successCount, len(uniqueAccounts), failureCount)
+	log.Printf("【抢兑调度器】%s JWT/设备/HTTP 预热结束，成功 %d/%d 个云盘账号，失败 %d 个", slot, successCount, len(uniqueAccounts), failureCount)
 	return readyAccounts
 }
 

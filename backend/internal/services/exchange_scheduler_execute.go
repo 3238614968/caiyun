@@ -125,6 +125,7 @@ func (s *ExchangeScheduler) executeProductGroup(ctx context.Context, prizeID str
 				if r := recover(); r != nil {
 					message := fmt.Sprintf("任务执行异常，已自动标记失败: %v", r)
 					log.Printf("【抢兑调度器】任务 %d 执行 panic: %v\n%s", task.ID, r, debug.Stack())
+					recordFailureReason(message)
 					s.finalizeTaskResult(task, executionToken, false, message, 0)
 				}
 			}()
@@ -259,9 +260,15 @@ func (s *ExchangeScheduler) executeProductGroup(ctx context.Context, prizeID str
 			successCount++
 		}
 	}
-	failureCount := len(tasks) - successCount
+	// A task without execution ownership (or canceled before execution) was
+	// skipped; it must not inflate the number of failed exchange attempts.
+	failureCount := 0
+	for _, count := range failureReasons {
+		failureCount += count
+	}
+	skippedCount := len(tasks) - successCount - failureCount
 
-	log.Printf("【抢兑调度器】商品 %s 抢兑完成，成功 %d/%d 个账号，失败 %d 个账号", prizeID, successCount, len(tasks), failureCount)
+	log.Printf("【抢兑调度器】商品 %s 抢兑完成，成功 %d/%d 个任务，失败 %d 个任务，跳过 %d 个任务", prizeID, successCount, len(tasks), failureCount, skippedCount)
 	for reason, count := range failureReasons {
 		log.Printf("【抢兑调度器】商品 %s 失败原因统计: %s x%d", prizeID, reason, count)
 	}

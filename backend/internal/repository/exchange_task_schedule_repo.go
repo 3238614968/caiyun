@@ -16,17 +16,17 @@ func (r *ExchangeTaskRepository) GetTasksByTimeAtWithSkips(hour, minute int, now
 	slot := time.Date(now.Year(), now.Month(), now.Day(), hour, minute, 0, 0, now.Location())
 	var tasks []*models.ExchangeTask
 	timeStr := fmt.Sprintf("%02d:%02d:00", hour, minute)
-	clockValues:=[]string{timeStr,timeStr[:5]}
+	clockValues := []string{timeStr, timeStr[:5]}
 
 	err := r.db.Joins("JOIN exchange_rules ON exchange_rules.id = exchange_tasks.exchange_rule_id").
 		Joins("JOIN accounts ON accounts.id = exchange_rules.account_id").
-		Where("exchange_tasks.status IN ?", []string{string(models.ExchangeTaskPending), string(models.ExchangeTaskRunning)}).
+		Where("exchange_tasks.status = ?", string(models.ExchangeTaskPending)).
 		Where(`(
 			(exchange_tasks.custom_cron IS NOT NULL AND exchange_tasks.custom_cron <> '')
 			OR (exchange_tasks.restock_times IS NOT NULL AND exchange_tasks.restock_times LIKE ?)
 			OR (exchange_tasks.scheduled_exchange_time IS NOT NULL AND exchange_tasks.scheduled_exchange_time <> '' AND exchange_tasks.scheduled_exchange_time IN ?)
 			OR ((exchange_tasks.scheduled_exchange_time IS NULL OR exchange_tasks.scheduled_exchange_time = '') AND (exchange_rules.exchange_time_1 IN ? OR exchange_rules.exchange_time_2 IN ?))
-		)`, "%"+timeStr[:5]+"%",clockValues,clockValues,clockValues).
+		)`, "%"+timeStr[:5]+"%", clockValues, clockValues, clockValues).
 		Where("exchange_rules.is_active = ?", true).
 		Where("accounts.is_active = ?", true).
 		Where("accounts.auth <> ''").

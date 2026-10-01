@@ -14,8 +14,8 @@ func scheduledPrepareSlot(now time.Time) (int, int, bool) {
 		return 0, 0, false
 	}
 
-	executeTime := now.Add(time.Duration(constants.ExchangePreInitSeconds) * time.Second)
-	if executeTime.Second() != 0 {
+	executeTime := now.Truncate(time.Minute).Add(time.Minute)
+	if executeTime.Sub(now) > time.Duration(constants.ExchangePreInitSeconds)*time.Second {
 		return 0, 0, false
 	}
 
@@ -52,17 +52,8 @@ func nextSchedulerWakeDelay(now time.Time) time.Duration {
 }
 
 func schedulerTriggerSeconds() []int {
-	seconds := []int{0}
-	if constants.ExchangePreInitSeconds > 0 {
-		prepareSecond := (60 - (constants.ExchangePreInitSeconds % 60)) % 60
-		if prepareSecond != 0 {
-			seconds = append(seconds, prepareSecond)
-		}
-	}
-	if len(seconds) == 2 && seconds[1] < seconds[0] {
-		seconds[0], seconds[1] = seconds[1], seconds[0]
-	}
-	return seconds
+	// Refresh the next slot for tasks added/edited inside its warm-up minute.
+	return []int{0, 15, 30, 45}
 }
 
 func mergeExchangeTasks(existing []*models.ExchangeTask, incoming []*models.ExchangeTask) []*models.ExchangeTask {
