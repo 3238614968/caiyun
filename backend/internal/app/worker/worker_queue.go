@@ -179,11 +179,12 @@ func (w *Worker) processQueueTask(message *queue.TaskMessage) {
 		attribute.Bool("caiyun.operation_message", strings.TrimSpace(message.OperationID) != ""),
 	)
 	defer span.End()
-	log.Printf("从队列获取任务: 账号ID=%d, 任务类型=%s operation_id=%s", message.AccountID, message.TaskType, message.OperationID)
 	if strings.TrimSpace(message.OperationID) != "" {
+		log.Printf("从队列获取操作任务: 用户ID=%d, 任务类型=%s operation_id=%s", message.UserID, message.TaskType, message.OperationID)
 		w.processOperationTask(message)
 		return
 	}
+	log.Printf("从队列获取任务: 账号ID=%d, 任务类型=%s", message.AccountID, message.TaskType)
 
 	// 获取账号信息
 	account, err := w.accountService.GetAccountByID(message.AccountID)

@@ -32,6 +32,8 @@ func (s *ExchangeScheduler) executeTask(ctx context.Context, task *models.Exchan
 	if !started {
 		return false, "任务已被其他实例执行或状态不再是待执行", -1, ""
 	}
+	task.RetryCount = 0
+	task.LastRetryAt = nil
 	// If the scheduler is stopping after this Worker acquired the fencing token,
 	// return the task to pending using a short independent cleanup context.  A
 	// canceled request context must never leave this execution stranded in

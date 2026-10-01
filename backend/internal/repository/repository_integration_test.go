@@ -238,6 +238,42 @@ func TestExchangeTaskRepositoryRunningStateMigration(t *testing.T) {
 	}
 }
 
+func TestExchangeTaskRepositoryManualRetryFencesOldOwnerAndPreservesHistory(t *testing.T) {
+	db := newRepositoryTestDB(t, &models.ExchangeTask{}, &models.ExchangeRecord{})
+	repo := NewExchangeTaskRepository(db)
+	task := &models.ExchangeTask{
+		UserID: 7, ExchangeAccountID: 8, ProductID: 9, PrizeID: "manual-retry-prize", PrizeName: "manual retry",
+		Status: "failed", LastResult: "活动异常 Error Code：GK", RetryCount: 3, AttemptedCount: 4, FailCount: 4,
+	}
+	mustCreateRecords(t, db, task)
+	if claimed, _, err := repo.TryMarkForManualExecution(task.ID, 8, "failed", task.UpdatedAt); err != nil || claimed {
+		t.Fatalf("wrong owner claimed task: %t %v", claimed, err)
+	}
+	claimed, token, err := repo.TryMarkForManualExecution(task.ID, 7, "failed", task.UpdatedAt)
+	if err != nil || !claimed || token == "" {
+		t.Fatalf("failed task retry = %t %q %v", claimed, token, err)
+	}
+	if duplicate, _, err := repo.TryMarkForManualExecution(task.ID, 7, "failed", task.UpdatedAt); err != nil || duplicate {
+		t.Fatalf("duplicate request reclaimed task: %t %v", duplicate, err)
+	}
+	var current models.ExchangeTask
+	if err := db.First(&current, task.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if current.RetryCount != 0 || current.LastResult != "" || current.AttemptedCount != 4 || current.FailCount != 4 {
+		t.Fatalf("retry reset erased history or retained stale failure: %+v", current)
+	}
+	if err := repo.FinalizeOwned(task, "old-execution-token", false, "stale result", models.ExchangeTaskFailed, 0); !errors.Is(err, ErrExchangeTaskExecutionLost) {
+		t.Fatalf("stale owner finalized retried task: %v", err)
+	}
+	if err := repo.FinalizeOwned(task, token, true, "retry success", models.ExchangeTaskCompleted, 10); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.First(&current, task.ID).Error; err != nil || current.Status != "completed" || current.AttemptedCount != 5 || current.FailCount != 4 || current.SuccessCount != 1 {
+		t.Fatalf("retry did not preserve and increment history: %+v %v", current, err)
+	}
+}
+
 func TestExchangeTaskRepositoryFencingTokenRejectsStaleWorker(t *testing.T) {
 	db := newRepositoryTestDB(t, &models.ExchangeTask{}, &models.ExchangeRecord{})
 	repo := NewExchangeTaskRepository(db)

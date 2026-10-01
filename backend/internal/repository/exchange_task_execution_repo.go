@@ -23,10 +23,39 @@ func (r *ExchangeTaskRepository) TryMarkRunning(id uint) (bool, string, error) {
 		Updates(map[string]interface{}{
 			"status":          string(models.ExchangeTaskRunning),
 			"execution_token": executionToken,
+			"retry_count":     0,
+			"last_retry_at":   nil,
 			"updated_at":      time.Now(),
 		})
 	if result.Error != nil {
 		return false, "", result.Error
+	}
+	if result.RowsAffected == 0 {
+		return false, "", nil
+	}
+	return true, executionToken, nil
+}
+
+// TryMarkForManualExecution atomically claims a pending or failed task for an
+// explicit user action. The owner and snapshot predicates fence stale requests.
+func (r *ExchangeTaskRepository) TryMarkForManualExecution(id, userID uint, expectedStatus string, expectedUpdatedAt time.Time) (bool, string, error) {
+	if expectedStatus != string(models.ExchangeTaskPending) && expectedStatus != string(models.ExchangeTaskFailed) {
+		return false, "", nil
+	}
+	executionToken := uuid.NewString()
+	result := r.db.Model(&models.ExchangeTask{}).
+		Where("id = ? AND user_id = ? AND status = ? AND updated_at = ?", id, userID, expectedStatus, expectedUpdatedAt).
+		Updates(map[string]interface{}{
+			"status":          string(models.ExchangeTaskRunning),
+			"execution_token": executionToken,
+			"retry_count":     0,
+			"last_retry_at":   nil,
+			"last_result":     "",
+			"skip_reason":     "",
+			"updated_at":      time.Now(),
+		})
+	if result.Error != nil {
+		return false, "", mapExchangeTaskWriteError(result.Error)
 	}
 	if result.RowsAffected == 0 {
 		return false, "", nil

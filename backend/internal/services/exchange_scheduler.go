@@ -6,6 +6,7 @@ import (
 	"caiyun/internal/models"
 	"caiyun/internal/monitor"
 	"caiyun/internal/repository"
+	"caiyun/internal/version"
 	"caiyun/internal/ws"
 	"context"
 	"fmt"
@@ -131,7 +132,7 @@ func (s *ExchangeScheduler) Start() {
 	if s == nil {
 		return
 	}
-	log.Println("【抢兑调度器】启动...")
+	log.Printf("【抢兑调度器】启动，预热提前 %d 秒，版本=%s，commit=%s", constants.ExchangePreInitSeconds, version.Version, version.Commit)
 	s.recoverStaleRunningTasks("startup")
 	s.loopWG.Add(1)
 	go func() {

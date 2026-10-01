@@ -144,43 +144,21 @@ func (s *ExchangeService) executeSingleTaskContext(ctx context.Context, task *mo
 	if task == nil || task.ID == 0 {
 		return ErrExchangeInvalidInput
 	}
-	started, executionToken, err := s.exchangeTaskRepo.WithContext(ctx).TryMarkRunning(task.ID)
+	claim, err := claimExchangeTaskManually(s.exchangeTaskRepo.WithContext(ctx), task, time.Now(), exchangeTaskRunningTimeoutFromEnv())
 	if err != nil {
 		log.Printf("【抢兑任务】任务 %d 抢占执行权失败: %v", task.ID, err)
-		return fmt.Errorf("抢占任务执行权: %w", err)
+		return err
 	}
-	if !started {
-		latest, latestErr := s.exchangeTaskRepo.WithContext(ctx).GetByID(task.ID)
-		if latestErr == nil && latest != nil {
-			if latest.Status == string(models.ExchangeTaskRunning) && time.Since(latest.UpdatedAt) > exchangeTaskRunningTimeoutFromEnv() {
-				released, releaseErr := s.exchangeTaskRepo.WithContext(ctx).ReleaseRunning(task.ID, latest.ExecutionToken, "任务执行超时，手动执行前已恢复为待执行")
-				if releaseErr != nil {
-					log.Printf("【抢兑任务】恢复超时 running 任务失败: task_id=%d err=%v", task.ID, releaseErr)
-				} else if released {
-					started, executionToken, err = s.exchangeTaskRepo.WithContext(ctx).TryMarkRunning(task.ID)
-					if err == nil && started {
-						task = latest
-					}
-				}
-			}
-		}
-		if !started {
-			reason := "任务正在执行或当前状态不可执行，请稍后刷新任务结果"
-			if latestErr == nil && latest != nil {
-				if strings.TrimSpace(latest.LastResult) != "" {
-					reason = latest.LastResult
-				} else if latest.Status == string(models.ExchangeTaskRunning) {
-					reason = "任务正在执行，请稍后查看结果"
-				}
-			}
-			log.Printf("【抢兑任务】任务 %d 未取得执行权: %s", task.ID, reason)
-			s.sendToUser(task.UserID, ws.Message{Type: "exchange_skipped", Data: map[string]interface{}{
-				"task_id": task.ID, "account_name": exchangeAccountName(&task.ExchangeAccount),
-				"product_name": task.PrizeName, "success": false, "message": reason,
-			}})
-			return fmt.Errorf("%w: %s", ErrExchangeTaskConflict, reason)
-		}
+	task = claim.task
+	if !claim.started {
+		log.Printf("【抢兑任务】任务 %d 未取得执行权: 当前状态=%s，原因=%s", task.ID, task.Status, claim.reason)
+		s.sendToUser(task.UserID, ws.Message{Type: "exchange_skipped", Data: map[string]interface{}{
+			"task_id": task.ID, "account_name": exchangeAccountName(&task.ExchangeAccount),
+			"product_name": task.PrizeName, "success": false, "message": claim.reason,
+		}})
+		return fmt.Errorf("%w: %s", ErrExchangeTaskConflict, claim.reason)
 	}
+	executionToken := claim.token
 	finished := false
 	defer func() {
 		if recovered := recover(); recovered != nil {
