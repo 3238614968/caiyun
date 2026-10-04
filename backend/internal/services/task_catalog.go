@@ -128,11 +128,12 @@ func NewTaskCatalog() *TaskCatalog {
 		},
 		{
 			Code:           "shake",
-			Name:           "摇一摇",
-			Description:    "活动接口已下线，默认不再纳入任务批次",
+			Name:           "全网抽抽乐",
+			Description:    "通过新版营销平台抽奖，默认3次；完整奖品和碎片分别记录",
 			SortOrder:      70,
-			DefaultEnabled: false,
-			RunInBatch:     false,
+			DefaultEnabled: true,
+			RunInBatch:     true,
+			Aliases:        []string{"shake_shake"},
 			execute: func(r *TaskRunner) *TaskResult {
 				return r.runShakeTask()
 			},
@@ -246,11 +247,11 @@ func NewTaskCatalog() *TaskCatalog {
 		},
 		{
 			Code:           "cloudphone",
-			Name:           "云手机红包",
-			Description:    "活动接口当前拒绝授权，默认不再纳入任务批次",
+			Name:           "云手机红包派对",
+			Description:    "使用云手机专属SSO登记签到与协议任务，复查云币余额；其余任务依赖真实云机",
 			SortOrder:      160,
-			DefaultEnabled: false,
-			RunInBatch:     false,
+			DefaultEnabled: true,
+			RunInBatch:     true,
 			Aliases:        []string{"cloud_phone_redpack"},
 			execute: func(r *TaskRunner) *TaskResult {
 				return r.runCloudPhoneTask()
@@ -515,6 +516,30 @@ func NewTaskCatalog() *TaskCatalog {
 			Aliases:        []string{"mcloudday"},
 			execute: func(r *TaskRunner) *TaskResult {
 				return r.runMCloudDayTask()
+			},
+		},
+		{
+			Code:           "lantern",
+			Name:           "全网猜谜得红包",
+			Description:    "按已知谜底答题并抽奖，每日最多4次，未知题目跳过；活动状态以服务端为准",
+			SortOrder:      158,
+			DefaultEnabled: true,
+			RunInBatch:     true,
+			Aliases:        []string{"lantern_riddles"},
+			execute: func(r *TaskRunner) *TaskResult {
+				return r.runLanternTask()
+			},
+		},
+		{
+			Code:           "liveflower",
+			Name:           "直播首次赠花",
+			Description:    "领取首次参与赠花并复查红花余额；看播和验证码领奖需在App完成",
+			SortOrder:      159,
+			DefaultEnabled: true,
+			RunInBatch:     true,
+			Aliases:        []string{"live_flower"},
+			execute: func(r *TaskRunner) *TaskResult {
+				return r.runLiveFlowerTask()
 			},
 		},
 	}

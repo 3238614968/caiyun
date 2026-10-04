@@ -10,7 +10,7 @@
 
 生产环境采用统一后端制品 `caiyun-linux`。API、Worker 和数据库迁移通过独立子命令运行，并作为不同进程部署，以确保职责隔离和发布过程可控。
 
-本文功能、配置与构建说明已于 **2026-09-30** 对照仓库实现更新。已有账号的旧版加密凭据可选择兼容读取，具体设置见[旧版凭据兼容](#旧版凭据兼容)。
+本文功能、配置与构建说明已于 **2026-10-04** 对照仓库实现与参考任务脚本更新。已有账号的旧版加密凭据可选择兼容读取，具体设置见[旧版凭据兼容](#旧版凭据兼容)。
 
 ## 目录
 
@@ -56,6 +56,7 @@
 | 多账号协作 | `mail_mutual`：139 邮箱账号互发；`mutual_assist`：许愿、算力和趣玩 AI 活动互助 |
 | 奖励与权益 | `prize_center`、`hidden_rewards`、`upgrade_gift`、`student_perks`、`mcloud_day` |
 | 扩展活动 | `fun_ai_mail`、`family_circle`、`meitu_backup`、`red_invite`、`unloading_1t`、`rafflecode`、`ai_store` |
+| 新增与恢复活动 | `lantern`：猜灯谜得红包；`liveflower`：直播首次赠花；`cloudphone`：云手机红包派对；`shake`：新版全网抽抽乐 |
 | 设备状态 | `notice_switch`、`album_backup_report`：按账号配置真实通知与备份状态 |
 
 - 邮件互发和活动互助仅在**同一网站用户名下的活跃云盘账号**之间执行，至少需要两个账号。
@@ -63,6 +64,8 @@
 - 139 邮箱互发使用云盘账号对应的邮箱授权。网站密码找回邮件使用单独的 SMTP 配置。
 - 云盘凭据到期时优先刷新；单纯到期不会停用账号。连续 3 次刷新/获取 JWT 失败后暂停，更新凭据或手动启用可重置错误计数。
 - 任务完成以服务端状态为准；短信验证码、学生资格、设备真实状态、库存和活动开放条件会影响可执行范围。AI 豆兑换等默认关闭的操作需要主动启用或单独执行。
+- 猜灯谜使用本地已知谜底，每次执行最多抽奖 4 次，服务端返回每日限额即停止；抽抽乐默认抽奖 3 次。直播仅领取首次参与赠花，红包派对仅执行已确认可发币的 `MONTHLY_5`、`INSTALL_1`，并区分任务登记与余额到账。云币、红花和活动奖品不计入云朵收益。
+- 升级后使用新版后端执行 `migrate` 同步任务定义，再重启 API、Worker；原有任务的启用状态会保留。旧版默认关闭的 `cloudphone`、`shake` 需在管理页面主动启用，新增 `lantern`、`liveflower` 默认加入批次。
 
 领奖专区位于「兑换中心 → 领奖专区」。普通用户查询自己的账号，管理员可选择托管账号；查询接口为 `GET /api/v1/exchange/prizes?account_id=账号ID`，附加 `refresh=1` 可强制刷新。
 
@@ -275,6 +278,8 @@ TRUSTED_PROXIES=<proxy-ip-or-cidr>
 | `TASK_SCHEDULE` | `0 8 * * *` | Worker 每日批次的 Cron 时间 |
 | `TASK_CONCURRENCY` | 以部署模板为准 | 同时执行的账号任务数量 |
 | `CAIYUN_MAIL_MUTUAL_MAX_SENDS_PER_RUN` | `20` | 单次邮箱互发任务的最大发信数 |
+| `CAIYUN_TASK_SHAKE_TIMES` | `3` | 单次全网抽抽乐任务的抽奖次数，设为 0 可跳过 |
+| `CAIYUN_TASK_SHAKE_DELAY_MS` | `1500` | 全网抽抽乐两次抽奖之间的间隔（毫秒） |
 | `FIELD_CRYPTO_ALLOW_LEGACY_NO_AAD` | `false` | 是否读取历史无 AAD 的加密凭据 |
 
 活动验证码、奖品 OID 和设备状态按账号配置，配置键追加 `_手机号`，具体键名和前置条件见[实现核对说明](./backend/docs/IMPLEMENTATION_RECHECK.md)。Docker 部署需将这些配置显式传入 Worker 的 `environment` 或 `env_file`。

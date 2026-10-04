@@ -233,7 +233,12 @@ func (t *TokenPKTask) executeTokenPKStep(action tokenPKAction) error {
 	case "aiCamera":
 		err = t.performAICamera()
 	case "aiAssistant":
-		err = t.api.CompleteLingxiChat()
+		// 新版13号任务需要带图对话，纯文本请求不能推进该任务状态。
+		if action.Task.ID == 13 {
+			err = t.performAICamera()
+		} else {
+			err = t.api.CompleteLingxiChat()
+		}
 	case "createNote":
 		err = t.createTempNote()
 	case "shareFile":

@@ -1,125 +1,99 @@
 package tasks
 
 import (
-	"encoding/json"
 	"fmt"
+	"strconv"
+	"strings"
 	"time"
 
+	"caiyun/internal/core/api"
 	"caiyun/internal/core/http"
 	"caiyun/internal/core/logger"
 )
 
-// ShakeTask 摇一摇任务
+// ShakeTask 全网抽抽乐；完整奖品与碎片分开记录。
 type ShakeTask struct {
-	client *http.Client
-	logger *logger.Logger
+	api         *api.CaiyunAPI
+	logger      *logger.Logger
+	lastMessage string
 }
 
-// NewShakeTask 创建摇一摇任务
 func NewShakeTask(client *http.Client, log *logger.Logger) *ShakeTask {
-	return &ShakeTask{
-		client: client,
-		logger: log,
-	}
+	return &ShakeTask{api: api.NewCaiyunAPI(client), logger: log}
 }
 
-// Run 执行摇一摇任务
-func (t *ShakeTask) Run() error {
-	return t.RunWithConfig(15, time.Second)
-}
+func (t *ShakeTask) Message() string { return t.lastMessage }
 
-// RunWithConfig 按指定次数和间隔执行摇一摇
+func (t *ShakeTask) Run() error { return t.RunWithConfig(3, 1500*time.Millisecond) }
+
 func (t *ShakeTask) RunWithConfig(times int, delay time.Duration) error {
+	t.lastMessage = ""
 	if times <= 0 {
+		t.lastMessage = "抽奖次数为0，未发起抽奖"
 		return nil
 	}
-	if delay < 0 {
-		delay = 0
-	}
-
+	draws, wins, fragments, unknown := 0, 0, 0, 0
+	var prizes []string
 	for i := 0; i < times; i++ {
-		result, err := t.shake()
+		resp, err := t.api.ShakeDraw()
 		if err != nil {
-			// 静默失败，继续下一次
-			continue
+			return err
 		}
-
-		// 直接输出结果，保持与原 JS 版本接近的控制台展示风格
-		if result.Explain != "" {
-			fmt.Printf(" [摇一摇] %s\n", result.Explain)
-		} else if result.Img != "" {
-			fmt.Printf(" [摇一摇] %s\n", result.Img)
+		if !responseCodeIs(resp, 0) {
+			return fmt.Errorf("抽抽乐第%d次失败: code=%v %s", i+1, resp.Code, resp.MessageText())
 		}
-
+		result, ok := resp.Result.(map[string]interface{})
+		if !ok {
+			return fmt.Errorf("抽抽乐响应缺少有效 result")
+		}
+		draws++
+		if prize, ok := result["shakePrizeconfig"].(map[string]interface{}); ok {
+			if name, _ := prize["name"].(string); name != "" {
+				need, parseErr := strconv.Atoi(fmt.Sprint(prize["fragment"]))
+				if parseErr == nil && need == 0 {
+					wins++
+					prizes = append(prizes, name)
+				} else if parseErr == nil && need > 0 {
+					fragments++
+					prizes = append(prizes, name+"（碎片）")
+				} else {
+					unknown++
+					prizes = append(prizes, name+"（类型待确认）")
+				}
+			}
+		}
 		if i < times-1 && delay > 0 {
 			time.Sleep(delay)
 		}
 	}
-
-	return nil
-}
-
-// ShakeResult 摇一摇结果
-type ShakeResult struct {
-	ShakePrizeconfig struct {
-		Title string `json:"title"`
-		Name  string `json:"name"`
-	} `json:"shakePrizeconfig"`
-	ShakeRecommend struct {
-		Explain string `json:"explain"`
-		Img     string `json:"img"`
-	} `json:"shakeRecommend"`
-	Explain string `json:"explain"` // 有时直接在顶层
-	Img     string `json:"img"`     // 有时直接在顶层
-}
-
-// shake 执行一次摇一摇
-func (t *ShakeTask) shake() (*ShakeResult, error) {
-	url := "https://caiyun.feixin.10086.cn/market/shake-server/shake/shakeIt?flag=1"
-	headers := map[string]string{
-		"Content-Type": "application/json",
+	parts := []string{fmt.Sprintf("抽奖%d次、完整奖品%d次、碎片%d次", draws, wins, fragments)}
+	if unknown > 0 {
+		parts = append(parts, fmt.Sprintf("奖品类型待确认%d次", unknown))
 	}
-
-	resp, err := t.client.Post(url, headers, nil)
+	if len(prizes) > 0 {
+		parts = append(parts, strings.Join(prizes, "、"))
+	}
+	resp, err := t.api.ShakeFragments()
 	if err != nil {
-		return nil, fmt.Errorf("请求失败: %w", err)
+		return err
 	}
-
-	responseBody, err := t.client.ReadResponseBody(resp)
-	if err != nil {
-		return nil, fmt.Errorf("读取响应失败: %w", err)
+	if !responseCodeIs(resp, 0) {
+		return fmt.Errorf("抽抽乐碎片复查失败: code=%v %s", resp.Code, resp.MessageText())
 	}
-
-	var apiResult struct {
-		Code    int         `json:"code"`
-		Message string      `json:"message"`
-		Msg     string      `json:"msg"`
-		Result  ShakeResult `json:"result"`
+	items, ok := resp.Result.([]interface{})
+	if !ok {
+		return fmt.Errorf("抽抽乐碎片响应缺少有效 result")
 	}
-	if err := json.Unmarshal([]byte(responseBody), &apiResult); err != nil {
-		return nil, fmt.Errorf("解析响应失败: %w", err)
-	}
-
-	code := apiResult.Code
-	if code != 0 {
-		msg := apiResult.Message
-		if msg == "" {
-			msg = apiResult.Msg
+	for _, item := range items {
+		row, _ := item.(map[string]interface{})
+		prize, _ := row["shakePrizeconfig"].(map[string]interface{})
+		if have := responseNumber(row["fragmentNum"]); have > 0 {
+			parts = append(parts, fmt.Sprintf("%v碎片%d/%d", prize["name"], have, responseNumber(prize["fragment"])))
 		}
-		return nil, fmt.Errorf("摇一摇失败: code=%d, msg=%s", code, msg)
 	}
-
-	// 兼容不同返回结构，统一映射到 Explain/Img
-	result := &apiResult.Result
-	if result.ShakeRecommend.Explain != "" {
-		result.Explain = result.ShakeRecommend.Explain
+	t.lastMessage = strings.Join(parts, "；")
+	if t.logger != nil {
+		t.logger.Info(t.lastMessage)
 	}
-	if result.ShakeRecommend.Img != "" {
-		result.Img = result.ShakeRecommend.Img
-	}
-	if result.ShakePrizeconfig.Title != "" || result.ShakePrizeconfig.Name != "" {
-		result.Explain = result.ShakePrizeconfig.Title + result.ShakePrizeconfig.Name
-	}
-
-	return result, nil
+	return nil
 }

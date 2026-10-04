@@ -26,9 +26,40 @@ func (r *TaskRunner) runGardenTask() *TaskResult {
 // runCloudPhoneTask 执行云手机红包派对任务
 func (r *TaskRunner) runCloudPhoneTask() *TaskResult {
 	startTime := time.Now()
+	phone, _, err := r.activityAccountContext()
+	if err != nil {
+		return activityTaskResult("cloudphone", startTime, err, "", "")
+	}
 	task := tasks.NewCloudPhonePartyTask(r.httpClient, r.logger, r.storage)
+	task.SetAccountPhone(phone)
+	err = task.Run()
+	result := activityTaskResult("cloudphone", startTime, err, task.Message(), "云手机红包派对协议任务执行完成")
+	if err == nil && task.Pending() {
+		result.Status = "pending"
+	}
+	return result
+}
+
+func (r *TaskRunner) runLanternTask() *TaskResult {
+	startTime := time.Now()
+	task := tasks.NewLanternTask(r.httpClient, r.logger)
 	err := task.Run()
-	return taskResultFromErr("cloudphone", startTime, err, "云手机红包派对任务执行成功")
+	result := activityTaskResult("lantern", startTime, err, task.Message(), "灯谜活动执行完成")
+	if err == nil && task.Pending() {
+		result.Status = "pending"
+	}
+	return result
+}
+
+func (r *TaskRunner) runLiveFlowerTask() *TaskResult {
+	startTime := time.Now()
+	task := tasks.NewLiveFlowerTask(r.httpClient, r.logger)
+	err := task.Run()
+	result := activityTaskResult("liveflower", startTime, err, task.Message(), "直播首次赠花执行完成")
+	if err == nil && task.Pending() {
+		result.Status = "pending"
+	}
+	return result
 }
 
 // runCloudBattleTask 执行云朵大战任务

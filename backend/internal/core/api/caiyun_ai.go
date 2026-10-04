@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/rand"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"image"
 	"image/color"
@@ -38,7 +39,7 @@ func (api *CaiyunAPI) buildAIHeaders(useClientInfo bool) map[string]string {
 		headers["x-yun-app-channel"] = "101"
 		return headers
 	}
-	headers["Accept"] = "*/*"
+	headers["Accept"] = "application/json"
 	headers["x-DeviceInfo"] = "||36|12.5.4||MI 8|" + tid + "||android 10|||||"
 	return headers
 }
@@ -72,7 +73,7 @@ func (api *CaiyunAPI) isAICameraChatSuccess(text string) bool {
 // 拿到 fileId，再用该 fileId 以 sendType=3 调用 aiRecognize，最后发起带
 // command 036/036006 与同一无线图片附件的灵犀对话。旧实现用 base64+sendType=2
 // 且强依赖识图响应里的 fileId（服务端恒为 null），导致任务永不完成。
-func (api *CaiyunAPI) CompleteAICameraTask() error {
+func (api *CaiyunAPI) CompleteAICameraTask() (taskErr error) {
 	userDomainID := strings.TrimSpace(api.client.GetUserDomainID())
 	if userDomainID == "" {
 		return fmt.Errorf("缺少 userDomainId")
@@ -82,6 +83,16 @@ func (api *CaiyunAPI) CompleteAICameraTask() error {
 	if err != nil {
 		return err
 	}
+	// 仅回收本次生成的唯一素材；成功和失败路径都不会在云盘根目录累积临时图。
+	defer func() {
+		resp, err := NewFileAPI(api.client).DeleteFiles([]string{fileID})
+		if err == nil && (resp == nil || (resp.Code != "0" && resp.Code != "0000" && !(resp.Success && resp.Code == ""))) {
+			err = fmt.Errorf("回收AI相机临时图未成功")
+		}
+		if err != nil {
+			taskErr = errors.Join(taskErr, fmt.Errorf("回收AI相机临时图: %w", err))
+		}
+	}()
 
 	recognizeBody := map[string]interface{}{
 		"channelId":     "101",
@@ -183,7 +194,7 @@ func (api *CaiyunAPI) uploadAICameraSample() (string, string, error) {
 		return "", "", err
 	}
 
-	fileName := fmt.Sprintf("wx_camera_%d.jpg", time.Now().UnixMilli())
+	fileName := fmt.Sprintf("wx_camera_%d.jpg", time.Now().UnixNano())
 	fileAPI := NewFileAPI(api.client)
 	uploaded, err := fileAPI.UploadRandomFile(&UploadRandomFileRequest{
 		ParentFileID: "/",

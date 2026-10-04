@@ -37,10 +37,10 @@ func (r *TaskRunner) runWxDrawTask() *TaskResult {
 func (r *TaskRunner) runShakeTask() *TaskResult {
 	startTime := time.Now()
 	task := tasks.NewShakeTask(r.httpClient, r.logger)
-	shakeTimes := readTaskEnvInt("CAIYUN_TASK_SHAKE_TIMES", 15)
-	shakeDelayMs := readTaskEnvInt("CAIYUN_TASK_SHAKE_DELAY_MS", 1000)
+	shakeTimes := readTaskEnvInt("CAIYUN_TASK_SHAKE_TIMES", 3)
+	shakeDelayMs := readTaskEnvInt("CAIYUN_TASK_SHAKE_DELAY_MS", 1500)
 	err := task.RunWithConfig(shakeTimes, time.Duration(shakeDelayMs)*time.Millisecond)
-	return taskResultFromErr("shake", startTime, err, "摇一摇任务执行成功")
+	return activityTaskResult("shake", startTime, err, task.Message(), "全网抽抽乐执行完成")
 }
 
 // runTodayCloudTask 执行今日云朵任务
