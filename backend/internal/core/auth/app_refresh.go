@@ -4,14 +4,20 @@ import (
 	"context"
 	"crypto/aes"
 	"crypto/cipher"
+	"crypto/md5"
 	"crypto/rand"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"net/url"
+	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
+
+	corehttp "caiyun/internal/core/http"
+	"github.com/google/uuid"
 )
 
 const (
@@ -22,6 +28,11 @@ const (
 	authOkHTTPUA            = "okhttp/4.12.0"
 	authTargetSourceID      = "001005"
 	authQuerySpecTokenURL   = "https://orches.yun.139.com/orchestration/auth-rebuild/token/v1.0/querySpecToken"
+	tyrzLoginURL            = "https://m.mcloud.139.com/ycloud/auth-service/auth/tyrzLogin"
+	tyrzTimestampURL        = "https://m.mcloud.139.com/ycloud/api/timestamp"
+	tyrzLoginSigningKey     = "sekaMdYYLIZfbCfm"
+	tyrzTimestampTimeout    = 5 * time.Second
+	tyrzLoginTimeout        = 10 * time.Second
 )
 
 func appRefreshAESKey() []byte {
@@ -237,59 +248,120 @@ func (a *Auth) tyrzLoginWithCandidatesContext(ctx context.Context, ssoToken stri
 		return "", fmt.Errorf("ssoToken 为空")
 	}
 
-	candidates := []string{
-		"https://caiyun.feixin.10086.cn:7071/portal/auth/tyrzLogin.action?ssoToken=" + url.QueryEscape(ssoToken),
-		"https://m.mcloud.139.com/portal/auth/tyrzLogin.action?ssoToken=" + url.QueryEscape(ssoToken),
+	timestamp := a.tyrzTimestampContext(ctx)
+	headers := tyrzLoginSignHeaders(timestamp)
+	headers["Content-Type"] = "application/json;charset=UTF-8"
+	body := struct {
+		Token       string `json:"token"`
+		OpenAccount int    `json:"openAccount"`
+		MarketName  string `json:"marketName"`
+		SourceID    string `json:"sourceId"`
+	}{
+		Token:       ssoToken,
+		OpenAccount: 0,
+		MarketName:  "sign_in_3",
+		SourceID:    "1097",
 	}
 
-	var lastErr error
-	for round := 1; round <= 3; round++ {
-		for _, candidate := range candidates {
-			if err := ctx.Err(); err != nil {
-				return "", err
-			}
-			u, _ := url.Parse(candidate)
-			headers := map[string]string{
-				"User-Agent": authWebViewUA,
-				"Accept":     "*/*",
-				"Host":       u.Host,
-			}
+	requestCtx, cancel := context.WithTimeout(ctx, tyrzLoginTimeout)
+	defer cancel()
+	resp, err := a.client.RequestWithContextOptions(
+		requestCtx,
+		http.MethodPost,
+		tyrzLoginURL,
+		headers,
+		body,
+		corehttp.WithoutAccountCredentials(),
+	)
+	if err != nil {
+		return "", fmt.Errorf("请求新版 tyrzLogin 失败: %w", err)
+	}
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		_, _ = a.client.ReadResponseBody(resp)
+		return "", fmt.Errorf("新版 tyrzLogin HTTP 状态异常: %d", resp.StatusCode)
+	}
 
-			resp, err := a.client.PostWithContext(ctx, candidate, headers, map[string]interface{}{})
-			if err != nil {
-				lastErr = err
-				continue
+	responseJWT := strings.TrimSpace(resp.Header.Get("jwttoken"))
+	responseCookies := resp.Cookies()
+	responseBody, err := a.client.ReadResponseBody(resp)
+	if err != nil {
+		return "", fmt.Errorf("读取新版 tyrzLogin 响应失败: %w", err)
+	}
+	var result TyrzLoginResp
+	if err := json.Unmarshal([]byte(responseBody), &result); err != nil {
+		return "", fmt.Errorf("解析新版 tyrzLogin 响应失败: %w", err)
+	}
+	if result.Code != 0 {
+		return "", fmt.Errorf("新版 tyrzLogin 业务失败: code=%d", result.Code)
+	}
+	if responseJWT == "" {
+		for _, cookie := range responseCookies {
+			if cookie.Name == "jwtToken" {
+				responseJWT = strings.TrimSpace(cookie.Value)
+				break
 			}
-
-			body, readErr := a.client.ReadResponseBody(resp)
-			if readErr != nil {
-				lastErr = readErr
-				continue
-			}
-			if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-				lastErr = fmt.Errorf("HTTP %d", resp.StatusCode)
-				continue
-			}
-
-			var result TyrzLoginResp
-			if err := json.Unmarshal([]byte(body), &result); err != nil {
-				lastErr = fmt.Errorf("解析响应失败: %w", err)
-				continue
-			}
-			if result.Code == 0 && result.Result.Token != "" {
-				return result.Result.Token, nil
-			}
-			lastErr = fmt.Errorf("JWT token 为空")
 		}
-		if err := sleepAuthContext(ctx, time.Duration(600*round)*time.Millisecond); err != nil {
-			return "", err
+	}
+	if responseJWT == "" {
+		return "", fmt.Errorf("新版 tyrzLogin 响应未返回 JWT")
+	}
+	return responseJWT, nil
+}
+
+type tyrzTimestampResponse struct {
+	Result json.RawMessage `json:"result"`
+}
+
+func (a *Auth) tyrzTimestampContext(ctx context.Context) string {
+	fallback := strconv.FormatInt(time.Now().UnixMilli(), 10)
+	requestCtx, cancel := context.WithTimeout(ctx, tyrzTimestampTimeout)
+	defer cancel()
+	resp, err := a.client.RequestWithContextOptions(
+		requestCtx,
+		http.MethodGet,
+		tyrzTimestampURL,
+		nil,
+		nil,
+		corehttp.WithoutAccountCredentials(),
+	)
+	if err != nil || resp == nil || resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		if resp != nil {
+			_, _ = a.client.ReadResponseBody(resp)
+		}
+		return fallback
+	}
+	body, err := a.client.ReadResponseBody(resp)
+	if err != nil {
+		return fallback
+	}
+	var result tyrzTimestampResponse
+	if err := json.Unmarshal([]byte(body), &result); err != nil || len(result.Result) == 0 {
+		return fallback
+	}
+	var timestampString string
+	if err := json.Unmarshal(result.Result, &timestampString); err == nil {
+		if timestamp, err := strconv.ParseInt(strings.TrimSpace(timestampString), 10, 64); err == nil && timestamp > 0 {
+			return strconv.FormatInt(timestamp, 10)
 		}
 	}
-
-	if lastErr == nil {
-		lastErr = fmt.Errorf("多候选重试后仍失败")
+	var timestamp int64
+	if err := json.Unmarshal(result.Result, &timestamp); err == nil && timestamp > 0 {
+		return strconv.FormatInt(timestamp, 10)
 	}
-	return "", lastErr
+	return fallback
+}
+
+func tyrzLoginSignHeaders(timestamp string) map[string]string {
+	requestID := uuid.NewString()
+	nonce := uuid.NewString()
+	signatureInput := tyrzLoginSigningKey + requestID + timestamp + nonce + tyrzLoginSigningKey
+	signature := md5.Sum([]byte(signatureInput))
+	return map[string]string{
+		"x-request-id": requestID,
+		"x-timestamp":  timestamp,
+		"x-nonce":      nonce,
+		"x-signature":  hex.EncodeToString(signature[:]),
+	}
 }
 
 func sleepAuthContext(ctx context.Context, delay time.Duration) error {

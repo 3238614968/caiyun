@@ -148,13 +148,14 @@ func WithCircuitBreakerConfig(config CircuitBreakerConfig) ClientOption {
 	}
 }
 
-// RequestOption controls opt-in retry behavior for a single request.
+// RequestOption controls retry and credential behavior for a single request.
 // Safe methods (GET, HEAD and OPTIONS) retry by default; all other methods
 // require an explicit idempotency guarantee.
 type RequestOption func(*requestOptions)
 
 type requestOptions struct {
-	idempotencyKey string
+	idempotencyKey            string
+	disableAccountCredentials bool
 }
 
 // WithIdempotencyKey opts a request into retries and sends Idempotency-Key.
@@ -166,6 +167,15 @@ func WithIdempotencyKey(key string) RequestOption {
 		if key != "" {
 			options.idempotencyKey = key
 		}
+	}
+}
+
+// WithoutAccountCredentials suppresses account Authorization/JWT headers and
+// the shared cookie jar for a single request. Use it for login endpoints that
+// establish credentials through their request body.
+func WithoutAccountCredentials() RequestOption {
+	return func(options *requestOptions) {
+		options.disableAccountCredentials = true
 	}
 }
 
@@ -570,6 +580,14 @@ func (c *Client) RequestWithContextOptions(ctx context.Context, method, reqURL s
 		}
 
 		allHeaders := c.buildHeaders(reqURL, headers)
+		if requestOptions.disableAccountCredentials {
+			for key := range allHeaders {
+				switch strings.ToLower(key) {
+				case "authorization", "jwttoken", "jwt-token", "cookie":
+					delete(allHeaders, key)
+				}
+			}
+		}
 		if requestOptions.idempotencyKey != "" {
 			allHeaders["Idempotency-Key"] = requestOptions.idempotencyKey
 		}
@@ -579,7 +597,15 @@ func (c *Client) RequestWithContextOptions(ctx context.Context, method, reqURL s
 			req.Header[key] = []string{value}
 		}
 
-		resp, err := c.client.Do(req)
+		httpClient := c.client
+		if requestOptions.disableAccountCredentials && c.client.Jar != nil {
+			httpClient = &http.Client{
+				Transport:     c.client.Transport,
+				CheckRedirect: c.client.CheckRedirect,
+				Timeout:       c.client.Timeout,
+			}
+		}
+		resp, err := httpClient.Do(req)
 		if err != nil {
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				return nil, ctxErr
