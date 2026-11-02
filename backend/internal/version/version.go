@@ -1,6 +1,18 @@
 package version
 
-import "runtime"
+import (
+	"fmt"
+	"runtime"
+	"strings"
+)
+
+// Annotate ties a persisted execution result to the process that produced it.
+func Annotate(message string) string {
+	if strings.Contains(message, " | build=") {
+		return message
+	}
+	return fmt.Sprintf("%s | build=%s commit=%s built_at=%s", message, Version, Commit, BuildTime)
+}
 
 var (
 	// Version, Commit and BuildTime are populated by -ldflags during release builds.

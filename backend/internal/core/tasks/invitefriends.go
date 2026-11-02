@@ -5,9 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/rand"
+	"net/url"
+	"strings"
 	"time"
 
-	"caiyun/internal/core/api"
 	"caiyun/internal/core/http"
 	"caiyun/internal/core/logger"
 	"caiyun/internal/core/utils"
@@ -15,10 +16,17 @@ import (
 
 // InviteFriendsTask 邀请好友看电影任务（分享有奖）
 type InviteFriendsTask struct {
-	client *http.Client
-	logger *logger.Logger
-	phone  string
+	client  *http.Client
+	logger  *logger.Logger
+	phone   string
+	pending bool
+	message string
 }
+
+const inviteShareAttempts = 3
+
+// inviteShareRetryDelay 为分享上报重试的退避基数（毫秒），测试可调小。
+var inviteShareRetryDelay = 1000
 
 // NewInviteFriendsTask 创建邀请好友看电影任务
 func NewInviteFriendsTask(client *http.Client, log *logger.Logger) *InviteFriendsTask {
@@ -36,53 +44,62 @@ func (t *InviteFriendsTask) SetPhone(phone string) *InviteFriendsTask {
 
 // Run 执行邀请好友看电影任务
 func (t *InviteFriendsTask) Run() error {
+	t.pending, t.message = false, ""
 	t.logger.Start("------【邀请好友看电影】------")
-	t.logger.Info("测试中。。。")
-
-	// 获取本月剩余分享次数
-	remaining := t.getRemainingShareCount()
+	remaining, err := t.getRemainingShareCount()
+	if err != nil {
+		return err
+	}
 	if remaining <= 0 {
-		t.logger.Info("本月已分享")
+		t.message = "本月20次分享奖励已确认；待领云朵由领取任务统一处理"
 		return nil
 	}
-
-	// 尝试首次分享
-	t.shareToDatacenter()
-	utils.Sleep(1000)
-
-	// 领取云朵
-	t.receiveCloud()
-	utils.Sleep(1000)
-
-	remaining--
-
-	// 继续分享
-	for remaining > 0 {
-		remaining--
-		t.logger.Debug("邀请好友")
-		t.shareToDatacenter()
-		utils.Sleep(2000)
+	confirmed := 0
+	for attempt := 0; attempt < 20 && remaining > 0; attempt++ {
+		if err := t.shareToDatacenter(); err != nil {
+			// 上报失败多为容器内 DNS 抖动或网关限流；保留待重试状态，
+			// 不把整批任务判失败（下次运行会继续补分享）。
+			t.pending = true
+			t.message = fmt.Sprintf("分享事件上报未完成（%v）；本月剩余%d次，待下次重试", err, remaining)
+			t.logger.Warn(t.message)
+			return nil
+		}
+		utils.Sleep(1000)
+		after, err := t.getRemainingShareCount()
+		if err != nil {
+			return fmt.Errorf("分享后复查奖励流水: %w", err)
+		}
+		if after >= remaining {
+			t.pending = true
+			break
+		}
+		confirmed += remaining - after
+		remaining = after
 	}
-
-	// 最终领取
-	t.receiveCloud()
-
+	t.message = fmt.Sprintf("服务端新确认分享奖励%d次，本月剩余%d次；待领云朵由领取任务统一处理", confirmed, remaining)
+	if t.pending {
+		t.message += "；本次分享已提交，等待服务端奖励记录"
+	}
 	return nil
 }
 
+func (t *InviteFriendsTask) Pending() bool   { return t.pending }
+func (t *InviteFriendsTask) Message() string { return t.message }
+
 // getRemainingShareCount 获取本月剩余分享次数（每月20次）
-func (t *InviteFriendsTask) getRemainingShareCount() int {
+func (t *InviteFriendsTask) getRemainingShareCount() (int, error) {
 	records, err := t.getCloudRecord()
 	if err != nil {
-		return 20 // 默认20次
+		return 0, err
 	}
 
 	// 统计本月分享次数
-	now := time.Now()
+	zone := time.FixedZone("CST", 8*60*60)
+	now := time.Now().In(zone)
 	count := 0
 	for _, record := range records {
 		if record.Mark == "fxnrplus5" {
-			recordTime, err := time.Parse("2006-01-02 15:04:05", record.UpdateTime)
+			recordTime, err := time.ParseInLocation("2006-01-02 15:04:05", record.UpdateTime, zone)
 			if err != nil {
 				continue
 			}
@@ -92,7 +109,7 @@ func (t *InviteFriendsTask) getRemainingShareCount() int {
 		}
 	}
 
-	return 20 - count
+	return max(0, 20-count), nil
 }
 
 // CloudRecord 云朵记录
@@ -118,10 +135,13 @@ func (t *InviteFriendsTask) getCloudRecord() ([]CloudRecord, error) {
 	if err != nil {
 		return nil, fmt.Errorf("读取响应失败: %w", err)
 	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("查询分享奖励流水 HTTP %d", resp.StatusCode)
+	}
 
 	var result struct {
-		Code    int    `json:"code"`
-		Message string `json:"msg"`
+		Code    interface{} `json:"code"`
+		Message string      `json:"msg"`
 		Result  struct {
 			Records []CloudRecord `json:"records"`
 		} `json:"result"`
@@ -129,12 +149,15 @@ func (t *InviteFriendsTask) getCloudRecord() ([]CloudRecord, error) {
 	if err := json.Unmarshal([]byte(responseBody), &result); err != nil {
 		return nil, fmt.Errorf("解析响应失败: %w", err)
 	}
+	if fmt.Sprint(result.Code) != "0" || result.Result.Records == nil {
+		return nil, fmt.Errorf("查询分享奖励流水失败: code=%v %s", result.Code, result.Message)
+	}
 
 	return result.Result.Records, nil
 }
 
 // shareToDatacenter 分享到数据中心（模拟分享行为）
-func (t *InviteFriendsTask) shareToDatacenter() {
+func (t *InviteFriendsTask) shareToDatacenter() error {
 	// 构造分享事件数据
 	eventData := t.buildShareEventData()
 	encodedData := base64.StdEncoding.EncodeToString([]byte(eventData))
@@ -148,16 +171,31 @@ func (t *InviteFriendsTask) shareToDatacenter() {
 		"platform":     "h5",
 	}
 
-	body := fmt.Sprintf("data=%s&ext=crc=%d", encodedData, crc)
+	body := url.Values{"data": {encodedData}, "ext": {fmt.Sprintf("crc=%d", crc)}}.Encode()
 
-	resp, err := t.client.Post("https://datacenter.mail.10086.cn/datacenter/", headers, body)
-	if err != nil {
-		t.logger.Error("分享有奖异常", err)
-		return
+	// 分享事件是不可撤销的埋点上报，重试只会重复一次事件，不会重复领奖；
+	// 网络/DNS 抖动在容器里很常见，这里做退避重试。
+	const attempts = inviteShareAttempts
+	var lastErr error
+	for attempt := 1; attempt <= attempts; attempt++ {
+		resp, err := t.client.Post("https://datacenter.mail.10086.cn/datacenter/", headers, body)
+		if err != nil {
+			lastErr = err
+			if attempt < attempts {
+				utils.Sleep(attempt * inviteShareRetryDelay)
+				continue
+			}
+			break
+		}
+		if _, err := t.client.ReadResponseBody(resp); err != nil {
+			return err
+		}
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			return fmt.Errorf("分享有奖 HTTP %d", resp.StatusCode)
+		}
+		return nil
 	}
-	if resp != nil {
-		resp.Body.Close()
-	}
+	return fmt.Errorf("分享有奖请求失败（已重试%d次）: %w", attempts, lastErr)
 }
 
 // calcCRC 计算 CRC（对应 mjs gf 函数）
@@ -219,7 +257,7 @@ func (t *InviteFriendsTask) buildShareEventData() string {
 		"source":               "content-open",
 		"urlPath":              "",
 		"IP":                   "",
-		"url":                  fmt.Sprintf("https://h.139.com/content/discoverNewVersion?columnId=20&token=STuid00000%d%s&targetSourceId=001005", now.UnixMilli(), utils.RandomString(20)),
+		"url":                  "https://h.139.com/content/discoverNewVersion?" + url.Values{"columnId": {"20"}, "token": {strings.TrimSpace(t.client.GetSSOToken())}, "targetSourceId": {"001005"}}.Encode(),
 		"elementName":          "",
 		"browser":              "Chrome WebView",
 		"elementTargetUrl":     "",
@@ -240,20 +278,4 @@ func (t *InviteFriendsTask) buildShareEventData() string {
 
 	data, _ := json.Marshal(event)
 	return string(data)
-}
-
-// receiveCloud 领取云朵
-func (t *InviteFriendsTask) receiveCloud() {
-	resp, err := api.NewCaiyunAPI(t.client).ReceivePendingCloudRewards()
-	if err != nil {
-		t.logger.Error("领取云朵失败", err)
-		return
-	}
-	if resp != nil && !resp.IsSuccess() {
-		msg := resp.MessageText()
-		if msg == "" {
-			msg = "领取云朵失败"
-		}
-		t.logger.Error("领取云朵失败", fmt.Errorf("%s", msg))
-	}
 }

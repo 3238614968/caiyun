@@ -25,7 +25,8 @@ func cloneExchangeWarmSession(base *exchangePreparedSession) *exchangePreparedSe
 	session := *base.http
 	session.client = client
 	session.captchaTID = ""
-	return &exchangePreparedSession{auth: base.auth, http: &session, sourceAuth: base.sourceAuth}
+	credentials := *base.auth
+	return &exchangePreparedSession{auth: &credentials, http: &session, sourceAuth: base.sourceAuth}
 }
 
 func (s *ExchangeScheduler) storeWarmSession(taskID, accountID uint, prepared *exchangePreparedSession) {

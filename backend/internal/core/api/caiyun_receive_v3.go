@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strconv"
@@ -14,6 +15,9 @@ const maxCloudClaimsPerRun = 200
 // account session. Aggregate/future entries without an eligible ID are skipped.
 func (api *CaiyunAPI) receivePendingCloudRewardsV3() (*CaiyunResponse, error) {
 	api.prepareSignInCenterSession(true)
+	if err := api.client.EnsureShumeiDeviceIDWithUserAgent(context.Background(), MarketUserAgent); err != nil {
+		return nil, fmt.Errorf("领取云朵设备认证失败，未提交领取: %w", err)
+	}
 	deviceID := strings.TrimSpace(api.client.GetDeviceID())
 	if deviceID == "" {
 		return nil, fmt.Errorf("领取云朵缺少设备标识")
@@ -54,9 +58,13 @@ func (api *CaiyunAPI) receivePendingCloudRewardsV3() (*CaiyunResponse, error) {
 				if ack != nil {
 					message = ack.MessageText()
 				}
-				claimErr = fmt.Errorf("领取云朵业务失败: %s", message)
+				var code interface{}
+				if ack != nil {
+					code = ack.Code
+				}
+				claimErr = fmt.Errorf("领取云朵业务失败: code=%v %s", code, message)
 			}
-			issues = append(issues, claimErr)
+			issues = append(issues, fmt.Errorf("云朵记录%d: %w", id, claimErr))
 			// A mutation with an ambiguous response is not blindly retried.
 			continue
 		}
@@ -84,6 +92,13 @@ func (api *CaiyunAPI) receivePendingCloudRewardsV3() (*CaiyunResponse, error) {
 		}
 		received += amount
 		claimed++
+	}
+	// Even a rejected/ambiguous acknowledgement may race with another claim.
+	// Re-read pending state before reporting the amount left from an old snapshot.
+	if len(issues) > 0 {
+		if latest, checkErr := api.getCloudInfoPrepared(); checkErr == nil && latest != nil && latest.IsSuccess() && latest.Result.ReceiveList != nil {
+			current = latest
+		}
 	}
 	if current.Result.ToReceive > 0 {
 		issues = append(issues, fmt.Errorf("仍有%d云朵待领取", current.Result.ToReceive))

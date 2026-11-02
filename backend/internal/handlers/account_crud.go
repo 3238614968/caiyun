@@ -1,10 +1,12 @@
 package handlers
 
 import (
+	"errors"
 	"log"
 	"net/http"
 	"strconv"
 
+	"caiyun/internal/core/auth"
 	"caiyun/internal/dto"
 	"caiyun/internal/services"
 	"caiyun/internal/utils"
@@ -285,9 +287,13 @@ func (h *AccountHandler) RefreshToken(c *gin.Context) {
 
 	// 刷新Token
 	if err := h.accountService.RefreshTokenContext(c.Request.Context(), account); err != nil {
+		if errors.Is(err, services.ErrAccountLoginBusy) || errors.Is(err, auth.ErrCredentialExpired) {
+			respondAccountWriteError(c, err)
+			return
+		}
 		// 服务端打日志便于排查 500
 		log.Printf("[RefreshToken] account_id=%d phone=%s err=%v", accountID, utils.MaskPhone(account.Phone), err)
-		respondInternalServer(c)
+		respondInternalServer(c, err)
 		return
 	}
 

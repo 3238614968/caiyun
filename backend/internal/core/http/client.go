@@ -155,6 +155,13 @@ type RequestOption func(*requestOptions)
 
 type requestOptions struct {
 	idempotencyKey string
+	timeout        time.Duration
+}
+
+// WithRequestTimeout overrides the timeout for this request, including body reads,
+// while preserving the shared transport and cookie jar.
+func WithRequestTimeout(timeout time.Duration) RequestOption {
+	return func(options *requestOptions) { options.timeout = timeout }
 }
 
 // WithIdempotencyKey opts a request into retries and sends Idempotency-Key.
@@ -237,6 +244,17 @@ func (c *Client) SetAuth(auth string) {
 		auth = strings.TrimSpace(auth[6:])
 	}
 	c.auth = auth
+	// The App WebView carries its current Basic payload as cookieTokenKey.
+	// Keep this account credential scoped to the activity host; public downloads
+	// use the separate credential-free client.
+	if c.cookieJar != nil {
+		u, _ := url.Parse("https://m.mcloud.139.com/")
+		cookie := &http.Cookie{Name: "cookieTokenKey", Path: "/", Secure: true, MaxAge: -1}
+		if decoded, err := base64.StdEncoding.DecodeString(auth); err == nil && strings.Count(string(decoded), ":") >= 2 {
+			cookie.Value, cookie.MaxAge = url.QueryEscape(auth), 0
+		}
+		c.cookieJar.SetCookies(u, []*http.Cookie{cookie})
+	}
 }
 
 // SetJWTToken 设置 JWT Token
@@ -287,6 +305,8 @@ func (c *Client) SetClientInfo(info string) {
 	c.deviceInfo = info
 }
 
+func (c *Client) GetClientInfo() string { return c.clientInfo }
+
 // GetJWTToken 获取当前 JWT Token
 func (c *Client) GetJWTToken() string {
 	return c.jwtToken
@@ -316,6 +336,14 @@ func (c *Client) SetDeviceID(deviceID string) {
 
 // EnsureShumeiDeviceID 懒加载数美 deviceprofile/v4 deviceId。
 func (c *Client) EnsureShumeiDeviceID(ctx context.Context) error {
+	return c.EnsureShumeiDeviceIDWithUserAgent(ctx, c.userAgent)
+}
+
+func (c *Client) EnsureShumeiDeviceIDWithUserAgent(ctx context.Context, userAgent string) error {
+	return c.EnsureShumeiDeviceIDForPage(ctx, userAgent, "")
+}
+
+func (c *Client) EnsureShumeiDeviceIDForPage(ctx context.Context, userAgent, pageURL string) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -326,7 +354,7 @@ func (c *Client) EnsureShumeiDeviceID(ctx context.Context) error {
 			c.setDeviceID(manualDeviceID, true)
 		} else {
 			var deviceID string
-			deviceID, err = shumei.FetchDeviceID(ctx, c.client, "")
+			deviceID, err = shumei.FetchDeviceIDForPage(ctx, c.client, "", userAgent, pageURL)
 			if err == nil && deviceID != "" {
 				c.setDeviceID(deviceID, true)
 			}
@@ -378,42 +406,7 @@ func (c *Client) setDeviceID(deviceID string, deviceLive bool) {
 }
 
 func (c *Client) seedMarketDeviceCookie(deviceID, account string) {
-	cookieValue := shumei.CookieDeviceValue(deviceID)
-	if cookieValue == "" {
-		return
-	}
-
-	c.SetCookie(".thumbcache_caiyun", cookieValue, "m.mcloud.139.com")
-	if cookieName := marketDeviceCookieName(account); cookieName != "" {
-		c.SetCookie(cookieName, cookieValue, "m.mcloud.139.com")
-	}
-}
-
-func marketDeviceCookieName(account string) string {
-	account = strings.TrimSpace(account)
-	if account == "" {
-		return ""
-	}
-
-	var builder strings.Builder
-	for _, r := range account {
-		switch {
-		case r >= '0' && r <= '9':
-			builder.WriteRune(r)
-		case r >= 'a' && r <= 'z':
-			builder.WriteRune(r)
-		case r >= 'A' && r <= 'Z':
-			builder.WriteRune(r)
-		case r == '_' || r == '-':
-			builder.WriteRune(r)
-		default:
-			builder.WriteByte('_')
-		}
-	}
-	if builder.Len() == 0 {
-		return ""
-	}
-	return ".thumbcache_" + builder.String()
+	shumei.SeedDeviceCookies(c.cookieJar, "https://m.mcloud.139.com/", deviceID, "")
 }
 
 // GetCookies 获取指定域名的所有 Cookie
@@ -464,14 +457,20 @@ func (c *Client) buildHeaders(reqURL string, customHeaders map[string]string) ma
 		headers["Authorization"] = "Basic " + c.auth
 	}
 
-	// 覆盖自定义请求头
+	// HTTP field names are case-insensitive. Merge defaults before overrides,
+	// otherwise jwtToken/jwttoken become two values on the wire and custom
+	// x-deviceinfo can coexist with (rather than replace) x-DeviceInfo.
+	merged := make(map[string]string, len(headers)+len(customHeaders))
+	for key, value := range headers {
+		merged[http.CanonicalHeaderKey(key)] = value
+	}
 	for key, value := range customHeaders {
 		if value != "" {
-			headers[key] = value
+			merged[http.CanonicalHeaderKey(key)] = value
 		}
 	}
 
-	return headers
+	return merged
 }
 
 // Request HTTP 请求方法。GET、HEAD 和 OPTIONS 会在网络错误、超时或
@@ -509,6 +508,12 @@ func (c *Client) RequestWithContextOptions(ctx context.Context, method, reqURL s
 		if apply != nil {
 			apply(&requestOptions)
 		}
+	}
+	requestClient := c.client
+	if requestOptions.timeout > 0 {
+		localClient := *c.client
+		localClient.Timeout = requestOptions.timeout
+		requestClient = &localClient
 	}
 
 	maxRetries := 0
@@ -574,12 +579,10 @@ func (c *Client) RequestWithContextOptions(ctx context.Context, method, reqURL s
 			allHeaders["Idempotency-Key"] = requestOptions.idempotencyKey
 		}
 		for key, value := range allHeaders {
-			// 直接设置 header map，避免 key 被规范化。部分上游只识别
-			// 小写 header key（如 jwttoken）。
-			req.Header[key] = []string{value}
+			req.Header.Set(key, value)
 		}
 
-		resp, err := c.client.Do(req)
+		resp, err := requestClient.Do(req)
 		if err != nil {
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				return nil, ctxErr
@@ -658,6 +661,10 @@ func (c *Client) GetWithContext(ctx context.Context, url string, headers map[str
 // Post POST 请求
 func (c *Client) Post(url string, headers map[string]string, body interface{}) (*http.Response, error) {
 	return c.Request("POST", url, headers, body)
+}
+
+func (c *Client) PostWithTimeout(url string, headers map[string]string, body interface{}, timeout time.Duration) (*http.Response, error) {
+	return c.RequestWithOptions("POST", url, headers, body, WithRequestTimeout(timeout))
 }
 
 func (c *Client) PostWithContext(ctx context.Context, url string, headers map[string]string, body interface{}) (*http.Response, error) {

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"math"
 	"net/http"
 	"net/url"
 	"os"
@@ -29,10 +30,11 @@ type SmsApiResponse struct {
 
 // SlideSolveResult 表示滑块识别服务返回的结果。
 type SlideSolveResult struct {
-	Offset     int
-	Confidence float64
-	Method     string
-	Attempt    int
+	Offset        int
+	Confidence    float64
+	HasConfidence bool
+	Method        string
+	Attempt       int
 }
 
 // CodeStatus 表示验证码任务状态。
@@ -209,12 +211,17 @@ func SolveSlideContext(ctx context.Context, puzzle, picture string) (*SlideSolve
 	if !ok {
 		offset, ok = numberFromSMSData(apiResp.Data["x"])
 	}
-	if !ok {
+	if !ok || math.IsNaN(offset) || math.IsInf(offset, 0) || offset < 0 || math.Trunc(offset) != offset || offset > float64(math.MaxInt32) {
 		return nil, fmt.Errorf("滑块识别响应缺少 offset")
 	}
 	result := &SlideSolveResult{Offset: int(offset)}
-	if confidence, ok := numberFromSMSData(apiResp.Data["confidence"]); ok {
+	if value, present := apiResp.Data["confidence"]; present {
+		confidence, ok := numberFromSMSData(value)
+		if !ok || math.IsNaN(confidence) || math.IsInf(confidence, 0) || confidence < 0 || confidence > 1 {
+			return nil, fmt.Errorf("滑块识别置信度无效")
+		}
 		result.Confidence = confidence
+		result.HasConfidence = true
 	}
 	if attempt, ok := numberFromSMSData(apiResp.Data["attempt"]); ok {
 		result.Attempt = int(attempt)

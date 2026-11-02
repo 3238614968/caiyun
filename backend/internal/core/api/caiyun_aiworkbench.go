@@ -42,14 +42,14 @@ func (api *CaiyunAPI) CompleteAIWorkbenchTask() error {
 		if attempt > 0 {
 			time.Sleep(2 * time.Second)
 		}
-		resp, err := api.client.Post(AIYunURL+"/api/outer/assistant/chat/v2/add", api.buildAIHeaders(true), map[string]interface{}{
+		resp, err := api.client.PostWithTimeout(AIYunURL+"/api/outer/assistant/chat/v2/add", api.buildAIHeaders(true), map[string]interface{}{
 			"userId": userID, "sessionId": "", "applicationType": "chat", "applicationId": "",
 			"sourceChannel": mailAIWorkbenchChannel,
 			"dialogueInput": map[string]interface{}{
 				"dialogue": "帮我写一篇云盘使用心得", "prompt": "", "inputTime": inputTime,
 				"versionInfo": map[string]string{"h5Version": "3.4.0"},
 			},
-		})
+		}, 90*time.Second)
 		if err != nil {
 			continue
 		}
@@ -57,7 +57,7 @@ func (api *CaiyunAPI) CompleteAIWorkbenchTask() error {
 		if err != nil {
 			continue
 		}
-		if api.isAICameraChatSuccess(body) {
+		if resp.StatusCode == 200 && api.isAICameraChatSuccess(body) {
 			chatSucceeded = true
 			if dialogueID == "" {
 				dialogueID = aiWorkbenchDialogueID(body)

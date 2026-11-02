@@ -58,6 +58,20 @@ func TestExchangeRecordLocksMonthlySeriesOnSuccess(t *testing.T) {
 	}
 }
 
+func TestCoordinationFailuresDoNotLockAnEntireMonth(t *testing.T) {
+	for _, message := range []string{
+		"10:00 同一账号同系列已安排任务「星巴克30元会员礼包」，跳过「星巴克30元会员礼包」，避免同月重复兑换",
+		"本月音乐类会员已有任务正在抢兑或已锁定，跳过本次执行",
+		"获取本月同系列抢兑锁失败: Redis timeout",
+		"同类商品接口请求失败",
+	} {
+		record := &models.ExchangeRecord{Status: "failed", Message: message}
+		if exchangeRecordLocksMonthlySeries(record) {
+			t.Fatalf("coordination became a receipt: %s", message)
+		}
+	}
+}
+
 func TestExchangeMonthlyWindowStartsAtMonthBoundary(t *testing.T) {
 	now := time.Date(2026, 6, 11, 16, 0, 1, 0, time.Local)
 	start, end := exchangeMonthlyWindow(now)

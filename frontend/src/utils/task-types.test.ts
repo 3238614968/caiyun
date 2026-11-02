@@ -24,6 +24,12 @@ describe('getTaskTypeName', () => {
 })
 
 describe('taskTypeOptions', () => {
+  it('includes the October task additions', () => {
+    for (const code of ['annual_bill', 'luckybag', 'redcavalry', 'fun_ai_timed_lottery', 'tasklist_gp', 'redeem_code']) {
+      expect(getTaskTypeName(code)).not.toBe(code)
+      expect(taskTypeOptions.some(option => option.value === code)).toBe(true)
+    }
+  })
   it('includes every newly registered activity with a localized label', () => {
     for (const code of ['notice_switch', 'student_perks', 'prize_center', 'mcloud_day', 'meitu_backup', 'red_invite', 'unloading_1t', 'rafflecode', 'family_circle', 'ai_store', 'album_backup_report', 'fun_ai_mail', 'upgrade_gift', 'lantern', 'liveflower', 'cloudphone', 'shake']) {
       expect(getTaskTypeName(code)).not.toBe(code)

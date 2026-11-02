@@ -32,11 +32,13 @@ func (api *CaiyunAPI) buildAIHeaders(useClientInfo bool) map[string]string {
 		"Sec-Fetch-Dest":     "empty",
 		"Accept-Encoding":    "gzip, deflate, br, zstd",
 		"Accept-Language":    "zh,zh-CN;q=0.9,en-US;q=0.8,en;q=0.7",
+		// 知识库等 /api/outer 接口按 app-channel 解析用户资源，缺失时回
+		// 01000005「资源不存在」（实测：同一账号补上该头即恢复 0000）。
+		"x-yun-app-channel": "101",
 	}
 	if useClientInfo {
-		headers["Accept"] = "text/event-stream"
+		headers["Accept"] = "text/event-stream, application/json"
 		headers["x-yun-client-info"] = "4||1|12.5.4||MI 8|" + tid + "||android 10|||||"
-		headers["x-yun-app-channel"] = "101"
 		return headers
 	}
 	headers["Accept"] = "application/json"
@@ -57,10 +59,10 @@ func (api *CaiyunAPI) isAICameraChatSuccess(text string) bool {
 		if err := json.Unmarshal([]byte(payload), &data); err != nil {
 			continue
 		}
-		if boolFromAny(data["success"]) {
+		if code, ok := data["code"].(string); ok && code == "0000" {
 			return true
 		}
-		if code, ok := data["code"].(string); ok && code == "0000" {
+		if _, hasCode := data["code"]; !hasCode && boolFromAny(data["success"]) {
 			return true
 		}
 	}
@@ -103,7 +105,7 @@ func (api *CaiyunAPI) CompleteAICameraTask() (taskErr error) {
 		"imageExt":      "jpg",
 		"timeout":       30000,
 	}
-	recognizeResp, err := api.client.Post(AIYunURL+"/api/image/aiRecognize", api.buildAIHeaders(false), recognizeBody)
+	recognizeResp, err := api.client.PostWithTimeout(AIYunURL+"/api/image/aiRecognize", api.buildAIHeaders(false), recognizeBody, 60*time.Second)
 	if err != nil {
 		return err
 	}
@@ -154,7 +156,7 @@ func (api *CaiyunAPI) CompleteAICameraTask() (taskErr error) {
 		},
 	}
 
-	chatResp, err := api.client.Post(AIYunURL+"/api/outer/assistant/chat/v2/add", api.buildAIHeaders(true), chatBody)
+	chatResp, err := api.client.PostWithTimeout(AIYunURL+"/api/outer/assistant/chat/v2/add", api.buildAIHeaders(true), chatBody, 90*time.Second)
 	if err != nil {
 		return err
 	}
@@ -162,18 +164,15 @@ func (api *CaiyunAPI) CompleteAICameraTask() (taskErr error) {
 	if err != nil {
 		return err
 	}
+	if chatResp.StatusCode != 200 {
+		return fmt.Errorf("AI 对话 HTTP 状态异常: %d", chatResp.StatusCode)
+	}
 	if api.isAICameraChatSuccess(chatText) {
 		return nil
 	}
 
 	var chatResult map[string]interface{}
 	if err := json.Unmarshal([]byte(chatText), &chatResult); err == nil {
-		if boolFromAny(chatResult["success"]) {
-			return nil
-		}
-		if code, ok := chatResult["code"].(string); ok && code == "0000" {
-			return nil
-		}
 		msg := normalizeMessageText(fmt.Sprint(chatResult["msg"]), fmt.Sprint(chatResult["message"]))
 		if msg == "" {
 			msg = "响应解析失败"
@@ -308,13 +307,16 @@ func (api *CaiyunAPI) CompleteLingxiChat() error {
 		},
 	}
 
-	chatResp, err := api.client.Post(AIYunURL+"/api/outer/assistant/chat/v2/add", api.buildAIHeaders(true), chatBody)
+	chatResp, err := api.client.PostWithTimeout(AIYunURL+"/api/outer/assistant/chat/v2/add", api.buildAIHeaders(true), chatBody, 90*time.Second)
 	if err != nil {
 		return err
 	}
 	chatText, err := api.client.ReadResponseBody(chatResp)
 	if err != nil {
 		return err
+	}
+	if chatResp.StatusCode != 200 {
+		return fmt.Errorf("AI 对话 HTTP 状态异常: %d", chatResp.StatusCode)
 	}
 	if api.isAICameraChatSuccess(chatText) {
 		return nil

@@ -128,6 +128,10 @@ func TestKnowledgeTaskReusesExistingTaskLibrary(t *testing.T) {
 		t.Run(fmt.Sprint(existing), func(t *testing.T) {
 			created := 0
 			client := corehttp.NewClient(corehttp.WithTransport(mailRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+				// 知识库接口按 app-channel 定位用户资源；缺失时会回 01000005 资源不存在。
+				if got := req.Header.Get("x-yun-app-channel"); got != "101" {
+					t.Fatalf("knowledge request %s missing app channel header, got %q", req.URL.Path, got)
+				}
 				switch req.URL.Path {
 				case "/api/outer/assistant/knowledge/personal/v2/base/list":
 					if existing {

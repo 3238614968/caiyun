@@ -30,8 +30,6 @@ func jwtExpiresAt(token string) time.Time {
 	return time.Unix(claims.ExpiresAt, 0)
 }
 
-const authorizationPreRefreshSkew = 5 * 24 * time.Hour
-
 func accountAuthorizationExpireAt(account *models.Account) int64 {
 	if account == nil {
 		return 0
@@ -49,7 +47,7 @@ func authorizationShouldRefresh(expireAt int64, now time.Time) bool {
 	if expireAt <= 0 {
 		return true
 	}
-	return expireAt <= now.Add(authorizationPreRefreshSkew).UnixMilli()
+	return expireAt <= now.UnixMilli()
 }
 
 func applyAuthorizationRefreshToAccount(account *models.Account, refreshed *auth.AuthorizationRefreshResult, jwtToken string) {

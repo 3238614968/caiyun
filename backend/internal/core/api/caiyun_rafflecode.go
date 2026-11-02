@@ -9,7 +9,7 @@ const rafflecodeBase = MarketURL + "/rafflecode"
 
 // RafflecodeInfo 抽奖码概览（未读记录、订阅开关）。
 func (api *CaiyunAPI) RafflecodeInfo() (*CaiyunResponse, error) {
-	return api.marketJSONRequest("POST", rafflecodeBase+"/info", map[string]interface{}{}, nil)
+	return api.marketJSONRequest("POST", rafflecodeBase+"/info", map[string]interface{}{"marketName": "rafflecode"}, nil)
 }
 
 // RafflecodeList 抽奖码列表（含 rafflecodeConfigList 场次配置）。
@@ -19,7 +19,7 @@ func (api *CaiyunAPI) RafflecodeList() (*CaiyunResponse, error) {
 
 // RafflecodeMyPrize 我的抽奖码奖品。
 func (api *CaiyunAPI) RafflecodeMyPrize() (*CaiyunResponse, error) {
-	return api.marketJSONRequest("POST", rafflecodeBase+"/getMyPrize", map[string]interface{}{}, nil)
+	return api.marketJSONRequest("POST", rafflecodeBase+"/getMyPrize", map[string]interface{}{"marketName": "rafflecode"}, nil)
 }
 
 // RafflecodeData 抽奖码数据。

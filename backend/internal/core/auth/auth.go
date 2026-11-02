@@ -5,8 +5,8 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"encoding/xml"
+	"errors"
 	"fmt"
-	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -19,6 +19,9 @@ import (
 type Auth struct {
 	client *http.Client
 }
+
+// ErrCredentialExpired includes RCS credentials invalidated by another login.
+var ErrCredentialExpired = errors.New("云盘凭据已失效，请重新登录")
 
 type TokenRefreshError struct {
 	Code     string
@@ -34,6 +37,10 @@ func (e *TokenRefreshError) Error() string {
 		return fmt.Sprintf("Token刷新失败: code=%s desc=%s", e.Code, e.Desc)
 	}
 	return fmt.Sprintf("Token刷新失败: code=%s", e.Code)
+}
+
+func (e *TokenRefreshError) Is(target error) bool {
+	return e != nil && target == ErrCredentialExpired && (e.Code == "4006" || e.Code == "05050006")
 }
 
 // NewAuth 创建认证管理器
@@ -175,30 +182,12 @@ type SpecTokenResp struct {
 
 // QuerySpecToken 获取 SpecToken
 func (a *Auth) QuerySpecToken(phone string) (*SpecTokenResp, error) {
-	// 构建 SpecToken 请求 URL
-	queryURL, err := url.Parse("https://caiyun.feixin.10086.cn/portal/auth/querySpecToken.action")
+	token, err := a.QuerySpecTokenForJWT(phone)
 	if err != nil {
-		return nil, fmt.Errorf("构建 SpecToken 请求失败: %w", err)
+		return nil, err
 	}
-	query := queryURL.Query()
-	query.Set("phone", phone)
-	queryURL.RawQuery = query.Encode()
-
-	resp, err := a.client.Get(queryURL.String(), nil)
-	if err != nil {
-		return nil, fmt.Errorf("获取 SpecToken 请求失败: %w", err)
-	}
-
-	body, err := a.client.ReadResponseBody(resp)
-	if err != nil {
-		return nil, fmt.Errorf("读取响应失败: %w", err)
-	}
-
-	var result SpecTokenResp
-	if err := json.Unmarshal([]byte(body), &result); err != nil {
-		return nil, fmt.Errorf("解析响应失败: %w", err)
-	}
-
+	result := SpecTokenResp{Success: true, Code: "0000"}
+	result.Data.Token = token
 	return &result, nil
 }
 
@@ -325,7 +314,7 @@ func (a *Auth) QuerySpecTokenForJWTContext(ctx context.Context, phone string) (s
 
 // TyrzLoginResp tyrzLogin 响应
 type TyrzLoginResp struct {
-	Code   int `json:"code"`
+	Code   *int `json:"code"`
 	Result struct {
 		Token string `json:"token"`
 	} `json:"result"`

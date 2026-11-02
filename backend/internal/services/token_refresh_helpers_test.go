@@ -17,7 +17,7 @@ func TestAuthorizationShouldRefresh(t *testing.T) {
 	}{
 		{name: "unknown", expireAt: 0, want: true},
 		{name: "expired", expireAt: now.Add(-time.Minute).UnixMilli(), want: true},
-		{name: "within skew", expireAt: now.Add(4 * 24 * time.Hour).UnixMilli(), want: true},
+		{name: "unexpired", expireAt: now.Add(4 * 24 * time.Hour).UnixMilli(), want: false},
 		{name: "outside skew", expireAt: now.Add(6 * 24 * time.Hour).UnixMilli(), want: false},
 	}
 

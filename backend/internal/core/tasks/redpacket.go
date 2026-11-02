@@ -262,7 +262,7 @@ func (t *RedPacketTask) getAIAnswer(puzzle string) (string, string, bool, string
 
 	headers := map[string]string{
 		"Content-Type":      "application/json",
-		"Accept":            "text/event-stream",
+		"Accept":            "text/event-stream, application/json",
 		"x-yun-api-version": "v4",
 		"Origin":            "https://yun.139.com",
 		"X-Requested-With":  "com.chinamobile.mcloud",
@@ -298,6 +298,9 @@ func (t *RedPacketTask) getAIAnswer(puzzle string) (string, string, bool, string
 		return "", "", false, "", fmt.Errorf("读取响应失败: %w", err)
 	}
 
+	if resp.StatusCode != 200 {
+		return "", "", false, "", fmt.Errorf("AI聊天 HTTP 状态异常: %d", resp.StatusCode)
+	}
 	// 解析 SSE 响应（与 mjs pO 一致）
 	// 响应格式: 多行 "data:..." ，取第一个 data 行解析 JSON
 	var chatResult struct {

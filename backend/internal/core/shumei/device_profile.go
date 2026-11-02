@@ -11,9 +11,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"math"
 	mathrand "math/rand"
 	stdhttp "net/http"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -37,12 +37,6 @@ type androidModel struct {
 	Chrome  string
 }
 
-type screenProfile struct {
-	Width  int
-	Height int
-	DPR    float64
-}
-
 var androidModels = []androidModel{
 	{Model: "23127HN0CC", Build: "UKQ1.230917.001", Android: "14", Chrome: "143.0.7499.146"},
 	{Model: "24053PY09C", Build: "UP1A.231005.007", Android: "14", Chrome: "142.0.6522.118"},
@@ -54,14 +48,6 @@ var androidModels = []androidModel{
 	{Model: "RE58B1", Build: "TKQ1.221114.001", Android: "13", Chrome: "140.0.6385.82"},
 	{Model: "22081212C", Build: "UKQ1.230917.001", Android: "14", Chrome: "143.0.7499.146"},
 	{Model: "LLY-AN00", Build: "HONORLLY-AN00", Android: "14", Chrome: "142.0.6522.118"},
-}
-
-var screenProfiles = []screenProfile{
-	{Width: 1080, Height: 2340, DPR: 2.625},
-	{Width: 1080, Height: 2400, DPR: 2.75},
-	{Width: 720, Height: 1280, DPR: 1.5},
-	{Width: 1080, Height: 2160, DPR: 2.625},
-	{Width: 1080, Height: 2310, DPR: 2.625},
 }
 
 type deviceProfileRequest struct {
@@ -89,146 +75,72 @@ func RandomMarketUserAgent() string {
 
 // GenerateDeviceProfile 生成数美 deviceprofile/v4 所需的 JSON 请求体。
 func GenerateDeviceProfile() (string, error) {
-	phone := androidModels[randomInt(0, len(androidModels)-1)]
-	screen := screenProfiles[randomInt(0, len(screenProfiles)-1)]
-	ua := userAgentForModel(phone)
-	uid := uuid.NewString()
+	return generateDeviceProfile(RandomMarketUserAgent())
+}
 
+func generateDeviceProfile(ua string) (string, error) {
+	return generateDeviceProfileForPage(ua, defaultDevicePageURL)
+}
+
+const defaultDevicePageURL = "https://m.mcloud.139.com/portal/mobilecloud/index.html?path=newsignin"
+
+func generateDeviceProfileForPage(ua, pageURL string) (string, error) {
+	payload, _, err := prepareDeviceProfileForPage(ua, pageURL)
+	return payload, err
+}
+
+func prepareDeviceProfileForPage(ua, pageURL string) (string, string, error) {
+	started := time.Now()
+	uid := uuid.NewString()
 	ep, err := rsaEncrypt(uid)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
-
-	nowMs := time.Now().UnixMilli()
-	startTime := nowMs - int64(randomInt(1800000, 5400000))
-	nowCST := time.Now().In(chinaTimeZone)
-	availHeight := screen.Height - randomInt(48, 128)
-
-	env := map[string]interface{}{
-		"protocol":       242,
-		"organization":   organization,
-		"appId":          appID,
-		"os":             "web",
-		"version":        "3.0.0",
-		"sdkver":         "3.0.0",
-		"box":            "",
-		"rtype":          "all",
-		"smid":           getSMID(uid),
-		"subVersion":     "1.0.0",
-		"time":           nowMs - startTime,
-		"cdp":            0,
-		"maxTouchPoints": 5,
-		"connectionRtt":  0,
-		"cpucount":       8,
-		"battery": map[string]interface{}{
-			"charging": 0,
-			"level":    roundTo(0.6+mathrand.Float64()*0.35, 2),
-		},
-		"dg":            "5.0 " + strings.TrimPrefix(ua, "Mozilla/"),
-		"gj":            "zh-CN",
-		"rr":            "Google Inc.",
-		"sv":            "Netscape",
-		"qc":            "Mozilla",
-		"ye":            8,
-		"jq":            8,
-		"lo":            []interface{}{},
-		"bw":            "",
-		"lr":            "Etc/GMT-8",
-		"nr":            1,
-		"no":            0,
-		"br":            1,
-		"ra":            0,
-		"gt":            screen.Width,
-		"wy":            screen.Width,
-		"cj":            availHeight,
-		"wt":            randomInt(100, 180),
-		"hu":            []string{"chrome"},
-		"documentExist": 1,
-		"yi":            []string{"location"},
-		"dx":            "UTF-8",
-		"ig":            nowCST.Format("Mon Jan 02 2006 15:04:05 ") + "(GMT+08:00)",
-		"ii":            1,
-		"fs":            0,
-		"ga":            0,
-		"tk":            0,
-		"rm":            0,
-		"kr":            0,
-		"nk":            0,
-		"by":            "srgb",
-		"ar":            0,
-		"or":            0,
-		"et":            0,
-		"zc":            0,
-		"fj":            0,
-		"dc":            0,
-		"vd":            0,
-		"ni":            "",
-		"hn":            "",
-		"hv":            "48000_2_1_0_2_explicit_speakers|______",
-		"de":            md5Hex(uid)[:16] + "|10011011111000111100001100101101111100110101001110000000000100000",
-		"xt":            1,
-		"vh":            0,
-		"xc":            map[string]string{"red": "0"},
-		"pm": map[string]interface{}{
-			"default": roundTo(120.5+mathrand.Float64()*20, 1),
-			"apple":   roundTo(120.5+mathrand.Float64()*20, 1),
-			"serif":   roundTo(100+mathrand.Float64()*20, 1),
-			"sans":    roundTo(120.5+mathrand.Float64()*20, 1),
-			"mono":    roundTo(100+mathrand.Float64()*20, 1),
-			"min":     roundTo(10+mathrand.Float64()*2, 1),
-			"system":  roundTo(120.5+mathrand.Float64()*20, 1),
-		},
-		"ob": map[string]interface{}{
-			"maxTouchPoints": 5,
-			"touchEvent":     true,
-			"touchStart":     true,
-		},
-		"incognito": map[string]interface{}{
-			"getDirectoryExist":                0,
-			"getDirectoryIncognito":            0,
-			"maxTouchPointsExist":              1,
-			"indexedDBIncognito":               0,
-			"openDatabaseExist":                0,
-			"openDatabaseIncognito":            0,
-			"localStorageExist":                1,
-			"localStorageIncognito":            0,
-			"promiseExist":                     1,
-			"promiseAllSettledExist":           1,
-			"queryUsageAndQuotaIncognito":      0,
-			"webkitRequestFileSystemIncognito": 0,
-			"serviceWorkerExist":               1,
-			"indexedDBExist":                   1,
-			"browserName":                      "Chrome",
-		},
-		"t":           nowCST.Format("Mon Jan 02 2006 15:04:05 GMT-0700") + " (GMT+08:00)",
-		"collectTime": randomInt(50, 130),
+	if pageURL == "" {
+		pageURL = defaultDevicePageURL
 	}
-
-	data, err := json.Marshal(env)
+	// Supply the context this HTTP client actually has. Do not fabricate canvas,
+	// audio, browser plugins, battery levels, screen dimensions or browsing age.
+	smid := getSMID(uid)
+	profile := map[string]interface{}{
+		"protocol": officialSDKConfig.Protocol, "organization": organization,
+		"appId": appID, "os": "web", "version": "3.0.0", "sdkver": "3.0.0",
+		"box": "", "rtype": "all", "smid": smid, "subVersion": "1.0.0",
+		"time": time.Since(started).Milliseconds(), "ua": ua, "url": pageURL,
+	}
+	encoded, err := sdkData(profile, uid)
 	if err != nil {
-		return "", err
+		return "", "", fmt.Errorf("encode device SDK profile: %w", err)
 	}
-
-	requestBody := deviceProfileRequest{
-		AppID:        appID,
-		Organization: organization,
-		EP:           ep,
-		Data:         base64.StdEncoding.EncodeToString(data),
-		OS:           "web",
-		Encode:       1,
-		Compress:     0,
-	}
-	payload, err := json.Marshal(requestBody)
+	payload, err := json.Marshal(deviceProfileRequest{
+		AppID: appID, Organization: organization, EP: ep, Data: encoded,
+		OS: "web", Encode: 5, Compress: 2,
+	})
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
-	return string(payload), nil
+	return string(payload), smid, nil
 }
 
 // FetchDeviceID 调用数美 deviceprofile/v4 接口并返回带 B 前缀的 deviceId。
 func FetchDeviceID(ctx context.Context, client *stdhttp.Client, endpoint string) (string, error) {
+	return FetchDeviceIDWithUserAgent(ctx, client, endpoint, RandomMarketUserAgent())
+}
+
+// FetchDeviceIDWithUserAgent keeps the device registration and subsequent
+// activity requests in the same WebView identity.
+func FetchDeviceIDWithUserAgent(ctx context.Context, client *stdhttp.Client, endpoint, userAgent string) (string, error) {
+	return FetchDeviceIDForPage(ctx, client, endpoint, userAgent, defaultDevicePageURL)
+}
+
+// FetchDeviceIDForPage binds the encrypted URL and HTTP Referer to the same
+// current activity page. No captured device or account credentials are reused.
+func FetchDeviceIDForPage(ctx context.Context, client *stdhttp.Client, endpoint, userAgent, pageURL string) (string, error) {
 	if ctx == nil {
 		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return "", err
 	}
 	if client == nil {
 		client = stdhttp.DefaultClient
@@ -241,32 +153,28 @@ func FetchDeviceID(ctx context.Context, client *stdhttp.Client, endpoint string)
 		endpoint = defaultDeviceProfileURL
 	}
 
-	payload, err := GenerateDeviceProfile()
+	userAgent = strings.TrimSpace(userAgent)
+	if userAgent == "" {
+		userAgent = RandomMarketUserAgent()
+	}
+	if strings.TrimSpace(pageURL) == "" {
+		pageURL = defaultDevicePageURL
+	}
+	payload, smid, err := prepareDeviceProfileForPage(userAgent, pageURL)
 	if err != nil {
 		return "", fmt.Errorf("generate shumei device profile failed: %w", err)
-	}
-
-	delay := time.NewTimer(time.Duration(randomInt(500, 1500)) * time.Millisecond)
-	select {
-	case <-ctx.Done():
-		if !delay.Stop() {
-			select {
-			case <-delay.C:
-			default:
-			}
-		}
-		return "", ctx.Err()
-	case <-delay.C:
 	}
 
 	req, err := stdhttp.NewRequestWithContext(ctx, stdhttp.MethodPost, endpoint, bytes.NewBufferString(payload))
 	if err != nil {
 		return "", err
 	}
-	req.Header.Set("User-Agent", RandomMarketUserAgent())
+	req.Header.Set("User-Agent", userAgent)
 	req.Header.Set("Content-Type", "application/json;charset=UTF-8")
 	req.Header.Set("Origin", "https://m.mcloud.139.com")
-	req.Header.Set("Referer", "https://m.mcloud.139.com/portal/mobilecloud/index.html?path=newsignin")
+	req.Header.Set("Referer", pageURL)
+	req.Header.Set("X-Requested-With", "com.chinamobile.mcloud")
+	req.Header.Set("Accept-Language", "zh,zh-CN;q=0.9,en-US;q=0.8,en;q=0.7")
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -294,7 +202,31 @@ func FetchDeviceID(ctx context.Context, client *stdhttp.Client, endpoint string)
 		return "", fmt.Errorf("deviceprofile returned code=%d, msg=%s", result.Code, msg)
 	}
 
-	return NormalizeDeviceID(result.Detail.DeviceID), nil
+	// SMSdk.getDeviceId returns "B" + the raw server value unconditionally.
+	// A raw identifier that itself starts with B still needs the protocol prefix.
+	deviceID := "B" + strings.TrimSpace(result.Detail.DeviceID)
+	SeedDeviceCookies(client.Jar, pageURL, deviceID, smid)
+	return deviceID, nil
+}
+
+// DeviceCookieName is keyed by SDK organization, not account phone/name.
+func DeviceCookieName() string { return ".thumbcache_" + md5Hex(organization) }
+
+// SeedDeviceCookies mirrors the SDK's document-cookie storage. Device values
+// are encodeURIComponent encoded; the same smid was included in registration.
+func SeedDeviceCookies(jar stdhttp.CookieJar, pageURL, deviceID, smid string) {
+	if jar == nil || deviceID == "" {
+		return
+	}
+	u, err := url.Parse(pageURL)
+	if err != nil || u.Hostname() == "" {
+		return
+	}
+	cookies := []*stdhttp.Cookie{{Name: DeviceCookieName(), Value: url.QueryEscape(CookieDeviceValue(deviceID)), Path: "/", Secure: u.Scheme == "https"}}
+	if smid != "" {
+		cookies = append(cookies, &stdhttp.Cookie{Name: "smidV2", Value: smid, Path: "/", Secure: u.Scheme == "https"})
+	}
+	jar.SetCookies(u, cookies)
 }
 
 // NormalizeDeviceID 统一返回移动云盘 market 接口需要的 B 前缀形式。
@@ -367,11 +299,6 @@ func randomInt(min, max int) int {
 		return min
 	}
 	return min + mathrand.Intn(max-min+1)
-}
-
-func roundTo(value float64, digits int) float64 {
-	pow := math.Pow10(digits)
-	return math.Round(value*pow) / pow
 }
 
 func readLimited(r io.Reader, maxBytes int64) ([]byte, error) {

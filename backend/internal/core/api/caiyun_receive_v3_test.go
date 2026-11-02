@@ -45,7 +45,7 @@ func newCloudV3Fixture(t *testing.T, items []CloudReceiveItem, jwt, device strin
 			}})
 			return mailTestResponse(req, 200, string(body)), nil
 		case "/ycloud/signin/page/receiveV3":
-			if req.Method != "POST" || req.URL.RawQuery != "" || cloudV3Header(req.Header, "isDeviceId") != "true" || cloudV3Header(req.Header, "appVersion") != "13.2.2.0" || cloudV3Header(req.Header, "jwtToken") != f.jwt {
+			if req.Method != "POST" || req.URL.RawQuery != "" || cloudV3Header(req.Header, "isDeviceId") != "true" || cloudV3Header(req.Header, "appVersion") != "13.2.5.0" || cloudV3Header(req.Header, "jwtToken") != f.jwt {
 				t.Errorf("wrong captured receive contract: %s %s", req.Method, req.URL)
 			}
 			var body struct {
@@ -142,6 +142,9 @@ func TestReceiveV3PreservesPartialReceiptsAndRecoversRemainingReward(t *testing.
 	if err == nil || p["receivedCloud"] != 5 || len(f.posts) != 2 {
 		t.Fatalf("partial receipt lost: %+v %v", r, err)
 	}
+	if !strings.Contains(err.Error(), "code=610") || !strings.Contains(err.Error(), "云朵记录2") {
+		t.Fatalf("failed reward lost upstream diagnostics: %v", err)
+	}
 	f.rejectID = 0
 	r, err = a.Receive()
 	p, _ = resultMap(r)
@@ -161,5 +164,23 @@ func TestReceiveV3KeepsAccountCredentialsAndLargeRecordIDsSeparate(t *testing.T)
 	}
 	if len(fa.posts) != 1 || len(fb.posts) != 1 || fa.posts[0] != id || fb.posts[0] != id || fa.total != 1005 || fb.total != 1006 {
 		t.Fatal("account or record IDs were mixed")
+	}
+}
+
+func TestReceiveV3DoesNotSubmitDefaultDeviceAfterRegistrationFailure(t *testing.T) {
+	t.Setenv("CAIYUN_SHUMEI_DEVICE_ID", "")
+	posts := 0
+	client := corehttp.NewClient(corehttp.WithTransport(mailRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if strings.Contains(req.URL.Path, "/deviceprofile/") {
+			return mailTestResponse(req, 200, `{"code":500,"msg":"registration unavailable"}`), nil
+		}
+		if req.URL.Path == "/ycloud/signin/page/receiveV3" {
+			posts++
+		}
+		return mailTestResponse(req, 200, `{"code":0}`), nil
+	})))
+	_, err := NewCaiyunAPI(client).Receive()
+	if err == nil || !strings.Contains(err.Error(), "设备认证失败") || posts != 0 {
+		t.Fatalf("submitted with unregistered device: posts=%d err=%v", posts, err)
 	}
 }

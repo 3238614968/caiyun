@@ -19,6 +19,7 @@
         :inline="true"
         :model="searchForm"
         class="search-form"
+        @submit.prevent="handleSearch"
       >
         <el-form-item label="手机号">
           <el-input
@@ -30,7 +31,7 @@
         <el-form-item>
           <el-button
             type="primary"
-            @click="handleSearch"
+            native-type="submit"
           >
             搜索
           </el-button>
@@ -42,7 +43,8 @@
 
       <!-- 账号列表 -->
       <el-table
-        v-loading="loading"
+        v-loading="showLoading"
+        :aria-busy="loading"
         :data="accountList"
         stripe
         style="width: 100%"
@@ -252,6 +254,11 @@
                 clearable
               />
             </el-form-item>
+            <el-form-item label="重新登录">
+              <el-checkbox v-model="smsForm.force">
+                强制替换已有凭据（当前凭据将立即失效）
+              </el-checkbox>
+            </el-form-item>
           </el-form>
         </el-tab-pane>
       </el-tabs>
@@ -321,6 +328,8 @@
 </template>
 
 <script setup lang="ts">
+import { useLatestRequest } from '@/composables/useLatestRequest'
+import { useDeferredLoading } from '@/composables/useDeferredLoading'
 import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import type { FormInstance, FormRules } from 'element-plus'
@@ -344,7 +353,8 @@ import {
   type UpdateAccountRequest
 } from '../api/account'
 
-const loading = ref(false)
+const { loading, execute: latestAccountRequest } = useLatestRequest()
+const showLoading = useDeferredLoading(loading)
 const submitting = ref(false)
 const dialogVisible = ref(false)
 const detailVisible = ref(false)
@@ -362,6 +372,7 @@ const smsCountdown = ref(0)
 let smsTimer: ReturnType<typeof setInterval> | null = null
 
 const smsForm = reactive({
+  force: false,
   phone: '',
   smsCode: '',
   taskId: '',
@@ -464,18 +475,16 @@ const sortAccountsByAvailability = (list: Account[]) => {
 
 // 加载账号列表
 const loadAccounts = async () => {
-  loading.value = true
-  try {
-    const data = isAdmin.value
-      ? await getAllAccounts(pagination.page, pagination.pageSize, searchForm.phone)
-      : await getAccounts(pagination.page, pagination.pageSize, searchForm.phone)
-    accountList.value = sortAccountsByAvailability(data.accounts)
-    pagination.total = data.total
-  } catch (error) {
-    ElMessage.error('加载账号列表失败')
-  } finally {
-    loading.value = false
-  }
+  await latestAccountRequest(
+    () => isAdmin.value
+      ? getAllAccounts(pagination.page, pagination.pageSize, searchForm.phone.trim())
+      : getAccounts(pagination.page, pagination.pageSize, searchForm.phone.trim()),
+    data => {
+      accountList.value = sortAccountsByAvailability(data.accounts)
+      pagination.total = data.total
+    },
+    () => ElMessage.error('加载账号列表失败')
+  )
 }
 
 // 搜索
@@ -494,6 +503,7 @@ const handleReset = () => {
 // 分页大小变化
 const handleSizeChange = (size: number) => {
   pagination.pageSize = size
+  pagination.page = 1
   loadAccounts()
 }
 
@@ -513,6 +523,7 @@ const showAddDialog = () => {
   form.auth = ''
   form.remark = ''
   smsForm.phone = ''
+  smsForm.force = false
   smsForm.smsCode = ''
   smsForm.taskId = ''
   smsForm.remark = ''
@@ -605,7 +616,7 @@ const handleSendSms = async () => {
 
   try {
     smsSending.value = true
-    const res = await sendSmsCode(smsForm.phone)
+    const res = await sendSmsCode(smsForm.phone, smsForm.force)
     smsForm.taskId = res.data?.task_id || ''
     if (!smsForm.taskId) {
       throw new Error('未获取到验证码会话ID')
@@ -680,6 +691,7 @@ const handleSubmit = async () => {
           }
           await smsLogin({
             phone: smsForm.phone,
+            force: smsForm.force,
             sms_code: smsForm.smsCode,
             task_id: smsForm.taskId,
             remark: smsForm.remark

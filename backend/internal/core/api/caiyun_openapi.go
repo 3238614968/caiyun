@@ -122,8 +122,8 @@ func (api *CaiyunAPI) caixunOpenAPIRequest(method, path string, payload interfac
 		"Origin":           "https://yun.139.com",
 		"Referer":          "https://yun.139.com/",
 		"X-Requested-With": "com.chinamobile.mcloud",
-		"x-DeviceInfo":     "||36|13.2.2||23049RAD8C|" + deviceID + "||android 13|||||",
-		"User-Agent":       "Mozilla/5.0 (Linux; Android 13; 23049RAD8C) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/108.0.5359.128 Mobile Safari/537.36 MCloudApp/13.2.2 tid/" + reqID + " AIModeHome",
+		"x-DeviceInfo":     "||36|13.2.5||23049RAD8C|" + deviceID + "||android 13|||||",
+		"User-Agent":       "Mozilla/5.0 (Linux; Android 13; 23049RAD8C) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/108.0.5359.128 Mobile Safari/537.36 MCloudApp/13.2.5 tid/" + reqID + " AIModeHome",
 	}
 	resp, err := api.marketJSONRequest(method, caixunOpenAPIBase+path, payload, headers)
 	if err != nil {

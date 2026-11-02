@@ -49,7 +49,7 @@ func TestAICameraSeparatesJSONAndSSEHeadersAndCleansOnlyItsUpload(t *testing.T) 
 					return mailTestResponse(req, 200, `{"success":true,"code":"0000"}`), nil
 				case "/api/outer/assistant/chat/v2/add":
 					chatted = true
-					if req.Header.Get("Accept") != "text/event-stream" {
+					if req.Header.Get("Accept") != "text/event-stream, application/json" {
 						t.Fatal("chat endpoint did not request SSE")
 					}
 					body, _ := io.ReadAll(req.Body)
@@ -82,5 +82,24 @@ func TestAICameraSeparatesJSONAndSSEHeadersAndCleansOnlyItsUpload(t *testing.T) 
 				t.Fatalf("cleaned=%v chatted=%v err=%v", cleaned, chatted, err)
 			}
 		})
+	}
+}
+
+func TestAIChatRequiresExactSuccessCode(t *testing.T) {
+	api := &CaiyunAPI{}
+	for _, tc := range []struct {
+		body string
+		want bool
+	}{
+		{`{"code":"01000002","message":"0000 is not success"}`, false},
+		{`{"code":"01000001"}`, false},
+		{`{"code":"01000002","success":true}`, false},
+		{`{"message":"0000"}`, false},
+		{"data: {\"code\":\"0000\"}\n\ndata: [DONE]\n", true},
+		{"data: {\"success\":true}\n\n", true},
+	} {
+		if got := api.isAICameraChatSuccess(tc.body); got != tc.want {
+			t.Errorf("body=%s got=%t", tc.body, got)
+		}
 	}
 }

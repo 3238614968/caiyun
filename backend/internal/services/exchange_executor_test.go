@@ -31,6 +31,29 @@ func TestExchangeAuthDoesNotReuseStaleJWTAfterManagedRefreshFailure(t *testing.T
 	}
 }
 
+func TestUnmanagedExchangeRefreshRequiresAMatchedFreshSession(t *testing.T) {
+	for _, mode := range []string{"failure", "missing-sso", "success"} {
+		account := &models.ExchangeAccount{JWTToken: "old-jwt", Auth: "Basic current-auth"}
+		got, err := prepareExchangeAuthWithRefresh(account, nil, func(string, string) (string, string, error) {
+			switch mode {
+			case "failure":
+				return "", "", errors.New("refresh failed")
+			case "missing-sso":
+				return "new-jwt", "", nil
+			default:
+				return "new-jwt", "new-sso", nil
+			}
+		})
+		if mode == "success" {
+			if err != nil || got.jwtToken != "new-jwt" || got.ssoToken != "new-sso" {
+				t.Fatalf("bad fresh session: %v", err)
+			}
+		} else if err == nil || got != nil {
+			t.Fatal("used an incomplete or stale session")
+		}
+	}
+}
+
 func TestBuildExchangeFailureMessageIncludesCoreFields(t *testing.T) {
 	response := map[string]interface{}{
 		"msg":        "奖品已兑完",
@@ -76,7 +99,7 @@ func TestBuildExchangeV3RequestMatchesCapturedContract(t *testing.T) {
 	if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
 		t.Fatal(err)
 	}
-	if body["prizeId"] != float64(12345) || body["client"] != "app" || body["puzzleOffset"] != float64(327) || body["clientVersion"] != "13.2.2" || body["smsCode"] != "" || body["deviceId"] != "fixture-device" {
+	if body["prizeId"] != float64(12345) || body["client"] != "app" || body["puzzleOffset"] != float64(327) || body["clientVersion"] != "13.2.5" || body["smsCode"] != "" || body["deviceId"] != "fixture-device" {
 		t.Fatalf("unexpected exchange body: %+v", body)
 	}
 }

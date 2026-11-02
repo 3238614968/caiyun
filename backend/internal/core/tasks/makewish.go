@@ -40,6 +40,25 @@ var makewishManualTasks = map[string]string{
 	"CLOUD_EXCHANGE": "AI豆兑换抽奖码",
 }
 
+const (
+	// 许愿步骤登记的两种正常终止态：任务已完成 / 该步骤不支持页面上报。
+	makewishStepCompleted   = "96541032"
+	makewishStepUnsupported = "96541037"
+)
+
+// makewishStepRegistrationOutcome 判定步骤登记业务码：ignore 表示可忽略，
+// completed 表示服务端已判定任务完成。
+func makewishStepRegistrationOutcome(err error) (ignore, completed bool) {
+	switch activityBusinessCode(err) {
+	case makewishStepCompleted:
+		return true, true
+	case makewishStepUnsupported:
+		return true, false
+	default:
+		return false, false
+	}
+}
+
 func (t *MakeWishTask) Run() error {
 	t.pending = false
 	var issues []error
@@ -139,8 +158,20 @@ func (t *MakeWishTask) Run() error {
 		if performedAction {
 			attempted[task.TaskID] = true
 			if err := t.api.MakeWishPageClick(task.TaskID); err != nil {
-				issues = append(issues, fmt.Errorf("许愿步骤登记/%d: %w", task.TaskID, err))
-				t.logger.Debug(fmt.Sprintf("许愿任务步骤登记失败(%s): %v", task.TaskCode, err))
+				ignore, completed := makewishStepRegistrationOutcome(err)
+				if ignore {
+					if completed {
+						// 服务端已判定完成，登记本身就是多余操作。
+						t.logger.Debug(fmt.Sprintf("许愿任务已完成，跳过登记(%s): %v", task.TaskCode, err))
+					} else {
+						// 该步骤未开放页面上报，动作已执行即可，不再等待确认。
+						t.logger.Debug(fmt.Sprintf("许愿任务步骤不支持登记(%s): %v", task.TaskCode, err))
+					}
+					delete(attempted, task.TaskID)
+				} else {
+					issues = append(issues, fmt.Errorf("许愿步骤登记/%d: %w", task.TaskID, err))
+					t.logger.Debug(fmt.Sprintf("许愿任务步骤登记失败(%s): %v", task.TaskCode, err))
+				}
 			}
 		}
 	}

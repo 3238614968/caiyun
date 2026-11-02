@@ -34,7 +34,7 @@ func TestEmbeddedFunAIInputsAreDecodable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if portraitImage.Bounds().Dx() < 500 || portraitImage.Bounds() != maskImage.Bounds() {
+	if portraitImage.Bounds().Dx() < 300 || portraitImage.Bounds().Dy() < 500 || portraitImage.Bounds() != maskImage.Bounds() {
 		t.Fatalf("portrait and mask bounds differ: %v vs %v", portraitImage.Bounds(), maskImage.Bounds())
 	}
 }
@@ -62,6 +62,9 @@ func TestFunAIImageTasksUseLiveTemplateFields(t *testing.T) {
 					}
 					t.Fatalf("unexpected ad slot: %v", payload)
 				case "/api/image/face/analysis":
+					if payload["isMask"] != false || payload["isExposed"] != false || payload["isAnime"] != false || payload["isMultifaces"] != true {
+						t.Fatalf("face analysis options = %v", payload)
+					}
 					return mailTestResponse(req, 200, `{"code":"0000","data":{"existFace":true}}`), nil
 				case "/api/image/edit/portraitMatting", "/api/image/edit/qualityRestore", "/api/image/faceswap", "/api/image/emo",
 					"/api/image/avatar/cartoon", "/api/image/edit/restore", "/api/image/edit/faceAnime":
@@ -69,7 +72,7 @@ func TestFunAIImageTasksUseLiveTemplateFields(t *testing.T) {
 					if taskID == "003" && payload["supplierType"] != float64(4) {
 						t.Fatal("portrait matting must use Tencent supplier 4")
 					}
-					if len(req.Header["x-yun-tid"]) == 0 || req.Header["x-yun-tid"][0] == "" {
+					if req.Header.Get("x-yun-tid") == "" {
 						t.Fatal("AI algorithm request missing x-yun-tid")
 					}
 					if req.URL.Path == "/api/image/faceswap" && (payload["supplierType"] != float64(0) || payload["style"] != float64(1024)) {

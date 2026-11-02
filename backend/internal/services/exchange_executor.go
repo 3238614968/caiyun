@@ -6,6 +6,7 @@ import (
 	corehttp "caiyun/internal/core/http"
 	"caiyun/internal/models"
 	"caiyun/internal/utils"
+	"caiyun/internal/version"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -16,19 +17,19 @@ import (
 )
 
 const (
-	exchangeRequestTimeout   = time.Minute
-	exchangeClientVersion    = coreapi.MarketClientVersion
-	exchangeAppVersion       = exchangeClientVersion + ".0"
-	exchangeActivityID       = "sign_in_3"
-	exchangeSourceID         = "1097"
-	exchangeTargetSourceID   = "001005"
-	exchangeSlideMaxAttempt  = 3
-	exchangeFallbackDeviceID = "BXe6dG5DL447+uIMwsoyfnkg68InzFABuAHx7JkXFgEUJGuHGaU5iU4p7MF5JLgXpxZesH/8QKfck3ViH4MpJEw=="
+	exchangeRequestTimeout  = time.Minute
+	exchangeClientVersion   = coreapi.MarketClientVersion
+	exchangeAppVersion      = exchangeClientVersion + ".0"
+	exchangeActivityID      = "sign_in_3"
+	exchangeSourceID        = "1097"
+	exchangeTargetSourceID  = "001005"
+	exchangeSlideMaxAttempt = 3
 )
 
 type exchangeAuthContext struct {
-	jwtToken string
-	ssoToken string
+	jwtToken      string
+	ssoToken      string
+	authorization string
 }
 
 type exchangePreparedSession struct {
@@ -71,7 +72,8 @@ func performExchangeContext(ctx context.Context, account *models.ExchangeAccount
 	return performExchangePreparedContext(ctx, account, prizeID, tokenMgr, &exchangePreparedSession{})
 }
 
-func performExchangePreparedContext(ctx context.Context, account *models.ExchangeAccount, prizeID string, tokenMgr *TokenManager, prepared *exchangePreparedSession) (bool, string, int) {
+func performExchangePreparedContext(ctx context.Context, account *models.ExchangeAccount, prizeID string, tokenMgr *TokenManager, prepared *exchangePreparedSession) (success bool, message string, elapsed int) {
+	defer func() { message = version.Annotate(message) }()
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -109,6 +111,9 @@ func performExchangePreparedContext(ctx context.Context, account *models.Exchang
 		session = newExchangeHTTPSessionContext(ctx, account, authCtx)
 		prepared.http = session
 	}
+	if err := ensureExchangeSessionLogin(ctx, session, authCtx); err != nil {
+		return false, err.Error(), int(time.Since(startTime).Milliseconds())
+	}
 	result := executeExchangeOnceContext(ctx, prizeID, authCtx, session)
 	return result.success, result.message, result.execTime
 }
@@ -125,6 +130,14 @@ type exchangeTokenProvider interface {
 }
 
 func prepareExchangeAuthWithProvider(account *models.ExchangeAccount, tokenMgr exchangeTokenProvider) (*exchangeAuthContext, error) {
+	return prepareExchangeAuthWithRefresh(account, tokenMgr, func(authValue, phone string) (string, string, error) {
+		client := corehttp.NewClient()
+		client.SetAuth(authValue)
+		return auth.NewAuth(client).GetJWTTokenWithSSOToken(phone)
+	})
+}
+
+func prepareExchangeAuthWithRefresh(account *models.ExchangeAccount, tokenMgr exchangeTokenProvider, refresh func(string, string) (string, string, error)) (*exchangeAuthContext, error) {
 	if account == nil {
 		return nil, fmt.Errorf("抢兑账号为空")
 	}
@@ -148,21 +161,17 @@ func prepareExchangeAuthWithProvider(account *models.ExchangeAccount, tokenMgr e
 	}
 
 	if (jwtToken == "" || ssoToken == "") && authStr != "" {
-		authClient := corehttp.NewClient()
-		authClient.SetAuth(authStr)
-		authForJWT := auth.NewAuth(authClient)
-		token, matchedSSOToken, err := authForJWT.GetJWTTokenWithSSOToken(account.Phone)
-		if err == nil {
-			if token != "" {
-				jwtToken = token
-			}
-			if matchedSSOToken != "" {
-				ssoToken = matchedSSOToken
-			}
+		token, matchedSSOToken, err := refresh(authStr, account.Phone)
+		if err != nil {
+			return nil, fmt.Errorf("刷新抢兑会话失败，未提交兑换: %w", err)
 		}
+		jwtToken, ssoToken = strings.TrimSpace(token), strings.TrimSpace(matchedSSOToken)
+	}
+	if jwtToken == "" || ssoToken == "" {
+		return nil, fmt.Errorf("抢兑登录会话缺少匹配的 JWT/SSO，未提交兑换")
 	}
 
-	return &exchangeAuthContext{jwtToken: jwtToken, ssoToken: ssoToken}, nil
+	return &exchangeAuthContext{jwtToken: jwtToken, ssoToken: ssoToken, authorization: authStr}, nil
 }
 
 func executeExchangeOnce(prizeID string, authCtx *exchangeAuthContext, session *exchangeHTTPSession) exchangeAttemptResult {
@@ -180,7 +189,29 @@ func executeExchangeOnceContext(ctx context.Context, prizeID string, authCtx *ex
 	if _, err := strconv.ParseUint(strings.TrimSpace(prizeID), 10, 64); err != nil {
 		return exchangeAttemptResult{message: "商品 prizeId 格式无效", stop: true}
 	}
+	if session.deviceErr != nil {
+		return exchangeAttemptResult{message: session.deviceErr.Error(), stop: true}
+	}
+	if strings.TrimSpace(session.deviceID) == "" {
+		return exchangeAttemptResult{message: "设备认证失败，设备标识为空，未提交兑换", stop: true}
+	}
 
+	// H5 checks prize eligibility before opening the captcha. Keep known account
+	// restrictions separate from the upstream's generic 610/GK rejection.
+	eligibility, eligibilityErr := fetchExchangeEligibilityContext(ctx, session, authCtx, prizeID)
+	if eligibilityErr != nil {
+		return exchangeAttemptResult{message: fmt.Sprintf("兑换资格查询失败，未提交兑换: %v", eligibilityErr), execTime: int(time.Since(startTime).Milliseconds()), stop: true}
+	} else {
+		if reason := exchangeEligibilityBlockReason(eligibility); reason != "" {
+			return exchangeAttemptResult{
+				message:  reason,
+				execTime: int(time.Since(startTime).Milliseconds()),
+				stop:     true,
+			}
+		}
+	}
+
+	visitErr := prepareExchangeVisit(ctx, session, authCtx)
 	offset, solveInfo, err := obtainExchangeSlideOffsetContext(ctx, session, authCtx)
 	if err != nil {
 		return exchangeAttemptResult{
@@ -188,6 +219,12 @@ func executeExchangeOnceContext(ctx context.Context, prizeID string, authCtx *ex
 			message:  fmt.Sprintf("滑块验证码识别失败：%v", err),
 			execTime: int(time.Since(startTime).Milliseconds()),
 		}
+	}
+	if note := exchangeEligibilityNote(eligibility); note != "" {
+		solveInfo = strings.TrimSpace(solveInfo + " " + note)
+	}
+	if visitErr != nil {
+		solveInfo += " 活动访问记录未完成"
 	}
 	// The solver returns the original image coordinate. Altering it afterward
 	// makes a correct match fail the upstream challenge.
@@ -286,6 +323,8 @@ func buildExchangeV3Request(ctx context.Context, prizeID string, puzzleOffset in
 func isExchangeTerminalMessage(message string) bool {
 	terminalPatterns := []string{
 		"兑换结果待确认",
+		"兑换资格校验未通过",
+		"非目标用户",
 		"已兑完",
 		"已耗尽",
 		"奖品单日已耗尽",

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"caiyun/internal/core/api"
 	"caiyun/internal/core/http"
@@ -45,6 +46,9 @@ func (t *PrizeCenterTask) Run() error {
 
 	unclaimed := api.PrizeCenterUnclaimed(entries)
 	parts = append(parts, fmt.Sprintf("奖品记录%d条、未领取%d条", len(entries), len(unclaimed)))
+	if attempted, accepted := t.resendSpaceGiftPrizes(entries); attempted > 0 {
+		parts = append(parts, fmt.Sprintf("空间卡补发尝试%d项、成功%d项", attempted, accepted))
+	}
 	if gift, err := t.api.PrizeCenterSpaceGiftInfo(); err != nil {
 		issues = append(issues, fmt.Errorf("空间礼包查询: %w", err))
 	} else if responseCodeIs(gift, 0) {
@@ -87,6 +91,39 @@ func (t *PrizeCenterTask) Run() error {
 		t.logger.Info(t.lastMessage)
 	}
 	return errors.Join(issues...)
+}
+
+// prizeSpaceGiftResendLimit 与参考实现的首屏 pageSize 一致，避免每轮对全部
+// 历史记录重复请求。
+const prizeSpaceGiftResendLimit = 50
+
+// prizeSpaceGiftResendDelay 控制补发请求的节流，避免一次性打出 50 个 POST。
+var prizeSpaceGiftResendDelay = 300 * time.Millisecond
+
+// resendSpaceGiftPrizes 对 flag=2（已领取）的奖品重放一次 sendSpaceGiftPrize。
+// 空间卡领取后若服务端未发放，前端会在成功回调里补这一刀；非空间类奖品会
+// 拒绝该调用，属正常情况，因此这里只统计、不把失败计入任务错误。
+func (t *PrizeCenterTask) resendSpaceGiftPrizes(entries []api.PrizeCenterEntry) (attempted, accepted int) {
+	limit := min(len(entries), prizeSpaceGiftResendLimit)
+	for i := 0; i < limit; i++ {
+		entry := entries[i]
+		if entry.Flag != api.PrizeFlagClaimed || entry.OID == "" || entry.MarketID == "" {
+			continue
+		}
+		attempted++
+		resp, err := t.api.SendSpaceGiftPrize(entry.MarketID, entry.OID)
+		if err != nil {
+			if t.logger != nil {
+				t.logger.Debug(fmt.Sprintf("空间卡补发请求失败(%s): %v", entry.OID, err))
+			}
+		} else if responseCodeIs(resp, 0) {
+			accepted++
+		}
+		if prizeSpaceGiftResendDelay > 0 {
+			time.Sleep(prizeSpaceGiftResendDelay)
+		}
+	}
+	return attempted, accepted
 }
 
 func (t *PrizeCenterTask) claimFirstUnclaimed(unclaimed []api.PrizeCenterEntry, parts *[]string) error {

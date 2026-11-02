@@ -2,6 +2,9 @@
   <el-dialog
     v-model="visible"
     title="创建抢兑任务"
+    :close-on-click-modal="!submitting"
+    :close-on-press-escape="!submitting"
+    :show-close="!submitting"
     :width="isMobile ? '92%' : '640px'"
   >
     <el-alert
@@ -216,12 +219,17 @@
       </el-form-item>
     </el-form>
     <template #footer>
-      <el-button @click="visible = false">
+      <el-button
+        :disabled="submitting"
+        @click="visible = false"
+      >
         取消
       </el-button>
       <el-button
         type="primary"
         :disabled="!canSubmit"
+        :loading="submitting"
+        :aria-busy="submitting"
         @click="$emit('submit')"
       >
         确定
@@ -248,6 +256,7 @@ const props = defineProps<{
   products: Product[]
   userAccounts: Account[]
   userAccountsLoading: boolean
+  submitting?: boolean
 }>()
 
 defineEmits<{

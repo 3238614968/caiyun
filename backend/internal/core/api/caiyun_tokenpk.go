@@ -177,6 +177,7 @@ type TokenPKRewardStage struct {
 	RewardName     string `json:"rewardName"`
 	RewardType     string `json:"rewardType"`
 	Status         int    `json:"status"`
+	ReceiveStatus  *int   `json:"receiveStatus"`
 }
 
 // TokenPKProgressQueryHome 查询算力进度与阶段奖励状态。

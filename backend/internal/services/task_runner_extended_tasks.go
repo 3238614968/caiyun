@@ -25,19 +25,7 @@ func (r *TaskRunner) runGardenTask() *TaskResult {
 
 // runCloudPhoneTask 执行云手机红包派对任务
 func (r *TaskRunner) runCloudPhoneTask() *TaskResult {
-	startTime := time.Now()
-	phone, _, err := r.activityAccountContext()
-	if err != nil {
-		return activityTaskResult("cloudphone", startTime, err, "", "")
-	}
-	task := tasks.NewCloudPhonePartyTask(r.httpClient, r.logger, r.storage)
-	task.SetAccountPhone(phone)
-	err = task.Run()
-	result := activityTaskResult("cloudphone", startTime, err, task.Message(), "云手机红包派对协议任务执行完成")
-	if err == nil && task.Pending() {
-		result.Status = "pending"
-	}
-	return result
+	return &TaskResult{TaskType: "cloudphone", Status: "skipped", Message: "云手机登录协议已迁移，任务暂时停用"}
 }
 
 func (r *TaskRunner) runLanternTask() *TaskResult {
@@ -76,7 +64,11 @@ func (r *TaskRunner) runInviteFriendsTask() *TaskResult {
 	startTime := time.Now()
 	task := tasks.NewInviteFriendsTask(r.httpClient, r.logger).SetPhone(r.account.Phone)
 	err := task.Run()
-	return taskResultFromErr("invitefriends", startTime, err, "邀请好友任务执行成功")
+	result := activityTaskResult("invitefriends", startTime, err, task.Message(), "邀请好友任务执行完成")
+	if err == nil && task.Pending() {
+		result.Status = "pending"
+	}
+	return result
 }
 
 // runReceiveTask 执行领取云朵任务
@@ -175,7 +167,13 @@ func (r *TaskRunner) runTaskListTask() *TaskResult {
 		SetStorage(r.storage).
 		SetAccountContext(r.account.Phone, r.getRawAccountToken())
 	err := task.Run()
-	result := taskResultFromErr("tasklist", startTime, err, "任务列表巡检已执行，逐项完成状态以服务端为准")
+	result := taskResultFromErr("tasklist", startTime, err, task.Message())
+	if err == nil && task.Pending() {
+		result.Status = "pending"
+	}
+	if err != nil && task.Message() != "" {
+		result.Message += "；" + task.Message()
+	}
 	result.CloudGained = task.ClaimedCloud()
 	result.Message += fmt.Sprintf("；已确认领取%d云朵", result.CloudGained)
 	return result

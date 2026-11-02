@@ -1,0 +1,114 @@
+/* Shared interaction states; retain the existing blue and neutral palette. */
+:root {
+  --motion-fast: 120ms;
+  --motion-standard: 200ms;
+  --motion-surface: 260ms;
+  --ease-standard: cubic-bezier(.2, 0, 0, 1);
+  --ease-enter: cubic-bezier(.16, 1, .3, 1);
+  --el-transition-duration: 220ms;
+  --el-transition-duration-fast: 140ms;
+}
+
+body.caiyun-workspace {
+  --el-color-primary: #2563eb;
+  --el-color-primary-light-9: #edf3ff;
+  --el-text-color-primary: #182338;
+  --el-border-radius-base: 8px;
+}
+
+.caiyun-workspace :is(button, a, [role="button"], .el-menu-item, .el-radio-button__inner) {
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+.caiyun-workspace :is(button, a, [tabindex], [role="button"]):focus-visible {
+  outline: 3px solid #2563eb;
+  outline-offset: 3px;
+}
+.caiyun-workspace .el-button {
+  transition: background-color var(--motion-fast), border-color var(--motion-fast), color var(--motion-fast),
+    transform var(--motion-fast) var(--ease-standard), box-shadow var(--motion-fast);
+}
+.caiyun-workspace .el-button:not(.is-disabled):not(.is-loading):active { transform: scale(.97); }
+.caiyun-workspace :is(.el-input__wrapper, .el-select__wrapper, .el-textarea__inner) {
+  transition: box-shadow var(--motion-fast), background-color var(--motion-fast);
+}
+.caiyun-workspace :is(.el-input__wrapper.is-focus, .el-select__wrapper.is-focused) {
+  box-shadow: 0 0 0 1px #2563eb inset, 0 0 0 3px #2563eb14 !important;
+}
+.caiyun-workspace .el-switch:has(input:focus-visible) .el-switch__core {
+  outline: 3px solid #2563eb; outline-offset: 3px;
+}
+.caiyun-workspace .el-table__empty-block { min-height: 160px; }
+.caiyun-workspace .el-table__empty-text { color: #64748b; }
+.caiyun-workspace .el-tabs__active-bar { transition: transform var(--motion-surface) var(--ease-standard), width var(--motion-standard) var(--ease-standard); }
+.caiyun-workspace .el-dropdown-menu__item { border-radius: 6px; margin: 2px 4px; transition: background-color var(--motion-fast); }
+.caiyun-workspace .el-popover.notification-popover { width: min(400px, calc(100vw - 24px)) !important; border-radius: 16px; }
+
+.navigation-shell { position: relative; min-height: 0; }
+.navigation-indicator {
+  position: absolute; left: 0; top: 0; border-radius: 10px; background: #edf3ff; pointer-events: none;
+  transition: transform var(--motion-surface) var(--ease-standard), width var(--motion-standard) var(--ease-standard), height var(--motion-standard), opacity var(--motion-fast);
+}
+.layout-container .navigation-shell .sidebar-menu { position: relative; background: transparent; }
+.layout-container .navigation-shell .el-menu-item { position: relative; }
+.layout-container .navigation-shell.has-indicator .el-menu-item.is-active { background: transparent !important; }
+.layout-container .navigation-shell.has-indicator .el-menu-item.is-active:hover { background: #2563eb08 !important; }
+.layout-container .sidebar { transition: width var(--motion-surface) var(--ease-standard); }
+.layout-container .main-content { overscroll-behavior: contain; scrollbar-gutter: stable; }
+.layout-container .page-shell { position: relative; }
+.layout-container .page-transition-enter-active { transition: opacity var(--motion-standard) var(--ease-enter), transform var(--motion-standard) var(--ease-enter); }
+.layout-container .page-transition-leave-active { position: absolute; inset: 0 0 auto; width: 100%; pointer-events: none; transition: opacity 90ms ease-out; }
+.layout-container .page-transition-enter-from { opacity: 0; transform: translateY(6px); }
+.layout-container .page-transition-leave-to { opacity: 0; }
+.route-progress { position: absolute; left: 0; right: 0; bottom: -1px; height: 2px; overflow: hidden; pointer-events: none; }
+.route-progress::after { content: ''; display: block; width: 35%; height: 100%; background: #2563eb; animation: route-progress 1.1s var(--ease-standard) infinite; }
+@keyframes route-progress { from { transform: translateX(-100%); } to { transform: translateX(390%); } }
+.sr-only { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; border: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.skip-link { position: fixed; top: 8px; left: 12px; z-index: 4000; padding: 12px 16px; background: #fff; color: #2563eb; border-radius: 8px; transform: translateY(-160%); }
+.skip-link:focus { transform: none; }
+
+/* Element Plus owns focus trapping / Escape / return focus; style its surfaces. */
+.caiyun-workspace .el-dialog {
+  display: flex; flex-direction: column; max-height: calc(100dvh - 48px);
+  border-radius: 16px; box-shadow: 0 24px 80px #18233824;
+}
+.caiyun-workspace .el-dialog__header { flex-shrink: 0; padding-bottom: 16px; margin-right: 0; padding-right: 36px; }
+.caiyun-workspace .el-dialog__body { min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }
+.caiyun-workspace .el-dialog__footer { flex-shrink: 0; padding-top: 16px; }
+.caiyun-workspace .el-dialog__headerbtn { width: 40px; height: 40px; border-radius: 10px; transition: background-color var(--motion-fast); }
+.caiyun-workspace .el-dialog__headerbtn:hover { background: #f2f5fa; }
+.caiyun-workspace :is(.dialog-fade-enter-active, .dialog-fade-leave-active) .el-overlay-dialog { animation: none; }
+.caiyun-workspace .dialog-fade-enter-active .el-dialog { animation: surface-enter var(--motion-surface) var(--ease-enter); }
+.caiyun-workspace .dialog-fade-leave-active .el-dialog { animation: surface-leave 140ms ease-in; }
+@keyframes surface-enter { from { opacity: 0; transform: translateY(10px) scale(.985); } to { opacity: 1; transform: none; } }
+@keyframes surface-leave { to { opacity: 0; transform: translateY(4px) scale(.99); } }
+
+@media (hover: hover) and (pointer: fine) {
+  .layout-container .product-card:hover { transform: translateY(-2px); box-shadow: 0 8px 24px #1823380d !important; border-color: #b7cdfb !important; }
+}
+@media (max-width: 768px) {
+  .layout-container .sidebar { height: calc(72px + env(safe-area-inset-bottom)) !important; padding-bottom: env(safe-area-inset-bottom); }
+  .layout-container .main-container { padding-bottom: calc(72px + env(safe-area-inset-bottom)) !important; }
+  .layout-container .main-content { padding: 14px !important; }
+  .caiyun-workspace .el-button:not(.is-link):not(.is-text),
+  .caiyun-workspace .header-btn,
+  .caiyun-workspace .el-pagination button,
+  .caiyun-workspace .el-pager li { min-height: 44px !important; min-width: 44px !important; }
+  .caiyun-workspace .el-pagination .el-pager li { line-height: 44px !important; }
+  .caiyun-workspace .el-pagination .el-pager { display: flex; flex-wrap: wrap; max-width: 100%; justify-content: center; }
+  .caiyun-workspace :is(.el-input__wrapper, .el-select__wrapper) { min-height: 42px; }
+  .caiyun-workspace .el-dialog {
+    width: calc(100% - 24px) !important; max-width: 560px;
+    max-height: calc(100dvh - 32px); margin: 16px auto !important;
+  }
+  .caiyun-workspace .el-dialog__footer { display: flex; flex-wrap: wrap; gap: 8px; }
+  .caiyun-workspace .el-dialog__footer > .el-button { flex: 1; margin-left: 0; }
+  .layout-container .main-content { scrollbar-gutter: auto; }
+}
+
+html[data-reduce-motion="true"] *, html[data-reduce-motion="true"] *::before, html[data-reduce-motion="true"] *::after {
+  animation: none !important; transition: none !important; scroll-behavior: auto !important;
+}
+@media (prefers-reduced-motion: reduce) {
+  .caiyun-workspace *, .caiyun-workspace *::before, .caiyun-workspace *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
+}

@@ -87,6 +87,12 @@ func (r *TaskRunner) runMutualAssistTask() *TaskResult {
 		reports = append(reports, outcome)
 		pending = pending || !confirmed
 	}
+	if outcome, confirmed, err := r.assistRafflecode(helperAPI); err != nil {
+		errors = append(errors, "欢乐透助力: "+err.Error())
+	} else {
+		reports = append(reports, outcome)
+		pending = pending || !confirmed
+	}
 	if len(errors) > 0 {
 		return taskResultFromErr("mutual_assist", started, fmt.Errorf("%s；%s", strings.Join(reports, "；"), strings.Join(errors, "；")), "")
 	}
@@ -95,6 +101,35 @@ func (r *TaskRunner) runMutualAssistTask() *TaskResult {
 		result.Status = "pending"
 	}
 	return result
+}
+
+func (r *TaskRunner) assistRafflecode(helper *api.CaiyunAPI) (string, bool, error) {
+	info, err := r.api.RafflecodeInfo()
+	if err != nil {
+		return "", false, err
+	}
+	if info == nil || !info.IsSuccess() {
+		return "", false, fmt.Errorf("查询欢乐透邀请信息失败")
+	}
+	data, _ := info.Result.(map[string]interface{})
+	code, _ := data["encryptData"].(string)
+	if code == "" {
+		return "欢乐透未下发邀请码", true, nil
+	}
+	resp, err := helper.RafflecodeAssist(code)
+	if err != nil {
+		return "", false, err
+	}
+	if resp == nil {
+		return "", false, fmt.Errorf("欢乐透助力返回为空")
+	}
+	if resp.IsSuccess() {
+		return "欢乐透助力已接受，次数待服务端结算", false, nil
+	}
+	if strings.Contains(resp.MessageText(), "已助力") {
+		return "欢乐透本期已助力", true, nil
+	}
+	return "", false, fmt.Errorf("欢乐透助力 code=%v %s", resp.Code, resp.MessageText())
 }
 
 func (r *TaskRunner) assistFunAI(helper *api.CaiyunAPI) (string, bool, error) {

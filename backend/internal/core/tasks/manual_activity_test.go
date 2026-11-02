@@ -50,6 +50,7 @@ func TestManualCameraBackupDiag(t *testing.T) {
 		t.Logf("CompleteAICameraTask ok")
 	}
 }
+
 type manualAccount struct {
 	client     *http.Client
 	phone      string

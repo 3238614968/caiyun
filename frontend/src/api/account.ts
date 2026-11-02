@@ -113,8 +113,8 @@ export type SmsStatusResponse = ApiResponse<SmsStatusContract>
 export type SmsLoginRequest = SmsLoginRequestContract
 
 // 发送短信验证码
-export function sendSmsCode(phone: string): Promise<SmsSendResponse> {
-  const data: SmsSendRequestContract = { phone }
+export function sendSmsCode(phone: string, force = false): Promise<SmsSendResponse> {
+  const data: SmsSendRequestContract = { phone, force }
   return request<SmsSendResponse>({
     url: '/api/v1/accounts/sms/send',
     method: 'post',

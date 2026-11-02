@@ -20,6 +20,9 @@ func TestPosterUploadUsesDistinctMarketAndUnsignedPut(t *testing.T) {
 		}
 		switch req.URL.Path {
 		case "/ycloud/api/cloud/ose/activity/getUploadUrl":
+			if activityTestHeader(req, "activityId") != "sign_in_3" {
+				return mailTestResponse(req, 200, `{"code":505,"msg":"权限不足"}`), nil
+			}
 			var payload map[string]interface{}
 			if err := json.Unmarshal(body, &payload); err != nil || payload["marketName"] != posterUploadMarketName || payload["fileSize"].(float64) <= 0 {
 				t.Fatalf("poster reservation payload = %s, err = %v", body, err)
@@ -35,6 +38,9 @@ func TestPosterUploadUsesDistinctMarketAndUnsignedPut(t *testing.T) {
 			uploadedHash = hex.EncodeToString(hash[:])
 			return mailTestResponse(req, 200, ``), nil
 		case "/ycloud/api/cloud/ose/file/complete":
+			if activityTestHeader(req, "activityId") != "sign_in_3" {
+				t.Fatal("poster completion used the task-list activity header")
+			}
 			var payload map[string]interface{}
 			if err := json.Unmarshal(body, &payload); err != nil || payload["uploadId"] != "up-1" ||
 				payload["fileId"] != "file-1" || payload["contentHash"] != uploadedHash {

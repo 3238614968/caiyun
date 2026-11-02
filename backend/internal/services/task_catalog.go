@@ -117,7 +117,7 @@ func NewTaskCatalog() *TaskCatalog {
 		{
 			Code:           "invitefriends",
 			Name:           "邀请好友看电影",
-			Description:    "执行分享邀请并领取对应云朵奖励",
+			Description:    "执行分享邀请并复查奖励流水，待领云朵由领取任务统一处理",
 			SortOrder:      60,
 			DefaultEnabled: true,
 			RunInBatch:     true,
@@ -248,10 +248,10 @@ func NewTaskCatalog() *TaskCatalog {
 		{
 			Code:           "cloudphone",
 			Name:           "云手机红包派对",
-			Description:    "使用云手机专属SSO登记签到与协议任务，复查云币余额；其余任务依赖真实云机",
+			Description:    "登录协议已迁移，暂时停用，待新登录链验证后恢复",
 			SortOrder:      160,
-			DefaultEnabled: true,
-			RunInBatch:     true,
+			DefaultEnabled: false,
+			RunInBatch:     false,
 			Aliases:        []string{"cloud_phone_redpack"},
 			execute: func(r *TaskRunner) *TaskResult {
 				return r.runCloudPhoneTask()
@@ -319,7 +319,7 @@ func NewTaskCatalog() *TaskCatalog {
 		{
 			Code:           "mutual_assist",
 			Name:           "多账号活动互助",
-			Description:    "使用同一用户下另一活跃账号助力许愿、算力大作战和趣玩AI邀请活动",
+			Description:    "使用同一用户下另一活跃账号助力许愿、算力大作战、趣玩AI和欢乐透邀请活动",
 			SortOrder:      159,
 			DefaultEnabled: true,
 			RunInBatch:     true,
@@ -549,6 +549,7 @@ func NewTaskCatalog() *TaskCatalog {
 		aliases:     make(map[string]string, len(defs)*2),
 	}
 
+	defs = append(defs, autumnTaskDefinitions()...)
 	for _, def := range defs {
 		code := normalizeTaskCode(def.Code)
 		def.Code = code
@@ -657,7 +658,7 @@ func (c *TaskCatalog) ResolveBatchCodes(configs []*models.TaskConfig) []string {
 			continue
 		}
 		code := c.Normalize(cfg.TaskType)
-		if code == "" || seen[code] {
+		if code == "" || code == "cloudphone" || seen[code] {
 			continue
 		}
 		if _, ok := c.definitions[code]; !ok {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log"
 	"sync"
@@ -91,20 +92,31 @@ func (tm *TokenManager) refreshAccountToken(accountID uint) (*TokenInfo, error) 
 
 	session := newTokenRefreshSession(account)
 	session.refreshJWT(account.Phone)
+	credentialWasExpired := errors.Is(session.authErr, auth.ErrCredentialExpired)
 
 	now := time.Now()
 	if err := tm.refreshAuthorizationIfNeeded(account, session, now); err != nil {
+		if errors.Is(err, ErrAccountLoginBusy) || errors.Is(err, errAccountCredentialsChanged) {
+			return nil, err
+		}
 		// 到期后的刷新失败才计入停用阈值；单纯过期不会停用账号。
 		failed := newTokenInfoFromSession(session, now)
 		failed.JWTToken = ""
 		tm.updateAccountJWTHealth(account, failed)
+		if errors.Is(err, auth.ErrCredentialExpired) {
+			if pauseErr := tm.accountRepo.SetActiveStatus(account.ID, false); pauseErr != nil {
+				return nil, fmt.Errorf("暂停失效账号失败: %w", pauseErr)
+			}
+			account.IsActive = false
+			failed.ErrorMsg = auth.ErrCredentialExpired.Error()
+		}
 		if account.IsActive {
 			failed.ErrorMsg = fmt.Sprintf("authorization 刷新失败: %v", err)
 		}
 		tm.tokenCache.Store(accountID, failed)
 		return failed, err
 	}
-	if session.jwtToken == "" {
+	if session.jwtToken == "" && !credentialWasExpired {
 		if previous := tm.usablePreviousJWT(account, now); previous != nil {
 			if previous.SSOToken == "" {
 				if sso, err := session.authForJWT.QuerySpecTokenForJWT(account.Phone); err == nil {
@@ -191,18 +203,40 @@ func (s *tokenRefreshSession) refreshJWT(phone string) {
 	if token, matchedSSOToken, err := s.authForJWT.GetJWTTokenWithSSOToken(phone); err == nil && token != "" {
 		s.jwtToken = token
 		s.ssoToken = matchedSSOToken
+		s.authErr = nil
+	} else {
+		s.authErr = err
 	}
 }
 
 func (tm *TokenManager) refreshAuthorizationIfNeeded(account *models.Account, session *tokenRefreshSession, now time.Time) error {
-	if !authorizationShouldRefresh(accountAuthorizationExpireAt(account), now) {
+	// A successful JWT exchange proves the current credential is still usable.
+	// Never rotate it proactively: RCS permits only one live credential.
+	if session.jwtToken != "" || (!errors.Is(session.authErr, auth.ErrCredentialExpired) && !authorizationShouldRefresh(accountAuthorizationExpireAt(account), now)) {
 		return nil
+	}
+	ctx, cancel := context.WithTimeout(accountServiceContext(tm.ctx), 2*time.Minute)
+	defer cancel()
+	release, err := acquireCredentialRotationLock(ctx, tm.lockCache, account.Phone)
+	if err != nil {
+		return err
+	}
+	defer release()
+	current, err := tm.accountRepo.GetByID(account.ID)
+	if err != nil {
+		return err
+	}
+	if current.Auth != account.Auth {
+		return errAccountCredentialsChanged
 	}
 
 	userDomainID := jwtUserDomainID(session.jwtToken)
-	refreshed, err := session.authForJWT.RefreshAuthorization(account.Auth, account.Phone, userDomainID)
+	refreshed, err := session.authForJWT.RefreshAuthorizationContext(ctx, account.Auth, account.Phone, userDomainID)
 	if err != nil {
 		log.Printf("[TokenManager] 账号 %d authorization 刷新失败，保留原数据库记录: %v", account.ID, err)
+		if errors.Is(session.authErr, auth.ErrCredentialExpired) {
+			return session.authErr
+		}
 		if accountAuthorizationExpireAt(account) <= now.UnixMilli() {
 			return fmt.Errorf("authorization 已到期且刷新失败: %w", err)
 		}
@@ -210,7 +244,7 @@ func (tm *TokenManager) refreshAuthorizationIfNeeded(account *models.Account, se
 	}
 
 	if refreshed.SSOToken != "" {
-		if token, jwtErr := session.authForJWT.TyrzLogin(refreshed.SSOToken); jwtErr == nil && token != "" {
+		if token, jwtErr := session.authForJWT.TyrzLoginContext(ctx, refreshed.SSOToken); jwtErr == nil && token != "" {
 			session.jwtToken = token
 			session.ssoToken = refreshed.SSOToken
 		} else if jwtErr != nil {
@@ -218,7 +252,11 @@ func (tm *TokenManager) refreshAuthorizationIfNeeded(account *models.Account, se
 		}
 	}
 
+	if errors.Is(session.authErr, auth.ErrCredentialExpired) {
+		account.JWTToken = ""
+	}
 	applyAuthorizationRefreshToAccount(account, refreshed, session.jwtToken)
+	session.authErr = nil
 	if err := tm.accountRepo.UpdateAuthorizationFields(account.ID, account.Auth, account.Token, account.JWTToken, account.Platform, account.ExpireAt); err != nil {
 		return fmt.Errorf("更新刷新后的 authorization 失败: %w", err)
 	}

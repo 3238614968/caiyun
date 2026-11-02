@@ -47,7 +47,7 @@ func (api *CaiyunAPI) FunaiPageModule() (*FunaiModule, error) {
 
 // FunaiPageModuleForMarket 获取指定活动标识下的常驻模块。
 func (api *CaiyunAPI) FunaiPageModuleForMarket(marketName string) (*FunaiModule, error) {
-	return api.funaiGetModule(marketName, "/funai/api/page/getmodule?platform=android&appVersion=13.2.2")
+	return api.funaiGetModule(marketName, "/funai/api/page/getmodule?platform=android&appVersion=13.2.5")
 }
 
 // FunaiTimedModules 获取限时活动模块列表。

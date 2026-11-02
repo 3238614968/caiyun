@@ -11,6 +11,7 @@ import (
 	coretasks "caiyun/internal/core/tasks"
 	"caiyun/internal/models"
 	"caiyun/internal/repository"
+	"caiyun/internal/version"
 )
 
 func resolveConfiguredTaskCodes(taskConfigRepo *repository.TaskConfigRepository) []string {
@@ -152,6 +153,7 @@ func (r *TaskRunner) RunSelectedContext(ctx context.Context, taskCodes []string)
 		if result == nil {
 			result = &TaskResult{TaskType: normalizedCode, Status: "failed", Message: "任务返回为空"}
 		}
+		result.Message = version.Annotate(result.Message)
 		results = append(results, *result)
 	}
 

@@ -1,13 +1,9 @@
 package api
 
 import (
-	"bytes"
 	"crypto/rand"
 	"encoding/json"
 	"fmt"
-	"image"
-	"image/jpeg"
-	_ "image/png"
 	"strings"
 	"time"
 )
@@ -15,15 +11,21 @@ import (
 const miaoyunBaseURL = AIYunURL + "/aitools/miaoyun"
 
 func (api *CaiyunAPI) miaoyunCall(endpoint string, payload interface{}) (map[string]interface{}, error) {
-	resp, err := api.client.Post(miaoyunBaseURL+endpoint, map[string]string{
-		"Content-Type": "application/json;charset:utf-8;",
-	}, payload)
+	timeout := 60 * time.Second
+	if endpoint == "/image/createImage" || endpoint == "/art/autoComposeArtPhoto" {
+		timeout = 90 * time.Second
+	}
+	resp, err := api.client.PostWithBasicAuth(miaoyunBaseURL+endpoint, payload,
+		"application/json;charset:utf-8;", timeout)
 	if err != nil {
 		return nil, err
 	}
 	body, err := api.client.ReadResponseBody(resp)
 	if err != nil {
 		return nil, err
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("妙云%s HTTP %d", endpoint, resp.StatusCode)
 	}
 	var result map[string]interface{}
 	decoder := json.NewDecoder(strings.NewReader(body))
@@ -44,6 +46,58 @@ func miaoyunString(value interface{}) string {
 		return ""
 	}
 	return strings.TrimSpace(fmt.Sprint(value))
+}
+
+func miaoyunResponseError(operation string, result map[string]interface{}) error {
+	code := miaoyunString(result["code"])
+	failed := code != "" && code != "0" && code != "0000"
+	if success, present := result["success"].(bool); present && !success {
+		failed = true
+	}
+	if failed {
+		return fmt.Errorf("%s失败: code=%s %s", operation, code, miaoyunString(result["message"]))
+	}
+	return nil
+}
+
+// A downstream failure is not a rejection of the selected face. Keep the
+// actual business code and do not cycle through unrelated templates.
+func (api *CaiyunAPI) verifyMiaoyunPhoto(userID, fileID string) (map[string]interface{}, error) {
+	result, err := api.miaoyunCall("/image/verifyMainImage", map[string]interface{}{
+		"userId": userID, "fileId": fileID, "imageId": "",
+	})
+	if err != nil {
+		return nil, fmt.Errorf("AI 写真主图校验请求失败: %w", err)
+	}
+	data := miaoyunData(result)
+	if err := miaoyunResponseError("AI 写真主图校验", result); err != nil {
+		return nil, err
+	}
+	if message := miaoyunString(data["verifyMessage"]); message != "" {
+		return result, nil
+	}
+	if miaoyunString(data["masterId"]) == "" || miaoyunString(data["taskId"]) == "" {
+		return nil, fmt.Errorf("AI 写真主图校验未返回 masterId/taskId: %s", miaoyunString(result["message"]))
+	}
+	return result, nil
+}
+
+func selectMiaoyunModel(result map[string]interface{}) (interface{}, interface{}, error) {
+	if err := miaoyunResponseError("查询写真模型", result); err != nil {
+		return nil, nil, err
+	}
+	groups, _ := miaoyunData(result)["modelList"].([]interface{})
+	for _, group := range groups {
+		entry, _ := group.(map[string]interface{})
+		items, _ := entry["list"].([]interface{})
+		for _, item := range items {
+			model, _ := item.(map[string]interface{})
+			if value := miaoyunString(model["modelType"]); value != "" && value != "0" {
+				return model["modelType"], model["poseId"], nil
+			}
+		}
+	}
+	return nil, nil, fmt.Errorf("AI 写真当前没有可用模型")
 }
 
 func (api *CaiyunAPI) ensureMiaoyunFolder(parent, name string) (string, error) {
@@ -99,8 +153,8 @@ func (api *CaiyunAPI) ensureMiaoyunFolder(parent, name string) (string, error) {
 	return "", fmt.Errorf("妙云目录不存在且创建失败: %s", name)
 }
 
-// CompleteFunAIMiaoyunTask creates a digital portrait from a public vendor
-// template, then requests the official AI art photo operation.
+// CompleteFunAIMiaoyunTask uses the authorized fixed reference portrait and the
+// models currently offered by the official AI art photo service.
 func (api *CaiyunAPI) CompleteFunAIMiaoyunTask() error {
 	userID := strings.TrimSpace(api.client.GetUserDomainID())
 	if userID == "" {
@@ -122,67 +176,51 @@ func (api *CaiyunAPI) CompleteFunAIMiaoyunTask() error {
 	if err != nil {
 		return err
 	}
-	_, _ = api.miaoyunCall("/image/recordUnfinishFileId", map[string]interface{}{
+	recorded, err := api.miaoyunCall("/image/recordUnfinishFileId", map[string]interface{}{
 		"userId": userID, "imageCatalogId": parent, "imageName": "我的形象",
 	})
-	templates, err := api.funaiAdTemplates("66391", nil)
 	if err != nil {
 		return err
 	}
-	fileAPI := NewFileAPI(api.client)
-	var rejectedFiles []string
-	defer func() {
-		if len(rejectedFiles) > 0 {
-			_, _ = fileAPI.DeleteFiles(rejectedFiles)
-		}
-	}()
-	var fileID, masterID, taskID string
-	for _, template := range templates[:min(len(templates), 12)] {
-		materialURL := funaiMaterialURL(template)
-		if materialURL == "" {
-			continue
-		}
-		photo, err := api.client.GetPublicBytes(materialURL, 10<<20)
-		if err != nil || len(photo) < 1000 {
-			continue
-		}
-		picture, _, err := image.Decode(bytes.NewReader(photo))
-		if err != nil || picture.Bounds().Dx() < 500 || picture.Bounds().Dy() < 500 {
-			continue
-		}
-		var jpegPhoto bytes.Buffer
-		if err := jpeg.Encode(&jpegPhoto, picture, &jpeg.Options{Quality: 90}); err != nil {
-			continue
-		}
-		// A unique content hash avoids the cloud upload shortcut returning no uploadId.
-		nonce := make([]byte, 8)
-		if _, err := rand.Read(nonce); err != nil {
-			return err
-		}
-		photo = append(jpegPhoto.Bytes(), nonce...)
-		uploaded, err := fileAPI.UploadRandomFile(&UploadRandomFileRequest{
-			ParentFileID: mainFolder, Name: fmt.Sprintf("ai_face_%d.jpg", time.Now().UnixNano()),
-			Content: photo, ContentType: "image/jpeg", ChannelSrc: "10000023", Ext: ".jpg",
-		})
-		if err != nil || uploaded == nil || uploaded.FileID == "" {
-			continue
-		}
-		verify, err := api.miaoyunCall("/image/verifyMainImage", map[string]interface{}{
-			"userId": userID, "fileId": uploaded.FileID, "imageId": "",
-		})
-		if err != nil {
-			rejectedFiles = append(rejectedFiles, uploaded.FileID)
-			continue
-		}
-		data := miaoyunData(verify)
-		if id := miaoyunString(data["masterId"]); id != "" {
-			fileID, masterID, taskID = uploaded.FileID, id, miaoyunString(data["taskId"])
-			break
-		}
-		rejectedFiles = append(rejectedFiles, uploaded.FileID)
+	if err := miaoyunResponseError("记录写真目录", recorded); err != nil {
+		return err
 	}
-	if fileID == "" || masterID == "" || taskID == "" {
-		return fmt.Errorf("AI 写真没有通过正脸校验的模板图")
+	unfinished, err := api.miaoyunCall("/image/getUnfinishFileId", map[string]interface{}{"userId": userID})
+	if err != nil {
+		return err
+	}
+	if err := miaoyunResponseError("查询未完成写真", unfinished); err != nil {
+		return err
+	}
+	fileAPI := NewFileAPI(api.client)
+	// The nonce changes only the trailing bytes, retaining the fixed image.
+	// The reference flow uses it to avoid incomplete content-hash shortcuts.
+	nonce := make([]byte, 8)
+	if _, err := rand.Read(nonce); err != nil {
+		return err
+	}
+	photo := append(append([]byte(nil), funaiReferencePortrait...), nonce...)
+	uploaded, err := fileAPI.UploadRandomFile(&UploadRandomFileRequest{
+		ParentFileID: mainFolder, Name: fmt.Sprintf("ai_face_%d.jpg", time.Now().UnixNano()),
+		Content: photo, ContentType: "image/jpeg", ChannelSrc: "10000023", Ext: ".jpg",
+	})
+	if err != nil {
+		return fmt.Errorf("上传写真固定人像: %w", err)
+	}
+	if uploaded == nil || uploaded.FileID == "" {
+		return fmt.Errorf("上传写真固定人像未返回 fileId")
+	}
+	fileID := uploaded.FileID
+	verify, err := api.verifyMiaoyunPhoto(userID, fileID)
+	if err != nil {
+		_, _ = fileAPI.DeleteFiles([]string{fileID})
+		return err
+	}
+	data := miaoyunData(verify)
+	masterID, taskID := miaoyunString(data["masterId"]), miaoyunString(data["taskId"])
+	if masterID == "" || taskID == "" {
+		_, _ = fileAPI.DeleteFiles([]string{fileID})
+		return fmt.Errorf("AI 写真固定人像校验未通过: %s", miaoyunString(data["verifyMessage"]))
 	}
 	created, err := api.miaoyunCall("/image/createImage", map[string]interface{}{
 		"userId": userID, "taskId": taskID, "fileId": fileID, "subImages": []interface{}{},
@@ -192,24 +230,40 @@ func (api *CaiyunAPI) CompleteFunAIMiaoyunTask() error {
 	if err != nil {
 		return err
 	}
+	if err := miaoyunResponseError("创建写真形象", created); err != nil {
+		return err
+	}
 	imageID := miaoyunString(miaoyunData(created)["imageId"])
 	if imageID == "" {
 		return fmt.Errorf("AI 写真未返回数字形象 ID: %v", created["message"])
 	}
+	models, err := api.miaoyunCall("/model/queryModelList", map[string]interface{}{"userId": userID, "imageId": imageID})
+	if err != nil {
+		return err
+	}
+	modelType, poseID, err := selectMiaoyunModel(models)
+	if err != nil {
+		return err
+	}
+	var lastArtError error
 	for attempt := 0; attempt < 3; attempt++ {
 		if attempt > 0 {
 			time.Sleep(8 * time.Second)
 		}
 		art, err := api.miaoyunCall("/art/autoComposeArtPhoto", map[string]interface{}{
-			"userId": userID, "imageId": imageID, "modelType": 1001,
-			"poseId": "", "numGen": 1,
+			"userId": userID, "imageId": imageID, "modelType": modelType,
+			"poseId": poseID, "numGen": 1,
 		})
 		if err != nil {
 			return err
 		}
-		if art["success"] == true || strings.Contains(miaoyunString(art["message"]), "已经生成") {
+		lastArtError = miaoyunResponseError("写真艺术照生成", art)
+		if (art["success"] == true && lastArtError == nil) || strings.Contains(miaoyunString(art["message"]), "已经生成") {
 			return nil
 		}
+	}
+	if lastArtError != nil {
+		return lastArtError
 	}
 	return fmt.Errorf("AI 写真艺术照生成请求未被受理")
 }

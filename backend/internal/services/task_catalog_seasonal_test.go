@@ -16,7 +16,7 @@ func TestSeasonalActivitiesAreRegisteredForBatchExecution(t *testing.T) {
 	for _, code := range catalog.DefaultBatchCodes() {
 		batch[code] = true
 	}
-	for _, code := range []string{"cloudphone", "shake", "lantern", "liveflower"} {
+	for _, code := range []string{"shake", "lantern", "liveflower"} {
 		def, ok := catalog.Get(code)
 		if !ok || def.execute == nil || !def.DefaultEnabled || !def.RunInBatch || !batch[code] {
 			t.Fatalf("activity %s not ready for batch execution: %+v", code, def)
@@ -34,7 +34,7 @@ type seasonalRunnerTransport func(*http.Request) (*http.Response, error)
 func (f seasonalRunnerTransport) RoundTrip(req *http.Request) (*http.Response, error) { return f(req) }
 
 func TestSeasonalRunnerKeepsUnconfirmedRewardsPending(t *testing.T) {
-	for _, code := range []string{"lantern", "liveflower", "cloudphone"} {
+	for _, code := range []string{"lantern", "liveflower"} {
 		client := corehttp.NewClient(corehttp.WithTransport(seasonalRunnerTransport(func(req *http.Request) (*http.Response, error) {
 			body := `{"code":0,"result":{}}`
 			switch {

@@ -1,4 +1,8 @@
 <template>
+  <a
+    class="skip-link"
+    href="#main-content"
+  >跳转到主要内容</a>
   <el-container
     class="layout-container"
     :class="{ 'compact-layout': compactLayout, 'reduce-motion': reduceMotion }"
@@ -23,59 +27,90 @@
         >移动云盘</span>
       </div>
 
-      <el-menu
-        :default-active="activeMenu"
-        :collapse="menuCollapsed"
-        :collapse-transition="false"
-        router
-        class="sidebar-menu"
-        background-color="transparent"
-        text-color="#1e3a8a"
-        active-text-color="#2563eb"
+      <div
+        ref="navigationShell"
+        class="navigation-shell"
+        :class="{ 'has-indicator': indicatorStyle.opacity === '1' }"
       >
-        <el-menu-item index="/dashboard">
-          <el-icon><DataLine /></el-icon>
-          <template #title>
-            首页
-          </template>
-        </el-menu-item>
-
-        <el-menu-item index="/accounts">
-          <el-icon><User /></el-icon>
-          <template #title>
-            账号
-          </template>
-        </el-menu-item>
-
-        <el-menu-item index="/logs">
-          <el-icon><List /></el-icon>
-          <template #title>
-            日志
-          </template>
-        </el-menu-item>
-
-        <el-menu-item index="/exchange">
-          <el-icon><Shop /></el-icon>
-          <template #title>
-            兑换
-          </template>
-        </el-menu-item>
-
-        <el-menu-item
-          v-if="isAdmin"
-          index="/admin"
+        <div
+          class="navigation-indicator"
+          :style="indicatorStyle"
+          aria-hidden="true"
+        />
+        <el-menu
+          :default-active="activeMenu"
+          :collapse="menuCollapsed"
+          :collapse-transition="false"
+          router
+          class="sidebar-menu"
+          background-color="transparent"
+          text-color="#1e3a8a"
+          active-text-color="#2563eb"
         >
-          <el-icon><Setting /></el-icon>
-          <template #title>
-            管理
-          </template>
-        </el-menu-item>
-      </el-menu>
+          <el-menu-item
+            index="/dashboard"
+            @pointerenter="prefetchRoute('/dashboard')"
+            @focus="prefetchRoute('/dashboard')"
+          >
+            <el-icon><DataLine /></el-icon>
+            <template #title>
+              首页
+            </template>
+          </el-menu-item>
+
+          <el-menu-item
+            index="/accounts"
+            @pointerenter="prefetchRoute('/accounts')"
+            @focus="prefetchRoute('/accounts')"
+          >
+            <el-icon><User /></el-icon>
+            <template #title>
+              账号
+            </template>
+          </el-menu-item>
+
+          <el-menu-item
+            index="/logs"
+            @pointerenter="prefetchRoute('/logs')"
+            @focus="prefetchRoute('/logs')"
+          >
+            <el-icon><List /></el-icon>
+            <template #title>
+              日志
+            </template>
+          </el-menu-item>
+
+          <el-menu-item
+            index="/exchange"
+            @pointerenter="prefetchRoute('/exchange')"
+            @focus="prefetchRoute('/exchange')"
+          >
+            <el-icon><Shop /></el-icon>
+            <template #title>
+              兑换
+            </template>
+          </el-menu-item>
+
+          <el-menu-item
+            v-if="isAdmin"
+            index="/admin"
+            @pointerenter="prefetchRoute('/admin')"
+            @focus="prefetchRoute('/admin')"
+          >
+            <el-icon><Setting /></el-icon>
+            <template #title>
+              管理
+            </template>
+          </el-menu-item>
+        </el-menu>
+      </div>
 
       <div class="sidebar-footer">
         <el-button
           type="text"
           class="collapse-btn"
+          :aria-label="isCollapse ? '展开导航' : '收起导航'"
+          :aria-expanded="!isCollapse"
           @click="toggleCollapse"
         >
           <el-icon :size="20">
@@ -90,6 +125,12 @@
     <el-container class="main-container">
       <!-- 顶部导航 -->
       <el-header class="header glass-effect-light">
+        <div
+          v-if="showRouteProgress"
+          class="route-progress"
+          role="status"
+          aria-label="正在切换页面"
+        />
         <div class="header-left">
           <breadcrumb v-if="!isMobileViewport" />
           <div
@@ -108,6 +149,7 @@
           <el-button
             type="text"
             class="header-btn hidden-mobile-control"
+            aria-label="切换全屏"
             @click="toggleFullscreen"
           >
             <el-icon :size="20">
@@ -118,9 +160,15 @@
           <!-- 用户菜单 -->
           <el-dropdown
             class="user-dropdown"
+            trigger="click"
             @command="handleCommand"
+            @visible-change="handleUserMenuVisibility"
           >
-            <div class="user-info">
+            <button
+              type="button"
+              class="user-info"
+              aria-label="打开用户菜单"
+            >
               <el-avatar
                 :size="isMobileViewport ? 34 : 36"
                 class="user-avatar"
@@ -134,7 +182,7 @@
               <el-icon class="user-arrow">
                 <ArrowDown />
               </el-icon>
-            </div>
+            </button>
             <template #dropdown>
               <el-dropdown-menu>
                 <el-dropdown-item command="profile">
@@ -156,14 +204,24 @@
       </el-header>
 
       <!-- 内容区 -->
-      <el-main class="main-content">
+      <el-main
+        id="main-content"
+        ref="mainContent"
+        class="main-content"
+        tabindex="-1"
+        :aria-label="currentTitle"
+        :aria-busy="routeLoading"
+      >
         <div class="page-shell">
-          <router-view v-slot="{ Component }">
+          <router-view v-slot="{ Component, route: viewRoute }">
             <transition
-              name="fade-transform"
-              mode="out-in"
+              name="page-transition"
+              @after-enter="focusMainContent"
             >
-              <component :is="Component" />
+              <component
+                :is="Component"
+                :key="viewRoute.path"
+              />
             </transition>
           </router-view>
         </div>
@@ -303,14 +361,21 @@
       <div class="setting-row">
         <div><strong>侧边栏折叠</strong><span>为内容区域保留更多空间</span></div><el-switch
           v-model="isCollapse"
+          aria-label="侧边栏折叠"
           :disabled="isMobileViewport"
         />
       </div>
       <div class="setting-row">
-        <div><strong>紧凑布局</strong><span>缩小内容区边距，适合信息密集查看</span></div><el-switch v-model="compactLayout" />
+        <div><strong>紧凑布局</strong><span>缩小内容区边距，适合信息密集查看</span></div><el-switch
+          v-model="compactLayout"
+          aria-label="紧凑布局"
+        />
       </div>
       <div class="setting-row">
-        <div><strong>减少动态效果</strong><span>关闭页面切换和悬停动画</span></div><el-switch v-model="reduceMotion" />
+        <div><strong>减少动态效果</strong><span>减少页面与弹窗动画，同时遵循系统动态效果偏好</span></div><el-switch
+          v-model="reduceMotion"
+          aria-label="减少动态效果"
+        />
       </div>
     </section>
 
@@ -367,7 +432,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
@@ -386,7 +451,8 @@ import {
   Monitor,
   Connection,
   Refresh,
-  ArrowRight
+  ArrowRight,
+  Shop
 } from '@element-plus/icons-vue'
 import { useAuthStore } from '@/store/auth'
 import Breadcrumb from '@/components/Breadcrumb.vue'
@@ -394,6 +460,9 @@ import NotificationCenter from '@/components/NotificationCenter.vue'
 import AnnouncementPopup from '@/components/AnnouncementPopup.vue'
 import { wsClient } from '@/api/websocket'
 import { getPopupAnnouncement, type Announcement } from '@/api/announcement'
+import { useWorkspaceMotion } from '@/composables/useWorkspaceMotion'
+import { useNavigationIndicator } from '@/composables/useNavigationIndicator'
+import { useDeferredLoading } from '@/composables/useDeferredLoading'
 
 const route = useRoute()
 const router = useRouter()
@@ -426,15 +495,54 @@ const initialUIPreferences = loadUIPreferences()
 const isCollapse = ref(Boolean(initialUIPreferences.isCollapse))
 const compactLayout = ref(Boolean(initialUIPreferences.compactLayout))
 const reduceMotion = ref(Boolean(initialUIPreferences.reduceMotion))
+useWorkspaceMotion(reduceMotion)
 const viewportWidth = ref(typeof window !== 'undefined' ? window.innerWidth : 1440)
 
 // 当前激活的菜单
-const activeMenu = computed(() => route.path)
+const activeMenu = computed(() => route.path.startsWith('/exchange') ? '/exchange' : route.path)
 const currentTitle = computed(() => (route.meta?.title as string) || "移动云盘")
 const isMobileViewport = computed(() => viewportWidth.value <= 768)
 const isTabletViewport = computed(() => viewportWidth.value <= 1280 && viewportWidth.value > 768)
-const menuCollapsed = computed(() => isCollapse.value || isTabletViewport.value)
+const menuCollapsed = computed(() => !isMobileViewport.value && (isCollapse.value || isTabletViewport.value))
 const asideWidth = computed(() => (isMobileViewport.value ? '100%' : isTabletViewport.value ? '84px' : isCollapse.value ? '64px' : '200px'))
+const navigationShell = ref<HTMLElement>()
+const { indicatorStyle, measureIndicator } = useNavigationIndicator(navigationShell, activeMenu)
+watch(menuCollapsed, () => { void nextTick(measureIndicator) })
+const mainContent = ref<{ $el: HTMLElement }>()
+const routeLoading = ref(false)
+const showRouteProgress = useDeferredLoading(routeLoading)
+let pendingRoute = ''
+let navigationStartFocus: Element | null = null
+const removeNavigationStart = router.beforeEach(to => {
+  navigationStartFocus = document.activeElement
+  pendingRoute = to.fullPath
+  routeLoading.value = to.path !== route.path
+})
+const removeNavigationEnd = router.afterEach((to, from) => {
+  if (pendingRoute === to.fullPath) routeLoading.value = false
+  if (to.path !== from.path) void nextTick(() => { mainContent.value?.$el.scrollTo({ top: 0 }) })
+})
+const removeNavigationError = router.onError(() => {
+  routeLoading.value = false
+  ElMessage.error('页面加载失败，请重试')
+})
+const focusMainContent = () => {
+  const focused = document.activeElement
+  // Do not interrupt input or a dialog opened while the route was animating.
+  if (focused === document.body || focused === navigationStartFocus) {
+    mainContent.value?.$el.focus({ preventScroll: true })
+  }
+  navigationStartFocus = null
+}
+const prefetchedRoutes = new Set<string>()
+const prefetchRoute = (path: string) => {
+  if (prefetchedRoutes.has(path)) return
+  const matched = router.resolve(path).matched
+  const page = matched[matched.length - 1]?.components?.default
+  if (typeof page !== 'function') return
+  prefetchedRoutes.add(path)
+  void (page as () => Promise<unknown>)().catch(() => prefetchedRoutes.delete(path))
+}
 
 // 是否为管理员
 const isAdmin = computed(() => authStore.user?.role === 'admin')
@@ -467,11 +575,13 @@ const realtimeDescription = computed(() => {
 
 const persistUiPreferences = () => {
   if (typeof window === 'undefined') return
-  localStorage.setItem(UI_PREFERENCES_STORAGE_KEY, JSON.stringify({
-    isCollapse: isCollapse.value,
-    compactLayout: compactLayout.value,
-    reduceMotion: reduceMotion.value
-  }))
+  try {
+    localStorage.setItem(UI_PREFERENCES_STORAGE_KEY, JSON.stringify({
+      isCollapse: isCollapse.value,
+      compactLayout: compactLayout.value,
+      reduceMotion: reduceMotion.value
+    }))
+  } catch { /* Preferences remain usable when storage is unavailable. */ }
 }
 
 watch([isCollapse, compactLayout, reduceMotion], persistUiPreferences)
@@ -514,8 +624,17 @@ const toggleFullscreen = () => {
   }
 }
 
-// 处理用户菜单命令
-const handleCommand = async (command: string) => {
+let pendingUserCommand = ''
+const handleCommand = (command: string) => {
+  pendingUserCommand = command
+}
+
+// Let the menu release its focus trap before opening another modal.
+const handleUserMenuVisibility = async (visible: boolean) => {
+  if (visible || !pendingUserCommand) return
+  const command = pendingUserCommand
+  pendingUserCommand = ''
+  await nextTick()
   switch (command) {
     case 'profile':
       profileVisible.value = true
@@ -614,294 +733,49 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
+  removeNavigationStart()
+  removeNavigationEnd()
+  removeNavigationError()
   window.removeEventListener('resize', syncViewport)
   wsClient.disconnect()
 })
 </script>
 
 <style scoped>
-.layout-container {
-  height: 100vh;
-  background: linear-gradient(135deg, #e0f2fe 0%, #f0f9ff 50%, #e0f2fe 100%);
-}
-
-/* 侧边栏 - 浅蓝渐变毛玻璃效果 */
-.sidebar {
-  background: linear-gradient(180deg, rgba(224, 242, 254, 0.95) 0%, rgba(240, 249, 255, 0.9) 50%, rgba(186, 230, 253, 0.85) 100%);
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
-  transition: width 0.3s;
-  display: flex;
-  flex-direction: column;
-  position: relative;
-  border-right: 1px solid rgba(255, 255, 255, 0.5);
-  box-shadow: 4px 0 20px rgba(59, 130, 246, 0.1);
-}
-
-.logo-container {
-  height: 64px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0 16px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.4);
-  background: rgba(255, 255, 255, 0.2);
-}
-
-.logo {
-  width: 36px;
-  height: 36px;
-  background: linear-gradient(135deg, #3b82f6 0%, #0ea5e9 50%, #06b6d4 100%);
-  border-radius: 10px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-  box-shadow: 0 4px 15px rgba(59, 130, 246, 0.35);
-}
-
-.logo-text {
-  margin-left: 10px;
-  font-size: 18px;
-  font-weight: 600;
-  color: #1e40af;
-  white-space: nowrap;
-  text-shadow: 0 1px 2px rgba(255, 255, 255, 0.5);
-}
-
-.sidebar-menu {
-  flex: 1;
-  border-right: none;
-  padding: 12px 0;
-  background: transparent;
-}
-
-.sidebar-menu :deep(.el-menu-item) {
-  margin: 6px 10px;
-  border-radius: 10px;
-  height: 46px;
-  line-height: 46px;
-  transition: all 0.3s ease;
-  font-size: 14px;
-  background: rgba(255, 255, 255, 0.3);
-  border: 1px solid rgba(255, 255, 255, 0.4);
-}
-
-.sidebar-menu :deep(.el-menu-item:hover) {
-  background: rgba(255, 255, 255, 0.6) !important;
-  color: #2563eb !important;
-  transform: translateX(4px);
-  box-shadow: 0 4px 12px rgba(59, 130, 246, 0.15);
-}
-
-.sidebar-menu :deep(.el-menu-item.is-active) {
-  background: rgba(255, 255, 255, 0.85) !important;
-  color: #2563eb !important;
-  font-weight: 600;
-  box-shadow: 0 4px 15px rgba(59, 130, 246, 0.2);
-  border: 1px solid rgba(59, 130, 246, 0.3);
-}
-
-.sidebar-menu :deep(.el-menu-item.is-active::before) {
-  content: '';
-  position: absolute;
-  left: 0;
-  top: 50%;
-  transform: translateY(-50%);
-  width: 3px;
-  height: 24px;
-  background: linear-gradient(180deg, #3b82f6 0%, #06b6d4 100%);
-  border-radius: 0 3px 3px 0;
-}
-
-.sidebar-menu :deep(.el-icon) {
-  font-size: 18px;
-  margin-right: 10px;
-  color: inherit;
-}
-
-.sidebar-footer {
-  padding: 12px;
-  border-top: 1px solid rgba(255, 255, 255, 0.4);
-  display: flex;
-  justify-content: center;
-  background: rgba(255, 255, 255, 0.2);
-}
-
-.collapse-btn {
-  color: #3b82f6;
-  padding: 8px;
-  border-radius: 8px;
-  transition: all 0.25s;
-}
-
-.collapse-btn:hover {
-  background: rgba(255, 255, 255, 0.6);
-  color: #2563eb;
-  box-shadow: 0 4px 12px rgba(59, 130, 246, 0.2);
-}
-
-/* 折叠状态下的侧边栏优化 */
-.sidebar-menu :deep(.el-tooltip__trigger) {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.sidebar-menu :deep(.el-menu--collapse .el-menu-item) {
-  margin: 6px 8px;
-  padding: 0 !important;
-  justify-content: center;
-  background: rgba(255, 255, 255, 0.4);
-}
-
-.sidebar-menu :deep(.el-menu--collapse .el-icon) {
-  margin: 0;
-  font-size: 20px;
-}
-
-/* 主容器 */
-.main-container {
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-  background: transparent;
-}
-
-/* 顶部导航 - 毛玻璃效果 */
-.header {
-  height: 70px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 0 24px;
-  background: rgba(255, 255, 255, 0.7);
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
-  border-bottom: 1px solid rgba(255, 255, 255, 0.6);
-  box-shadow: 0 4px 20px rgba(59, 130, 246, 0.08);
-}
-
-.glass-effect-light {
-  background: rgba(255, 255, 255, 0.7);
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
-}
-
-.header-left {
-  min-width: 0;
-  flex: 1;
-}
-
-.header-right {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  flex-shrink: 0;
-}
-
-.header-btn {
-  color: #3b82f6;
-  padding: 10px;
-  border-radius: 10px;
-  transition: all 0.3s;
-  background: rgba(255, 255, 255, 0.4);
-  border: 1px solid rgba(255, 255, 255, 0.5);
-}
-
-.header-btn:hover {
-  background: rgba(255, 255, 255, 0.8);
-  color: #2563eb;
-  box-shadow: 0 4px 15px rgba(59, 130, 246, 0.2);
-  transform: translateY(-2px);
-}
-
-.user-dropdown {
-  cursor: pointer;
-}
-
-.user-info {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 8px 14px;
-  border-radius: 12px;
-  transition: all 0.3s;
-  background: rgba(255, 255, 255, 0.4);
-  border: 1px solid rgba(255, 255, 255, 0.5);
-}
-
-.user-info:hover {
-  background: rgba(255, 255, 255, 0.8);
-  box-shadow: 0 4px 15px rgba(59, 130, 246, 0.15);
-}
-
-.user-avatar {
-  background: linear-gradient(135deg, #3b82f6 0%, #0ea5e9 50%, #06b6d4 100%);
-  color: #fff;
-  font-weight: 600;
-  box-shadow: 0 2px 8px rgba(59, 130, 246, 0.3);
-}
-
-.username {
-  font-size: 14px;
-  color: #1e40af;
-  font-weight: 500;
-}
-
-/* 内容区 - 透明背景 */
-.main-content {
-  min-width: 0;
-  flex: 1;
-  padding: 24px;
-  overflow-y: auto;
-  background: transparent;
-}
-
-/* 页脚 - 毛玻璃效果 */
-.footer {
-  height: 50px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: rgba(255, 255, 255, 0.6);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
-  border-top: 1px solid rgba(255, 255, 255, 0.5);
-  color: #3b82f6;
-  font-size: 13px;
-}
-
-/* 页面过渡动画 */
-.fade-transform-leave-active,
-.fade-transform-enter-active {
-  transition: all 0.3s;
-}
-
-.fade-transform-enter-from {
-  opacity: 0;
-  transform: translateX(-20px);
-}
-
-.fade-transform-leave-to {
-  opacity: 0;
-  transform: translateX(20px);
-}
-
-/* 滚动条样式 */
-.main-content::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
-}
-
-.main-content::-webkit-scrollbar-thumb {
-  background: #c0c4cc;
-  border-radius: 3px;
-}
-
-.main-content::-webkit-scrollbar-track {
-  background: transparent;
-}
+/* Geometry lives here; workspace.css owns the shared surface palette. */
+.layout-container { height: 100vh; }
+.sidebar { display: flex; flex-direction: column; position: relative; transition: width var(--motion-surface) var(--ease-standard); }
+.navigation-shell { flex: 1; min-height: 0; overflow-y: auto; }
+.logo-container { height: 64px; display: flex; align-items: center; justify-content: center; padding: 0 16px; border-bottom: 1px solid var(--workspace-border); }
+.logo { width: 36px; height: 36px; background: linear-gradient(135deg, #3b82f6, #0ea5e9 50%, #06b6d4); border-radius: 10px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; box-shadow: 0 4px 15px #3b82f659; }
+.logo-text { margin-left: 10px; font-size: 18px; font-weight: 600; color: #1e40af; white-space: nowrap; }
+.sidebar-menu { border-right: 0; padding: 12px 0; }
+.sidebar-menu :deep(.el-menu-item) { margin: 6px 10px; height: 46px; line-height: 46px; font-size: 14px; }
+.sidebar-menu :deep(.el-menu-item:hover) { color: #2563eb; }
+.sidebar-menu :deep(.el-menu-item.is-active) { font-weight: 600; }
+.sidebar-menu :deep(.el-icon) { font-size: 18px; margin-right: 10px; color: inherit; }
+.sidebar-menu :deep(.el-tooltip__trigger) { display: flex; align-items: center; justify-content: center; }
+.sidebar-menu :deep(.el-menu--collapse .el-menu-item) { margin: 6px 8px; padding: 0 !important; justify-content: center; }
+.sidebar-menu :deep(.el-menu--collapse .el-icon) { margin: 0; font-size: 20px; }
+.sidebar-footer { padding: 12px; border-top: 1px solid var(--workspace-border); display: flex; justify-content: center; }
+.collapse-btn { color: #3b82f6; padding: 8px; border-radius: 8px; }
+.collapse-btn:hover { color: #2563eb; }
+.main-container { display: flex; flex-direction: column; overflow: hidden; }
+.header { position: relative; height: 70px; display: flex; align-items: center; justify-content: space-between; padding: 0 24px; }
+.header-left { min-width: 0; flex: 1; }
+.header-right { display: flex; align-items: center; gap: 16px; flex-shrink: 0; }
+.header-btn { color: #3b82f6; padding: 10px; border-radius: 10px; }
+.header-btn:hover { color: #2563eb; }
+.user-dropdown { cursor: pointer; }
+.user-info { display: flex; align-items: center; gap: 10px; padding: 8px 14px; border: 1px solid transparent; border-radius: 12px; font: inherit; cursor: pointer; text-align: left; transition: background-color var(--motion-fast); }
+.user-avatar { background: linear-gradient(135deg, #3b82f6, #0ea5e9 50%, #06b6d4); color: #fff; font-weight: 600; box-shadow: 0 2px 8px #3b82f64d; }
+.username { font-size: 14px; color: #1e40af; font-weight: 500; }
+.main-content { min-width: 0; flex: 1; padding: 24px; overflow-y: auto; }
+.main-content:focus { outline: none; }
+.main-content::-webkit-scrollbar { width: 6px; height: 6px; }
+.main-content::-webkit-scrollbar-thumb { background: #c0c4cc; border-radius: 3px; }
+.main-content::-webkit-scrollbar-track { background: transparent; }
+.footer { height: 50px; display: flex; align-items: center; justify-content: center; border-top: 1px solid var(--workspace-border); color: #3b82f6; font-size: 13px; }
 
 /* 个人中心与系统设置 */
 :deep(.profile-dialog),
@@ -1160,19 +1034,8 @@ onUnmounted(() => {
     gap: 6px;
   }
 
-  .sidebar-menu :deep(.el-menu-item:hover) {
-    transform: none;
-  }
 
-  .sidebar-menu :deep(.el-menu-item.is-active::before) {
-    left: 50%;
-    top: auto;
-    bottom: 4px;
-    width: 24px;
-    height: 3px;
-    transform: translateX(-50%);
-    border-radius: 999px;
-  }
+
 
   .sidebar-menu :deep(.el-menu-item span) {
     margin: 0;

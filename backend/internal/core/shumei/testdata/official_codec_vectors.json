@@ -1,0 +1,178 @@
+{
+  "des": [
+    {
+      "text": "hello",
+      "key": "a9kbown8",
+      "cipher": "obdtMnJzzTM="
+    },
+    {
+      "text": "12345678",
+      "key": "a9kbown8",
+      "cipher": "ycKjToESX+I="
+    },
+    {
+      "text": "123456789",
+      "key": "a9kbown8",
+      "cipher": "ycKjToESX+IjMTEDaT6loA=="
+    },
+    {
+      "text": "1234567890123456",
+      "key": "a9kbown8",
+      "cipher": "ycKjToESX+ICEF60GoPL1w=="
+    },
+    {
+      "text": "12345678901234567",
+      "key": "a9kbown8",
+      "cipher": "ycKjToESX+ICEF60GoPL1x/x0wxQczaH"
+    },
+    {
+      "text": "",
+      "key": "a9kbown8",
+      "cipher": ""
+    },
+    {
+      "text": "测试😀",
+      "key": "a9kbown8",
+      "cipher": "tsHGLEC0pQ0="
+    }
+  ],
+  "aes": [
+    {
+      "text": "hello",
+      "key": "0011223344556677",
+      "cipher": "564726ccc60047cbccb4d2812babb799"
+    },
+    {
+      "text": "12345678",
+      "key": "0011223344556677",
+      "cipher": "e295bdbf88ac830da3b50ee165478010"
+    },
+    {
+      "text": "123456789",
+      "key": "0011223344556677",
+      "cipher": "14190a2cdf4fb2d3da53fb8af493aa4e"
+    },
+    {
+      "text": "1234567890123456",
+      "key": "0011223344556677",
+      "cipher": "0e455e2c7621d1a42524e2cea5641256"
+    },
+    {
+      "text": "12345678901234567",
+      "key": "0011223344556677",
+      "cipher": "0e455e2c7621d1a42524e2cea564125656f7f8805cf7fe1e31e1b3d098bc81ca"
+    },
+    {
+      "text": "测试😀",
+      "key": "0011223344556677",
+      "cipher": "66d5d6312d1114c58d40c2f41862bd8b"
+    }
+  ],
+  "full": [
+    {
+      "uid": "fixture-0000-1111-2222-3333",
+      "profile": {
+        "appId": "default",
+        "box": "",
+        "organization": "FXlyfmWg2AzwbrxDKSv5",
+        "os": "web",
+        "protocol": 4,
+        "rtype": "all",
+        "sdkver": "3.0.0",
+        "subVersion": "1.0.0",
+        "version": "3.0.0",
+        "time": 125,
+        "ua": "Fixture UA/1.0",
+        "url": "https://m.mcloud.139.com/portal/mobilecloud/index.html?path=newsignin",
+        "smid": "fixture-smid"
+      },
+      "checksum": "4799a7231893c54bc9cb20fd6d8006e7",
+      "obfuscated": {
+        "um": "Jk/Rbu9WX2I=",
+        "aw": "",
+        "nl": "JhkgOSA8Pbou+0IlhIP03U2CVn1NrLt7",
+        "lz": "5/0iJtMNRyo=",
+        "protocol": 4,
+        "fm": "RaRs5iWX4EU=",
+        "ir": "50HEUi4SvJ4=",
+        "dk": "/qWhkna6lCg=",
+        "version": "3.0.0",
+        "jt": "PPAFZah1oNw=",
+        "pu": "RCXCeFNpxFAICfveMaAIEw==",
+        "sb": "3Dvh9X9q2+VF1sPmti1AF2B6/8CjQ2ooZBWQoneDML0kaa2E6sSskhurvm8xuDRrc9Tl4NJSslpoPKbvXVqqr+aQL7ARKIbJ",
+        "smid": "fixture-smid",
+        "as": "sMIrWE2zAUMRxqRRSpv+m06C0n9cmPai3XKlhiFmXC8="
+      },
+      "data": "2fa2e883cd476ae48cce202159875c9314ac6799fa1a62c0feafecbe7365129f7f1e8707dc4c8b5d6c11190e11d75c422e337bd02696159432cd93c8228b3c2db40f133673d0e618f542e25d513ba53b47bf9c132c3a136c14c96dfdacee64c7caa8faff4680cc0556b46a650d3aacf34871cfedf9c7fe29fc97a995e6097fb1fde83fa403f5e87f1ea502d0131abf94aa7fc61c853ee45b51c3e6d25db8b14dacc47240df75b7de66e1963c4afd151fdca965c12072ad025a67dbff233e5000e20b390b26eaa66ea88eb1dfd7cbefc3f74806868d3408358290097379bc13178117be8521e465bfae4aa093e2fc42e340065f2c95c9ab15e00c484f726bd2523b977824b9fa2b512ad0d9d227f8df2ce90ac1f642743a359a427b9f68cd51d7fe870ac8b63872b8a66b9af1e77b94e6714e70f7f0e242275f098d819a7f02a8c42043e0c88c188b22c2cabc1ad0307080207274b82b0f2857e3f948dc1cba013cbc7a38c97c905444fba2c78758f7816f3c1b9bd35a6222105d79c6385a9793b6f67d40ae4af8d1755ae2e659a18f4ef0a2b7aa767c1a585c801f0533ad1e2daffaf331fc7292e0cdae2c838f313fce2e177d73baf9f58cd529cf26136b1a15572be8ce4a33b6cb44a6a33052563441"
+    },
+    {
+      "uid": "fixture-0000-1111-2222-3333",
+      "profile": {
+        "appId": "default",
+        "box": null,
+        "time": 0,
+        "timezone": -480,
+        "clientSize": "384,512",
+        "ua": "测试😀",
+        "res": {
+          "a": 1
+        },
+        "plugins": [
+          "a",
+          null,
+          true,
+          3
+        ],
+        "status": false,
+        "unknown": "<&>"
+      },
+      "checksum": "04d82304f254c9cc54e6c54eae1973ba",
+      "obfuscated": {
+        "um": "Jk/Rbu9WX2I=",
+        "aw": null,
+        "jt": "KblIUY3BBfw=",
+        "bl": "tyuk/8N9BvU=",
+        "na": "XfAdwwVE064=",
+        "pu": "WHxxyRWKQOI=",
+        "ut": "4X6DCF05GeRCG8zgF5Vi5w==",
+        "hy": "mk4VEcHUtyH6URUKcIeAlw==",
+        "kp": "wP50Dlr/974=",
+        "unknown": "<&>",
+        "as": "+Mj/aFNahGhEs5yXPuE/+A3d5CU+tC7nm8sjauENNc8="
+      },
+      "data": "58037998c76de75e87cb8cf6f67d53f3627f3be2b71427d3de8ca02321adb7377b4cab2fcf54fb8671a589b33f4ce64fa96d65d44056c9dd1349a8a08864000a58c6491ea173239fb3ca76ffae0b94ca6b21e8548290a8fde22e335c3306a91aef2e23f1ea7213df3d2b3cdc08d5f3934a410dc134d40c2896844010f080bea2fbd85e89d0b21c55dcbb1eef114920827e0a9356bc847bf9eaccb75bd935620c4fcf8f81da42cdab2758242d4a225984f523d15099dbbc1870cb2df247079696380417f25cc8eda331db9c18f3ccd0f534034a6068090e92ebc2793fc8a9d8cf774ef9a10d1c33af198e68db2bd87033921c14696f22d37a366a39398743384991114150da466cb3052cc8b18ef6b29a47a1be3fa7fb316478dd61ac69b0c8f9a444b1d8fbcfc0f3d2dff0831142ffcf0264b91d5bc3956baa23f1724d5a5d3d"
+    },
+    {
+      "uid": "fixture-0000-1111-2222-3333",
+      "profile": {
+        "number": 1e-12,
+        "big": 1000000000000000000,
+        "zero": 0,
+        "fraction": 1.25,
+        "object": {
+          "value": 1
+        },
+        "empty": "",
+        "bool": false,
+        "null": null,
+        "array": []
+      },
+      "checksum": "c7c8d5ae7b288f922618992a7dec9571",
+      "obfuscated": {
+        "number": 1e-12,
+        "big": 1000000000000000000,
+        "zero": 0,
+        "fraction": 1.25,
+        "object": {
+          "value": 1
+        },
+        "empty": "",
+        "bool": false,
+        "null": null,
+        "array": [],
+        "as": "uGIFTa7yeUNUWcJSxC6+yGDpl8qGowzLbI/VD2JbBIo="
+      },
+      "data": "6f3e8af194ed70fef7a801e1e8aaa5aca448ea7da2ba3c2fd641f9de406dd7cb33adcae2cf7ed8b4871f2a804638cfe02de33cccbd0c0f09f9811b293ea36a708fdd060038b6eb40e82be6a2a96d391fb848237bd4388e06b4a73a13695cc21b880dc8b4cc0cd1aec64c366f713a611957536b4cc7d788a9c43fad09d847ce541f82a8613fadab63a51e7c85552b31d530098a01b9665db6a5f31ed314c5e9bb2284706e474bd4561e7ef5b4bc246abdaf273ff2bb9d5fbd42418de7ce0b91d561e3fcbad05ecf0ba53f825817a1966d26be11d734a336063657343df8e3dcb68a9d7a29ac116580b4e521170a479871"
+    }
+  ]
+}

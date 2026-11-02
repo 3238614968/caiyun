@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -60,6 +61,18 @@ func (s *AccountService) RefreshTokenContext(ctx context.Context, account *model
 	if account == nil {
 		return fmt.Errorf("账号为空")
 	}
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancel()
+	release, err := acquireCredentialRotationLock(ctx, s.cache, account.Phone)
+	if err != nil {
+		return err
+	}
+	defer release()
+	current, err := s.accountRepositoryWithContext(ctx).FindByID(account.ID)
+	if err != nil {
+		return err
+	}
+	*account = *current
 
 	authClient := corehttp.NewClient()
 	if authStr := sanitizeAuthValue(account.Auth); authStr != "" {
@@ -67,14 +80,21 @@ func (s *AccountService) RefreshTokenContext(ctx context.Context, account *model
 	}
 	authForAccount := auth.NewAuth(authClient)
 
-	userDomainID := ""
-	jwtToken := account.JWTToken
+	userDomainID := jwtUserDomainID(account.JWTToken)
+	// Never carry the old JWT across a credential replacement.
+	jwtToken := ""
+	credentialExpired := false
 	if err := ctx.Err(); err != nil {
 		return err
 	}
 	if token, _, err := authForAccount.GetJWTTokenWithSSOTokenContext(ctx, account.Phone); err == nil && token != "" {
-		jwtToken = token
-		userDomainID = jwtUserDomainID(token)
+		account.JWTToken = token
+		account.JWTErrorCount = 0
+		return s.persistAuthorizationRefreshContext(ctx, account)
+	} else if !errors.Is(err, auth.ErrCredentialExpired) && !authorizationShouldRefresh(accountAuthorizationExpireAt(account), time.Now()) {
+		return err
+	} else {
+		credentialExpired = errors.Is(err, auth.ErrCredentialExpired)
 	}
 	if err := ctx.Err(); err != nil {
 		return err
@@ -82,6 +102,9 @@ func (s *AccountService) RefreshTokenContext(ctx context.Context, account *model
 
 	refreshed, err := authForAccount.RefreshAuthorizationContext(ctx, account.Auth, account.Phone, userDomainID)
 	if err != nil {
+		if credentialExpired {
+			return errors.Join(auth.ErrCredentialExpired, err)
+		}
 		return err
 	}
 	if err := ctx.Err(); err != nil {
@@ -97,6 +120,7 @@ func (s *AccountService) RefreshTokenContext(ctx context.Context, account *model
 		}
 	}
 	applyAuthorizationRefreshToAccount(account, refreshed, jwtToken)
+	account.JWTToken = jwtToken
 
 	return s.persistAuthorizationRefreshContext(ctx, account)
 }
@@ -143,7 +167,7 @@ func (s *AccountService) RefreshTokenIfNeeded(account *models.Account) error {
 	}
 
 	if err := s.RefreshToken(account); err != nil {
-		// 提前 5 天预刷新失败时，不覆盖数据库，也不阻断仍未过期账号的正常任务。
+		// 刷新失败不覆盖数据库中的原凭据。
 		if expireAt > now.UnixMilli() {
 			return nil
 		}

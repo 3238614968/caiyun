@@ -53,11 +53,12 @@ func (api *CaiyunAPI) CompletePosterTask() error {
 		return err
 	}
 	name := fmt.Sprintf("poster_%d.png", time.Now().UnixNano())
-	body, err := api.activityPostBody(PosterMarketName, MobileMarketURL+"/api/cloud/ose/activity/getUploadUrl", map[string]interface{}{
+	headers := api.buildReceiveHeaders("1002")
+	body, err := api.marketRawRequest("POST", MobileMarketURL+"/api/cloud/ose/activity/getUploadUrl", map[string]interface{}{
 		"marketName": posterUploadMarketName,
 		"fileName":   name,
 		"fileSize":   len(content),
-	})
+	}, headers)
 	if err != nil {
 		return err
 	}
@@ -94,12 +95,12 @@ func (api *CaiyunAPI) CompletePosterTask() error {
 		return fmt.Errorf("上传校园海报 HTTP %d", uploadResp.StatusCode)
 	}
 	hash := sha256.Sum256(content)
-	completed, err := api.activityPostBody(PosterMarketName, MobileMarketURL+"/api/cloud/ose/file/complete", map[string]interface{}{
+	completed, err := api.marketRawRequest("POST", MobileMarketURL+"/api/cloud/ose/file/complete", map[string]interface{}{
 		"uploadId":             reservation.UploadID,
 		"fileId":               reservation.FileID,
 		"contentHash":          hex.EncodeToString(hash[:]),
 		"contentHashAlgorithm": reservation.HashAlgorithm,
-	})
+	}, headers)
 	if err != nil {
 		return err
 	}

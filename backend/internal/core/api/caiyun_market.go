@@ -18,7 +18,7 @@ func (api *CaiyunAPI) ensureMarketDeviceIDContext(ctx context.Context) {
 	}
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
-	_ = api.client.EnsureShumeiDeviceID(ctx)
+	_ = api.client.EnsureShumeiDeviceIDForPage(ctx, MarketUserAgent, api.buildMarketPageURL(""))
 }
 
 func (api *CaiyunAPI) buildMarketPageURL(sourceID string) string {
@@ -70,6 +70,9 @@ func (api *CaiyunAPI) buildReceiveHeaders(sourceID string) map[string]string {
 }
 
 func (api *CaiyunAPI) prepareSignInCenterSession(forReceive bool) {
+	if api.signInBase == GPMarketURL {
+		return
+	}
 	api.ensureMarketDeviceID()
 	_ = api.client.PrepareSessionOnce("sign-in-center", func() error {
 		pageURL := api.buildMarketPageURL("")

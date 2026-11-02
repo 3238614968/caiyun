@@ -114,15 +114,20 @@ func (t *MailMutualTask) Run() error {
 	if err != nil {
 		return fmt.Errorf("读取邮箱任务前置步骤: %w", err)
 	}
-	needsBackup := false
+	needsBackup, needsPDF, needsBill := false, false, false
 	for _, task := range taskList {
 		if strings.EqualFold(task.State, "FINISH") {
 			continue
 		}
-		if task.ID == 1020 {
+		switch task.ID {
+		case 1020:
 			needsBackup = true
+		case 1014:
+			needsPDF = true
+		case 1029:
+			needsBill = true
 		}
-		if task.ID == 1004 || task.ID == 1020 {
+		if task.ID == 1004 || task.ID == 1014 || task.ID == 1020 {
 			if err := t.api.DoTaskWithMarket("newsign_139mail", "task", strconv.Itoa(task.ID)); err != nil {
 				return fmt.Errorf("邮箱任务前置登记: %w", err)
 			}
@@ -151,6 +156,13 @@ func (t *MailMutualTask) Run() error {
 			t.pending = true
 		}
 	}
+	if needsPDF {
+		note, err := t.exportMailPDF(session)
+		parts = append(parts, note)
+		if err != nil {
+			t.pending = true
+		}
+	}
 	if needsBackup {
 		if err := t.api.Backup139Mail(session); err != nil {
 			parts = append(parts, "邮箱转存未成功: "+err.Error())
@@ -159,12 +171,24 @@ func (t *MailMutualTask) Run() error {
 			parts = append(parts, "邮箱转存接口已接受")
 		}
 	}
-	if sent > 0 || already > 0 || needsBackup {
+	if needsBill {
+		if err := t.api.BackupAllBillMail(session); err != nil {
+			parts = append(parts, "账单邮件全量转存未完成: "+err.Error())
+			t.pending = true
+		} else {
+			parts = append(parts, "账单邮件全量转存接口已接受")
+		}
+		parts = append(parts, t.viewBillMail(session))
+	}
+	if sent > 0 || already > 0 || needsBackup || needsPDF || needsBill {
 		if latest, err := t.api.GetTaskListV3("newsign_139mail"); err == nil {
 			for _, task := range latest {
-				if (task.ID == 1004 || task.ID == 1020) && !strings.EqualFold(task.State, "FINISH") {
-					parts = append(parts, fmt.Sprintf("邮箱任务%d待服务端确认", task.ID))
-					t.pending = true
+				switch task.ID {
+				case 1004, 1014, 1020, 1029:
+					if !strings.EqualFold(task.State, "FINISH") {
+						parts = append(parts, fmt.Sprintf("邮箱任务%d待服务端确认", task.ID))
+						t.pending = true
+					}
 				}
 			}
 		} else {
@@ -178,6 +202,57 @@ func (t *MailMutualTask) Run() error {
 	}
 	t.logger.Success(t.message)
 	return nil
+}
+
+// exportMailPDF 执行 1014「体验PDF转换」：取最近一封邮件导出 PDF。
+// 服务端是否据此翻转任务另说，这里只保证真实动作已发生。
+func (t *MailMutualTask) exportMailPDF(session *api.Mail139Session) (string, error) {
+	raw, err := t.api.List139MailMessages(session, 1, 10)
+	if err != nil {
+		return "PDF 导出未完成: " + err.Error(), err
+	}
+	messages := api.Parse139MailList(raw)
+	if len(messages) == 0 {
+		err = fmt.Errorf("邮箱没有可导出的邮件")
+		return "PDF 导出未完成: " + err.Error(), err
+	}
+	if err = t.api.Export139MailPDF(session, messages[0].MID, "mcloud-task"); err != nil {
+		return "PDF 导出未完成: " + err.Error(), err
+	}
+	return "PDF 导出成功（单封邮件）", nil
+}
+
+// viewBillMail 执行 1029「查看我的账单」的邮箱侧动作：翻页找到账单/话费邮件，
+// 标记已读并转存。判定仍以服务端任务状态为准，这里失败不终止批次。
+func (t *MailMutualTask) viewBillMail(session *api.Mail139Session) string {
+	previous := ""
+	for page := 1; page <= 16; page++ {
+		raw, err := t.api.List139MailMessages(session, page, 30)
+		if err != nil {
+			return "账单邮件读取未完成: " + err.Error()
+		}
+		// 服务端忽略 start 时会重复返回同一页，避免无意义翻页。
+		if raw == previous {
+			break
+		}
+		previous = raw
+		messages := api.Parse139MailList(raw)
+		if len(messages) == 0 {
+			break
+		}
+		bill := api.Find139BillMail(messages)
+		if bill == nil {
+			continue
+		}
+		if err := t.api.Read139MailMessage(session, bill.MID); err != nil {
+			return "账单邮件已读未完成: " + err.Error()
+		}
+		if err := t.api.Backup139MailMessages(session, bill.MID, "10242000"); err != nil {
+			return "账单邮件转存未完成: " + err.Error()
+		}
+		return fmt.Sprintf("账单邮件已阅读并转存（%s）", bill.Subject)
+	}
+	return "未找到账单邮件"
 }
 
 func (t *MailMutualTask) sendPairs(session *api.Mail139Session, period string, ttl time.Duration, limit, startIndex int) (sent, already, failed int, failures []string, err error) {

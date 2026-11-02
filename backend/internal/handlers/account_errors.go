@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"caiyun/internal/core/auth"
 	"caiyun/internal/security"
 	"caiyun/internal/services"
 	"errors"
@@ -11,6 +12,12 @@ import (
 
 func respondAccountWriteError(c *gin.Context, err error) {
 	switch {
+	case errors.Is(err, auth.ErrCredentialExpired):
+		respondError(c, http.StatusConflict, auth.ErrCredentialExpired.Error())
+	case errors.Is(err, services.ErrActiveAccountLogin):
+		respondError(c, http.StatusConflict, services.ErrActiveAccountLogin.Error())
+	case errors.Is(err, services.ErrAccountLoginBusy):
+		respondError(c, http.StatusConflict, services.ErrAccountLoginBusy.Error())
 	case errors.Is(err, services.ErrInvalidPhone):
 		respondError(c, http.StatusBadRequest, "手机号格式不正确")
 	case errors.Is(err, services.ErrInvalidAuthorization):

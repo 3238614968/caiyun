@@ -1,6 +1,8 @@
 package handlers
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -8,6 +10,7 @@ import (
 
 	"caiyun/internal/core/sms"
 	"caiyun/internal/dto"
+	"caiyun/internal/models"
 	"caiyun/internal/services"
 	"caiyun/internal/utils"
 	apiresponse "caiyun/pkg/response"
@@ -34,6 +37,10 @@ func (h *AccountHandler) SendSmsCode(c *gin.Context) {
 	}
 
 	// 检查发送频率限制（优先使用 Redis 分布式限流，回退到内存限流）
+	if err := h.accountService.CheckSMSLoginAllowedContext(c.Request.Context(), userID, req.Phone, req.Force); err != nil {
+		respondAccountWriteError(c, err)
+		return
+	}
 	allowed, waitTime := h.checkSMSRateLimit(userID, req.Phone)
 	if !allowed {
 		log.Printf("[SendSmsCode] 触发频率限制 phone=%s wait=%s", utils.MaskPhone(req.Phone), waitTime)
@@ -188,8 +195,26 @@ func (h *AccountHandler) SmsLogin(c *gin.Context) {
 	}
 
 	// 调用SMS API验证验证码，获取authorization
-	authorization, err := sms.VerifyCodeContext(c.Request.Context(), req.Phone, req.SmsCode, req.TaskID)
+	credentialVerified := false
+	account, err := h.accountService.WithSMSLoginContext(c.Request.Context(), userID, req.Phone, req.Force, func(ctx context.Context) (*models.Account, error) {
+		authorization, err := sms.VerifyCodeContext(ctx, req.Phone, req.SmsCode, req.TaskID)
+		if err != nil {
+			return nil, err
+		}
+		credentialVerified = true
+		return h.accountService.CreateAccountContext(ctx, userID, &services.CreateAccountRequest{
+			Phone: req.Phone, Auth: authorization, Remark: req.Remark,
+		})
+	})
 	if err != nil {
+		if credentialVerified {
+			respondAccountWriteError(c, err)
+			return
+		}
+		if errors.Is(err, services.ErrActiveAccountLogin) || errors.Is(err, services.ErrAccountLoginBusy) {
+			respondAccountWriteError(c, err)
+			return
+		}
 		log.Printf("[SmsLogin] 验证失败 phone=%s: %v", utils.MaskPhone(req.Phone), err)
 		// 提供更友好的错误提示
 		errMsg := err.Error()
@@ -210,18 +235,6 @@ func (h *AccountHandler) SmsLogin(c *gin.Context) {
 		return
 	}
 
-	// 使用获取到的authorization创建账号（复用现有CreateAccount逻辑）
-	createReq := &services.CreateAccountRequest{
-		Phone:  req.Phone,
-		Auth:   authorization,
-		Remark: req.Remark,
-	}
-
-	account, err := h.accountService.CreateAccountContext(c.Request.Context(), userID, createReq)
-	if err != nil {
-		respondAccountWriteError(c, err)
-		return
-	}
 	_ = h.deleteSMSSession(userID, req.TaskID)
 
 	apiresponse.Success(c, dto.ToAccountResponse(account))

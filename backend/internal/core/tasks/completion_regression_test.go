@@ -119,7 +119,7 @@ func TestFunAIRunUsesServerCompletionAndPreservesPartialFailure(t *testing.T) {
 			client := corehttp.NewClient(corehttp.WithTransport(hiddenRewardRoundTrip(func(req *http.Request) (*http.Response, error) {
 				switch req.URL.Path {
 				case "/ycloud/funai/api/page/getmodule":
-					if req.URL.Query().Get("platform") != "android" || req.URL.Query().Get("appVersion") != "13.2.2" {
+					if req.URL.Query().Get("platform") != "android" || req.URL.Query().Get("appVersion") != "13.2.5" {
 						t.Fatal("missing FunAI platform parameters")
 					}
 					moduleReads++

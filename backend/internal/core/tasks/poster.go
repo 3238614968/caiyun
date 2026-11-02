@@ -42,6 +42,11 @@ func (t *PosterTask) Run() error {
 
 	tasks, err := t.api.NewYearTaskList(api.PosterMarketName)
 	if err != nil {
+		if isActivityEndedError(err) {
+			t.lastMessage = "校园海报活动已结束（服务端返回 602），跳过"
+			t.logger.Warn(t.lastMessage)
+			return nil
+		}
 		t.logger.Error("获取校园海报任务列表失败", err)
 		return err
 	}
@@ -58,10 +63,15 @@ func (t *PosterTask) Run() error {
 	blocked := make(map[int]bool)
 	var actionIssues []string
 	acted := make(map[string]bool)
+	ended := false
 	for round := 0; round < 3; round++ {
 		if round > 0 {
 			refreshed, err := t.api.NewYearTaskList(api.PosterMarketName)
 			if err != nil {
+				if isActivityEndedError(err) {
+					ended = true
+					break
+				}
 				t.logger.Debug(fmt.Sprintf("刷新校园海报任务列表失败: %v", err))
 				break
 			}
@@ -88,6 +98,11 @@ func (t *PosterTask) Run() error {
 				pending = true
 				acted[stepIdentity] = true
 				if err := t.api.CompletePosterTask(); err != nil {
+					if isActivityEndedError(err) {
+						ended = true
+						blocked[task.ID] = true
+						continue
+					}
 					failedActions++
 					blocked[task.ID] = true
 					actionIssues = append(actionIssues, fmt.Sprintf("海报任务%d: %v", task.ID, err))
@@ -99,6 +114,11 @@ func (t *PosterTask) Run() error {
 				// need the activity step registered once afterward.
 				if latest, err := t.api.NewYearTaskList(api.PosterMarketName); err == nil && !posterTaskFinished(latest, task.ID) {
 					if clickErr := t.api.NewYearStepClick(api.PosterMarketName, task.ID, key); clickErr != nil {
+						if isActivityEndedError(clickErr) {
+							ended = true
+							blocked[task.ID] = true
+							continue
+						}
 						t.logger.Debug(fmt.Sprintf("海报任务步骤登记失败: %v", clickErr))
 					}
 				}
@@ -106,6 +126,11 @@ func (t *PosterTask) Run() error {
 				pending = true
 				acted[stepIdentity] = true
 				if err := t.completePosterCameraTask(task.ID, key); err != nil {
+					if isActivityEndedError(err) {
+						ended = true
+						blocked[task.ID] = true
+						continue
+					}
 					failedActions++
 					blocked[task.ID] = true
 					actionIssues = append(actionIssues, fmt.Sprintf("AI任务%d: %v", task.ID, err))
@@ -125,6 +150,13 @@ func (t *PosterTask) Run() error {
 		}
 	}
 
+	if ended {
+		t.pending = false
+		t.lastMessage = "校园海报活动已结束（服务端返回 602），跳过剩余任务"
+		t.logger.Warn(t.lastMessage)
+		return nil
+	}
+
 	chances, err := t.api.NewYearLotteryCount(api.PosterMarketName)
 	if err != nil {
 		t.logger.Debug(fmt.Sprintf("查询校园海报抽奖次数失败: %v", err))
@@ -142,6 +174,11 @@ func (t *PosterTask) Run() error {
 			}
 		}
 	} else {
+		if isActivityEndedError(err) {
+			t.pending = false
+			t.lastMessage = "校园海报活动已结束（服务端返回 602）"
+			return nil
+		}
 		return fmt.Errorf("校园海报状态确认失败: %w", err)
 	}
 	parts := make([]string, 0, 4)

@@ -130,8 +130,15 @@ func (s *ExchangeScheduler) preheatAccountsForTasks(slot string, tasks []*models
 			// leaving the live captcha and submission on the critical path.
 			limiter <- struct{}{}
 			warmHTTP := newExchangeHTTPSessionContext(s.executionContext(), &exchangeAccount, authCtx)
-			warmExchangePortal(s.executionContext(), warmHTTP, authCtx)
+			warmErr := ensureExchangeSessionLogin(s.executionContext(), warmHTTP, authCtx)
 			<-limiter
+			if warmErr != nil {
+				log.Printf("【抢兑调度器】账号 %d 活动会话预热失败: %v", accountID, warmErr)
+				resultMu.Lock()
+				failureCount++
+				resultMu.Unlock()
+				return
+			}
 			sourceAuth := tokenInfo.Auth
 			if sourceAuth == "" {
 				sourceAuth = exchangeAccount.Auth

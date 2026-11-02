@@ -64,6 +64,11 @@ func TestExchangeFailureClassificationAndRetryability(t *testing.T) {
 	}{
 		{message: "奖品单日已耗尽", label: "sold_out", retryable: false},
 		{message: "云朵不足", label: "insufficient_cloud", retryable: false},
+		{message: "滑块验证码识别失败：滑块识别置信度不足，未提交兑换", label: "captcha", retryable: false},
+		{message: "验证失败 | code=514", label: "captcha", retryable: true},
+		{message: "活动异常，请稍后重试！Error Code：GK | code=610 | body={} | 滑块识别offset=130", label: "activity_rejected", retryable: false},
+		{message: "设备认证失败，未提交兑换", label: "auth", retryable: false},
+		{message: "兑换资格校验未通过：exchangeCode=2303（需开启自动备份）", label: "eligibility", retryable: false},
 		{message: "Token 无效", label: "auth", retryable: false},
 		{message: "幂等保护：5 秒内已有相同账号的同商品请求正在处理，请稍后重试", label: "duplicate_window", retryable: true},
 		{message: "请求失败：dial tcp timeout", label: "timeout", retryable: true},

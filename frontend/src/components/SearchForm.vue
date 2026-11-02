@@ -3,12 +3,13 @@
     :inline="true"
     :model="model"
     class="search-form"
+    @submit.prevent="handleSearch"
   >
     <slot />
     <el-form-item>
       <el-button
         type="primary"
-        @click="handleSearch"
+        native-type="submit"
       >
         <el-icon><Search /></el-icon>
         搜索

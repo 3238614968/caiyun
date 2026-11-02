@@ -36,7 +36,7 @@ func (t *FunAITask) SetAccountContext(phone, authToken string) *FunAITask {
 const funaiMaxLotteries = 40
 
 // These task IDs have reusable account actions. Image algorithms use an
-// embedded synthetic single-face portrait and fetch live server templates.
+// the authorized fixed reference portrait and fetch live style parameters.
 var (
 	funaiChatTasks   = map[string]bool{"aizhushou": true, "lingxiluxian": true, "zuowenzhushou": true}
 	funaiCameraTasks = map[string]bool{"aixiangji": true, "paizhaowenai": true}
@@ -48,6 +48,7 @@ func (t *FunAITask) Run() error {
 	t.pending = false
 	var issues []error
 	attempted := make(map[string]bool)
+	knowledgeUsed := false
 	t.logger.Start("------【趣玩AI抽奖】------")
 	t.api.PrepareActivitySession(api.FunAIMarketName)
 
@@ -75,6 +76,25 @@ func (t *FunAITask) Run() error {
 			}
 			previousExecuted, previousFailures := executed, failedActions
 			switch {
+			case task.ID == "zhishiku":
+				if !knowledgeUsed {
+					fileID, actionErr := t.api.CompleteFunAIKnowledgeUse()
+					if fileID != "" {
+						_ = AppendStringList(t.storage, KeyTempFiles, fileID)
+					}
+					if actionErr != nil {
+						failedActions++
+						issues = append(issues, fmt.Errorf("知识库使用: %w", actionErr))
+						break
+					}
+					knowledgeUsed = true
+				}
+				if err := t.api.FunaiRegister(module.ModuleID, task.ID); err != nil {
+					failedActions++
+					issues = append(issues, fmt.Errorf("知识库登记: %w", err))
+				} else {
+					executed++
+				}
 			case task.ID == "011":
 				if err := t.api.CompleteFunAIMiaoyunTask(); err == nil {
 					executed++
@@ -167,7 +187,7 @@ func (t *FunAITask) Run() error {
 		t.logger.Debug(fmt.Sprintf("复查趣玩 AI 任务状态失败: %v", refreshErr))
 		issues = append(issues, fmt.Errorf("复查趣玩 AI 主模块: %w", refreshErr))
 	}
-	t.pending = len(attempted) > 0
+	t.pending = len(attempted) > 0 || pendingManual > 0
 	prizes, lotteryErr := t.runLotteries(pageModule.ModuleID)
 
 	parts := make([]string, 0, 4)
@@ -194,7 +214,7 @@ func (t *FunAITask) Run() error {
 			parts = append(parts, "暂无可用抽奖次数")
 		}
 	}
-	if t.pending {
+	if len(attempted) > 0 {
 		parts = append(parts, fmt.Sprintf("%d项动作已提交，服务端尚未确认完成", len(attempted)))
 	}
 	if len(parts) == 0 {

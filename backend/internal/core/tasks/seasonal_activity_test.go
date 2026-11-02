@@ -238,7 +238,7 @@ func TestShakeUsesNewHostAndSeparatesFragmentsFromPrizes(t *testing.T) {
 		if req.URL.Host != "gp.mcloud.139.com" || req.Method != "POST" {
 			t.Fatalf("old shake endpoint: %s", req.URL)
 		}
-		if token := req.Header["jwtToken"]; len(token) != 1 || token[0] != "test-jwt" {
+		if token := req.Header.Values("jwtToken"); len(token) != 1 || token[0] != "test-jwt" {
 			t.Fatal("missing marketing JWT header")
 		}
 		switch {

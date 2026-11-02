@@ -22,7 +22,7 @@ func TestMakeWishExchangeRequiresAvailabilityAndCorrectPayload(t *testing.T) {
 			postCount++
 			body, _ := io.ReadAll(req.Body)
 			var payload map[string]interface{}
-			if err := json.Unmarshal(body, &payload); err != nil || payload["platform"] != "android" || payload["channel"] != "app" || payload["appVersion"] != "13.2.2" {
+			if err := json.Unmarshal(body, &payload); err != nil || payload["platform"] != "android" || payload["channel"] != "app" || payload["appVersion"] != "13.2.5" {
 				t.Fatalf("exchange request = %s, err=%v", body, err)
 			}
 			return mailTestResponse(req, 200, `{"code":0}`), nil

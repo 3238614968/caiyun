@@ -16,8 +16,11 @@ import (
 	"time"
 )
 
-//go:embed assets/ai-task-portrait.png
-var funaiSyntheticPortrait []byte
+// Fixed reference-project FACE_B64 material, explicitly authorized by the user
+// for all related tasks on 2026-10-06. Keep its original JPEG bytes.
+//
+//go:embed assets/ai-task-reference-face.jpg
+var funaiReferencePortrait []byte
 
 var funaiPortraitCache struct {
 	sync.Once
@@ -28,14 +31,9 @@ var funaiPortraitCache struct {
 
 func funaiImageInputs() (portrait, mask string, err error) {
 	funaiPortraitCache.Do(func() {
-		img, decodeErr := png.Decode(bytes.NewReader(funaiSyntheticPortrait))
+		img, decodeErr := jpeg.Decode(bytes.NewReader(funaiReferencePortrait))
 		if decodeErr != nil {
-			funaiPortraitCache.err = fmt.Errorf("解码内置合成人像失败: %w", decodeErr)
-			return
-		}
-		var jpegBytes bytes.Buffer
-		if encodeErr := jpeg.Encode(&jpegBytes, img, &jpeg.Options{Quality: 86}); encodeErr != nil {
-			funaiPortraitCache.err = encodeErr
+			funaiPortraitCache.err = fmt.Errorf("解码内置参考人像失败: %w", decodeErr)
 			return
 		}
 		bounds := img.Bounds()
@@ -50,7 +48,7 @@ func funaiImageInputs() (portrait, mask string, err error) {
 			funaiPortraitCache.err = encodeErr
 			return
 		}
-		funaiPortraitCache.jpegBase64 = base64.StdEncoding.EncodeToString(jpegBytes.Bytes())
+		funaiPortraitCache.jpegBase64 = base64.StdEncoding.EncodeToString(funaiReferencePortrait)
 		funaiPortraitCache.maskBase64 = base64.StdEncoding.EncodeToString(maskBytes.Bytes())
 	})
 	return funaiPortraitCache.jpegBase64, funaiPortraitCache.maskBase64, funaiPortraitCache.err
@@ -118,9 +116,10 @@ func funaiMaterialURL(template map[string]interface{}) string {
 }
 
 func (api *CaiyunAPI) funaiSingleFace(portrait string) (bool, error) {
-	resp, err := api.client.Post(AIYunURL+"/api/image/face/analysis", api.funaiImageHeaders(), map[string]interface{}{
+	resp, err := api.client.PostWithTimeout(AIYunURL+"/api/image/face/analysis", api.funaiImageHeaders(), map[string]interface{}{
 		"sendType": 2, "channelId": "100102", "imageExt": "jpg", "base64": portrait, "supplierType": 8,
-	})
+		"isMask": false, "isExposed": false, "isAnime": false, "isMultifaces": true,
+	}, 60*time.Second)
 	if err != nil {
 		return false, err
 	}
@@ -148,7 +147,7 @@ func (api *CaiyunAPI) funaiImageTaskStatus(taskID string) (int, error) {
 		if attempt > 0 {
 			time.Sleep(4 * time.Second)
 		}
-		resp, err := api.client.Post(AIYunURL+"/api/outer/async/task/result", api.funaiImageHeaders(), map[string]string{"taskId": taskID})
+		resp, err := api.client.PostWithTimeout(AIYunURL+"/api/outer/async/task/result", api.funaiImageHeaders(), map[string]string{"taskId": taskID}, 60*time.Second)
 		if err != nil {
 			return 0, err
 		}
@@ -241,7 +240,7 @@ func (api *CaiyunAPI) CompleteFunAIImageTask(taskID string) error {
 		endpoint = "/api/image/emo"
 		hasFace, err := api.funaiSingleFace(portrait)
 		if err != nil || !hasFace {
-			return fmt.Errorf("合成人像未通过单人脸分析: %v", err)
+			return fmt.Errorf("固定参考人像未通过单人脸分析: %v", err)
 		}
 		templates, err := api.funaiAdTemplates("66344", map[string]interface{}{"client": "wap"})
 		if err != nil {
@@ -267,7 +266,7 @@ func (api *CaiyunAPI) CompleteFunAIImageTask(taskID string) error {
 	default:
 		return fmt.Errorf("不支持的趣玩 AI 图像任务: %s", taskID)
 	}
-	resp, err := api.client.Post(AIYunURL+endpoint, api.funaiImageHeaders(), payload)
+	resp, err := api.client.PostWithTimeout(AIYunURL+endpoint, api.funaiImageHeaders(), payload, 60*time.Second)
 	if err != nil {
 		return err
 	}

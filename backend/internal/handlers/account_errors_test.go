@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"caiyun/internal/core/auth"
 	"caiyun/internal/services"
 	"errors"
 	"net/http"
@@ -17,6 +18,9 @@ func TestAccountWriteErrorsAreActionableAndRetainInternalCause(t *testing.T) {
 		status int
 	}{
 		{services.ErrAccountExists, http.StatusConflict},
+		{services.ErrActiveAccountLogin, http.StatusConflict},
+		{services.ErrAccountLoginBusy, http.StatusConflict},
+		{auth.ErrCredentialExpired, http.StatusConflict},
 		{services.ErrInvalidAuthorization, http.StatusBadRequest},
 		{errors.New("database-private-detail"), http.StatusInternalServerError},
 	} {

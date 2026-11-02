@@ -13,9 +13,9 @@ const (
 	Market7071URL        = "https://caiyun.feixin.10086.cn:7071/market"
 	MobileMarketURL      = "https://m.mcloud.139.com/ycloud"
 	AIYunURL             = "https://ai.yun.139.com"
-	MarketClientVersion  = "13.2.2"
+	MarketClientVersion  = "13.2.5"
 	MarketSourceID       = "1097"
-	MarketUserAgent      = "Mozilla/5.0 (Linux; Android 13; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/108.0.5359.128 Mobile Safari/537.36 MCloudApp/13.2.2 AppLanguage/zh-CN"
+	MarketUserAgent      = "Mozilla/5.0 (Linux; Android 13; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/108.0.5359.128 Mobile Safari/537.36 MCloudApp/13.2.5 AppLanguage/zh-CN"
 	ShareUserAgent       = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36"
 	AICameraSampleBase64 = "data:image/jpg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/2wCEAAkGBxAQEBUQEBAVFRUVFRUVFRUVFRUVFRUVFRUWFhUVFRUYHSggGBolHRUVITEhJSkrLi4uFx8zODMsNygtLisBCgoKDg0OGhAQGi0lHyUtLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLf/AABEIAAEAAQMBIgACEQEDEQH/xAAXAAEBAQEAAAAAAAAAAAAAAAAAAQID/8QAFhEBAQEAAAAAAAAAAAAAAAAAABEh/9oADAMBAAIQAxAAAAHhAH//xAAZEAEBAQEBAQAAAAAAAAAAAAABEQIhMUH/2gAIAQEAAT8A2M4Kxqf/xAAWEQEBAQAAAAAAAAAAAAAAAAAAESH/2gAIAQIBAT8Ap//EABYRAQEBAAAAAAAAAAAAAAAAAAABEf/aAAgBAwEBPwCf/9k="
 )
@@ -24,6 +24,18 @@ const (
 type CaiyunAPI struct {
 	client           *http.Client
 	familyCircleBase string
+	signInBase       string
+}
+
+// NewGPSignInAPI keeps the GP task table separate from the mobile task table.
+func NewGPSignInAPI(client *http.Client) *CaiyunAPI {
+	return &CaiyunAPI{client: client, signInBase: GPMarketURL}
+}
+func (api *CaiyunAPI) signInURL() string {
+	if api.signInBase != "" {
+		return api.signInBase
+	}
+	return MobileMarketURL
 }
 
 // NewCaiyunAPI 创建彩云 API 客户端

@@ -28,6 +28,10 @@
             :categories="categories"
             :exchange-config="exchangeConfig"
             :get-product-image-source="getProductImageSource"
+            :loading="productsLoading"
+            :error="productsError"
+            :busy-product-id="busyProductId"
+            @retry="loadProducts"
             @search="handleSearch"
             @reserve="handleReserveProduct"
             @immediate="handleImmediateExchange"
@@ -88,6 +92,7 @@
       :products="products"
       :user-accounts="userAccounts"
       :user-accounts-loading="userAccountsLoading"
+      :submitting="taskSubmitting"
       @submit="submitCreateTask"
     />
 
@@ -99,6 +104,7 @@
       :accounts="accounts"
       :user-accounts="userAccounts"
       :user-accounts-loading="userAccountsLoading"
+      :submitting="immediateSubmitting"
       @submit="submitImmediateExchange"
     />
 
@@ -132,7 +138,8 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, nextTick, onMounted, onUnmounted } from 'vue'
+import { useLatestRequest } from '@/composables/useLatestRequest'
 import { createCoalescedRefresh } from '@/utils/coalesced-refresh'
 import { isOperationUpdatedMessage, wsClient, type WsMessage } from '@/api/websocket'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -180,6 +187,12 @@ const currentCategory = ref('')
 const exchangeConfig = ref<ExchangeConfig | null>(null)
 const categories = ref<string[]>([])
 const products = ref<Product[]>([])
+const { loading: productsLoading, execute: latestProductsRequest } = useLatestRequest()
+const productsError = ref('')
+const preparingTask = ref(false)
+const busyProductId = ref<number | null>(null)
+const taskSubmitting = ref(false)
+const immediateSubmitting = ref(false)
 const accounts = ref<ExchangeRule[]>([])
 const tasks = ref<ExchangeTask[]>([])
 const userAccounts = ref<Account[]>([])
@@ -288,13 +301,11 @@ const syncDefaultProductSelection = () => {
 
 // 方法
 const loadProducts = async () => {
-  try {
-    const res = await searchProducts('', 100)
+  productsError.value = ''
+  await latestProductsRequest(() => searchProducts('', 100), res => {
     products.value = res.products || []
     syncDefaultProductSelection()
-  } catch (error: any) {
-    ElMessage.error('加载商品失败：' + error.message)
-  }
+  }, () => { productsError.value = '加载商品失败' })
 }
 
 const loadCategories = async () => {
@@ -397,8 +408,24 @@ const handleSearch = () => {
   // 搜索已在前端完成，无需额外请求
 }
 
+const prepareTaskWithFeedback = async (product: Product | undefined, type: 'fixed' | 'long_term', attempts: number) => {
+  if (preparingTask.value) return false
+  const trigger = document.activeElement
+  preparingTask.value = true
+  busyProductId.value = product?.id ?? null
+  try { return await prepareTaskForm(product, type, attempts) }
+  finally {
+    preparingTask.value = false
+    busyProductId.value = null
+    // Loading disables the product button and drops its focus. Restore it
+    // before the dialog opens so its focus trap can return to this trigger.
+    await nextTick()
+    if (trigger instanceof HTMLElement && trigger.isConnected) trigger.focus({ preventScroll: true })
+  }
+}
+
 const showCreateTaskDialog = async (product?: Product) => {
-  const prepared = await prepareTaskForm(product, 'fixed', 1)
+  const prepared = await prepareTaskWithFeedback(product, 'fixed', 1)
   if (!prepared) return
   taskDialogVisible.value = true
 }
@@ -453,7 +480,7 @@ const loadExchangeConfig = async () => {
 }
 
 const handleImmediateExchange = async (product: Product) => {
-  const prepared = await prepareTaskForm(product, 'fixed', 1)
+  const prepared = await prepareTaskWithFeedback(product, 'fixed', 1)
   if (!prepared) return
 
   if (getTaskAccountCount() > 1) {
@@ -482,7 +509,7 @@ const handleImmediateExchange = async (product: Product) => {
 // 预定商品（创建长期抢兑任务）
 const handleReserveProduct = async (product: Product) => {
   const preset = createExchangeReservationPreset(product)
-  const prepared = await prepareTaskForm(product, 'long_term', 10)
+  const prepared = await prepareTaskWithFeedback(product, 'long_term', 10)
   if (!prepared) return
 
   taskForm.value.restock_times = preset.restockTimes
@@ -490,18 +517,23 @@ const handleReserveProduct = async (product: Product) => {
 }
 
 const submitCreateTask = async () => {
-  const success = await createTask()
-  if (success) {
-    taskDialogVisible.value = false
-  }
+  if (taskSubmitting.value) return
+  taskSubmitting.value = true
+  try {
+    const success = await createTask()
+    if (success) taskDialogVisible.value = false
+  } finally { taskSubmitting.value = false }
 }
 
 const submitImmediateExchange = async () => {
-  const success = await runImmediateExchange()
-  if (success) {
-    immediateExchangeDialogVisible.value = false
-  }
-  return success
+  if (immediateSubmitting.value) return false
+  immediateSubmitting.value = true
+  busyProductId.value = selectedProduct.value?.id ?? null
+  try {
+    const success = await runImmediateExchange()
+    if (success) immediateExchangeDialogVisible.value = false
+    return success
+  } finally { immediateSubmitting.value = false; busyProductId.value = null }
 }
 
 const saveAccount = async () => {

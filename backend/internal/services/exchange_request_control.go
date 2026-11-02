@@ -37,6 +37,9 @@ const (
 	exchangeFailureNetwork            exchangeFailureKind = "network"
 	exchangeFailureProductUnavailable exchangeFailureKind = "product_unavailable"
 	exchangeFailureInvalidResponse    exchangeFailureKind = "invalid_response"
+	exchangeFailureCaptcha            exchangeFailureKind = "captcha"
+	exchangeFailureActivityRejected   exchangeFailureKind = "activity_rejected"
+	exchangeFailureEligibility        exchangeFailureKind = "eligibility"
 	exchangeFailureOther              exchangeFailureKind = "other"
 )
 
@@ -74,6 +77,13 @@ func performExchangeWithControlsContext(ctx context.Context, account *models.Exc
 	if err := ctx.Err(); err != nil {
 		return false, err.Error(), 0
 	}
+	release, err := acquireExchangeChallengeGate(lockStore, account)
+	if err != nil {
+		return false, err.Error(), 0
+	}
+	defer release()
+	ctx, cancel := context.WithTimeout(ctx, exchangeAttemptWindow)
+	defer cancel()
 	if locked, reason := acquireExchangeSubmitProtection(lockStore, account, prizeID); !locked {
 		return false, reason, 0
 	}
@@ -298,14 +308,25 @@ func exchangeDuplicateSubmitMessage(ttl time.Duration) string {
 }
 
 func classifyExchangeFailure(message string) exchangeFailureKind {
+	message = strings.SplitN(message, " | build=", 2)[0]
 	lower := strings.ToLower(strings.TrimSpace(message))
 	switch {
 	case lower == "":
 		return exchangeFailureUnknown
+	case strings.Contains(lower, "已安排任务") || strings.Contains(lower, "正在抢兑") || strings.Contains(lower, "跳过本次执行"):
+		return exchangeFailureDuplicateWindow
 	case strings.Contains(lower, "幂等保护") || strings.Contains(lower, "重复提交"):
 		return exchangeFailureDuplicateWindow
 	case strings.Contains(lower, "已兑完") || strings.Contains(lower, "已耗尽") || strings.Contains(lower, "售罄") || strings.Contains(lower, "库存") || strings.Contains(lower, "sold"):
 		return exchangeFailureSoldOut
+	case strings.Contains(lower, "code=610") || strings.Contains(lower, "error code：gk") || strings.Contains(lower, "error code:gk"):
+		return exchangeFailureActivityRejected
+	case strings.Contains(lower, "滑块识别置信度") || strings.Contains(lower, "验证失败") || strings.Contains(lower, "滑块验证码识别失败"):
+		return exchangeFailureCaptcha
+	case strings.Contains(lower, "设备认证失败"):
+		return exchangeFailureAuth
+	case strings.Contains(lower, "兑换资格校验未通过") || strings.Contains(lower, "非目标用户"):
+		return exchangeFailureEligibility
 	case strings.Contains(lower, "云朵") || strings.Contains(lower, "余额") || strings.Contains(lower, "不足"):
 		return exchangeFailureInsufficientCloud
 	case strings.Contains(lower, "auth") || strings.Contains(lower, "token") || strings.Contains(lower, "jwt") || strings.Contains(lower, "登录") || strings.Contains(lower, "鉴权"):
@@ -332,10 +353,15 @@ func exchangeFailureReasonLabel(message string) string {
 }
 
 func isExchangeRetryableFailure(message string) bool {
+	if strings.Contains(message, "未提交兑换") {
+		return false
+	}
 	switch classifyExchangeFailure(message) {
 	case exchangeFailureSoldOut,
+		exchangeFailureActivityRejected,
 		exchangeFailureInsufficientCloud,
 		exchangeFailureAuth,
+		exchangeFailureEligibility,
 		exchangeFailureAlreadyClaimed,
 		exchangeFailureProductUnavailable:
 		return false

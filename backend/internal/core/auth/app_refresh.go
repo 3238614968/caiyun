@@ -18,7 +18,7 @@ const (
 	defaultAppRefreshAESKey = "2olBaQGYnEKoStYomsd1n7ax"
 	appRefreshURL           = "https://user-njs.yun.139.com/user/auth/refreshToken"
 	appRefreshDeviceID      = "1E58F2CE422EB2234BB8795E316BD44B"
-	authWebViewUA           = "Mozilla/5.0 (Linux; Android 13; 23049RAD8C Build/TKQ1.221114.001; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/108.0.5359.128 Mobile Safari/537.36 MCloudApp/12.5.4 AppLanguage/zh-CN"
+	authWebViewUA           = "Mozilla/5.0 (Linux; Android 13; 23049RAD8C Build/TKQ1.221114.001; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/108.0.5359.128 Mobile Safari/537.36 MCloudApp/13.2.5 AppLanguage/zh-CN"
 	authOkHTTPUA            = "okhttp/4.12.0"
 	authTargetSourceID      = "001005"
 	authQuerySpecTokenURL   = "https://orches.yun.139.com/orchestration/auth-rebuild/token/v1.0/querySpecToken"
@@ -205,6 +205,9 @@ func (a *Auth) querySpecTokenWithRetryContext(ctx context.Context, authorization
 				} else if result.Success && result.Data.Token != "" {
 					return result.Data.Token, nil
 				} else {
+					if result.Code == "05050006" {
+						return "", ErrCredentialExpired
+					}
 					if result.Message != "" || result.Code != "" {
 						lastErr = fmt.Errorf("code=%s, message=%s", result.Code, result.Message)
 					} else {
@@ -213,8 +216,10 @@ func (a *Auth) querySpecTokenWithRetryContext(ctx context.Context, authorization
 				}
 			}
 		}
-		if err := sleepAuthContext(ctx, time.Duration(500*i)*time.Millisecond); err != nil {
-			return "", err
+		if i < 3 {
+			if err := sleepAuthContext(ctx, time.Duration(500*i)*time.Millisecond); err != nil {
+				return "", err
+			}
 		}
 	}
 
@@ -237,9 +242,16 @@ func (a *Auth) tyrzLoginWithCandidatesContext(ctx context.Context, ssoToken stri
 		return "", fmt.Errorf("ssoToken 为空")
 	}
 
-	candidates := []string{
-		"https://caiyun.feixin.10086.cn:7071/portal/auth/tyrzLogin.action?ssoToken=" + url.QueryEscape(ssoToken),
-		"https://m.mcloud.139.com/portal/auth/tyrzLogin.action?ssoToken=" + url.QueryEscape(ssoToken),
+	candidates := []struct {
+		endpoint string
+		body     map[string]interface{}
+	}{
+		{"https://m.mcloud.139.com/ycloud/auth-service/auth/tyrzLogin", map[string]interface{}{
+			"token": ssoToken, "openAccount": 0, "marketName": "sign_in_3", "sourceId": "1097",
+		}},
+		{"https://gp.mcloud.139.com/ycloud/auth-service/auth/tyrzLogin", map[string]interface{}{
+			"token": ssoToken, "openAccount": 0, "marketName": "sign_in_3", "sourceId": "1097",
+		}},
 	}
 
 	var lastErr error
@@ -248,14 +260,22 @@ func (a *Auth) tyrzLoginWithCandidatesContext(ctx context.Context, ssoToken stri
 			if err := ctx.Err(); err != nil {
 				return "", err
 			}
-			u, _ := url.Parse(candidate)
+			u, _ := url.Parse(candidate.endpoint)
 			headers := map[string]string{
 				"User-Agent": authWebViewUA,
 				"Accept":     "*/*",
 				"Host":       u.Host,
+				"Origin":     "https://m.mcloud.139.com",
+				"Referer":    "https://m.mcloud.139.com/portal/mobilecloud/index.html?path=newsignin&sourceid=1097&enableShare=1&token=" + url.QueryEscape(ssoToken) + "&targetSourceId=001005",
+				"activityid": "sign_in_3", "appversion": "13.2.5.0",
+			}
+			if u.Path == "/ycloud/auth-service/auth/tyrzLogin" {
+				for key, value := range a.h5LoginHeaders(ctx, ssoToken) {
+					headers[key] = value
+				}
 			}
 
-			resp, err := a.client.PostWithContext(ctx, candidate, headers, map[string]interface{}{})
+			resp, err := a.client.PostWithContext(ctx, candidate.endpoint, headers, candidate.body)
 			if err != nil {
 				lastErr = err
 				continue
@@ -276,13 +296,15 @@ func (a *Auth) tyrzLoginWithCandidatesContext(ctx context.Context, ssoToken stri
 				lastErr = fmt.Errorf("解析响应失败: %w", err)
 				continue
 			}
-			if result.Code == 0 && result.Result.Token != "" {
+			if result.Code != nil && *result.Code == 0 && result.Result.Token != "" {
 				return result.Result.Token, nil
 			}
 			lastErr = fmt.Errorf("JWT token 为空")
 		}
-		if err := sleepAuthContext(ctx, time.Duration(600*round)*time.Millisecond); err != nil {
-			return "", err
+		if round < 3 {
+			if err := sleepAuthContext(ctx, time.Duration(600*round)*time.Millisecond); err != nil {
+				return "", err
+			}
 		}
 	}
 
@@ -349,6 +371,9 @@ func parseRefreshAuthToken(decrypted string) (string, error) {
 		} `json:"data"`
 	}
 	if err := json.Unmarshal([]byte(decrypted), &payload); err == nil {
+		if payload.Code == "05050006" {
+			return "", ErrCredentialExpired
+		}
 		if !payload.Success {
 			if payload.Message != "" || payload.Code != "" {
 				return "", fmt.Errorf("刷新 authorization 业务失败: code=%s, message=%s", payload.Code, payload.Message)

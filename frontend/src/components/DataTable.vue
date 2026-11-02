@@ -1,7 +1,10 @@
 <template>
-  <div class="data-table-wrapper">
+  <div
+    class="data-table-wrapper"
+    :aria-busy="loading"
+  >
     <el-table
-      v-loading="loading"
+      v-loading="showLoading"
       :data="data"
       stripe
       :border="border"
@@ -34,7 +37,8 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, toRef } from 'vue'
+import { useDeferredLoading } from '@/composables/useDeferredLoading'
 
 interface Props {
   data: any[]
@@ -66,6 +70,7 @@ const emit = defineEmits<{
   (e: 'change', page: number, pageSize: number): void
   (e: 'selection-change', selection: any[]): void
 }>()
+const showLoading = useDeferredLoading(toRef(props, 'loading'))
 
 const currentPage = computed({
   get: () => props.page,
@@ -79,7 +84,8 @@ const pageSize = computed({
 
 const handleSizeChange = (val: number) => {
   emit('update:pageSize', val)
-  emit('change', currentPage.value, val)
+  emit('update:page', 1)
+  emit('change', 1, val)
 }
 
 const handleCurrentChange = (val: number) => {

@@ -1,6 +1,7 @@
 package tasks
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -10,6 +11,27 @@ import (
 	"caiyun/internal/core/logger"
 	"caiyun/internal/core/utils"
 )
+
+// activityBusinessCode 返回活动接口业务错误码；非业务错误返回空串。
+func activityBusinessCode(err error) string {
+	var businessErr *api.ActivityBusinessError
+	if errors.As(err, &businessErr) {
+		return businessErr.Code
+	}
+	return ""
+}
+
+// isActivityEndedError 判断活动接口是否已回“活动已结束”（602）。
+// 活动下线属于正常终止态，不应记为任务失败。
+func isActivityEndedError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if activityBusinessCode(err) == "602" {
+		return true
+	}
+	return strings.Contains(err.Error(), "活动已结束")
+}
 
 // activityActions 汇总各 WebView 活动任务可复用的“真实动作”：上传文件/
 // 上传照片、创建云笔记、分享文件、灵犀对话、AI 相机。所有方法只依赖账号

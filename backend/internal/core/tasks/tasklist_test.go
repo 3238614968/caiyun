@@ -16,6 +16,16 @@ func TestTaskListClickKeys(t *testing.T) {
 		want []string
 	}{
 		{
+			name: "reward and finish steps do not disable ordinary clicks",
+			in:   api.Task{ID: 6000, StepTypeSet: []string{"sendcloud", "click", "finish"}},
+			want: []string{"task"},
+		},
+		{
+			name: "generic clicks cannot replace a real action callback",
+			in:   api.Task{ID: 6001, StepTypeSet: []string{"sendcloud", "click", "interfacecallback"}},
+			want: nil,
+		},
+		{
 			name: "fixed entry task clicks both steps initially",
 			in:   api.Task{ID: 409, MarketName: "sign_in_3", CurrStep: 0},
 			want: []string{"task", "task2"},
@@ -24,6 +34,16 @@ func TestTaskListClickKeys(t *testing.T) {
 			name: "fixed entry task clicks second step after progress",
 			in:   api.Task{ID: 409, MarketName: "sign_in_3", CurrStep: 1},
 			want: []string{"task2"},
+		},
+		{
+			name: "wechat binding task collects after manual binding",
+			in:   api.Task{ID: 105, MarketName: "sign_in_3"},
+			want: []string{"wechatbinding"},
+		},
+		{
+			name: "task exposing wechatbinding step sends both keys",
+			in:   api.Task{ID: 7000, StepTypeSet: []string{"wechatbinding", "click"}},
+			want: []string{"task", "wechatbinding"},
 		},
 		{
 			name: "random cloud task uses dedicated key initially",

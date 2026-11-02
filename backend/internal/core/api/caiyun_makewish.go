@@ -56,7 +56,7 @@ type MakeWishHomeResult struct {
 	} `json:"raffleCodes"`
 }
 
-const makewishVersion = "13.2.2"
+const makewishVersion = "13.2.5"
 
 // MakeWishCloudExchangeEligibility reports whether the optional 300 AI-bean
 // exchange is currently available to this account.

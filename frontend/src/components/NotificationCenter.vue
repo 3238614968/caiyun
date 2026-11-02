@@ -14,6 +14,7 @@
         <el-button
           type="text"
           class="header-btn"
+          :aria-label="unreadCount ? `通知中心，${unreadCount} 条未读` : '通知中心'"
         >
           <el-icon :size="20">
             <Bell />
@@ -50,7 +51,12 @@
           :key="notification.id"
           class="notification-item"
           :class="{ unread: !notification.read }"
+          role="button"
+          tabindex="0"
+          :aria-label="`${notification.read ? '已读' : '未读'}：${notification.title}`"
           @click="handleNotificationClick(notification)"
+          @keydown.enter.prevent="handleNotificationClick(notification)"
+          @keydown.space.prevent="handleNotificationClick(notification)"
         >
           <div
             class="notification-icon"

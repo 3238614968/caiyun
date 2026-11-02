@@ -1,6 +1,8 @@
 <template>
   <el-dialog
     v-model="visible"
+    :close-on-press-escape="!submitting"
+    :show-close="!submitting"
     title="立即兑换"
     :width="isMobile ? '95%' : '480px'"
     :close-on-click-modal="false"
@@ -69,12 +71,17 @@
       </el-form-item>
     </el-form>
     <template #footer>
-      <el-button @click="visible = false">
+      <el-button
+        :disabled="submitting"
+        @click="visible = false"
+      >
         取消
       </el-button>
       <el-button
         type="success"
         :disabled="!canSubmit"
+        :loading="submitting"
+        :aria-busy="submitting"
         @click="$emit('submit')"
       >
         立即兑换
@@ -98,6 +105,7 @@ defineProps<{
   accounts: ExchangeRule[]
   userAccounts: Account[]
   userAccountsLoading: boolean
+  submitting?: boolean
 }>()
 
 defineEmits<{

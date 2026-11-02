@@ -71,6 +71,21 @@ func (api *CaiyunAPI) PrizeCenterLogPage(page, pageSize int) (*PrizeCenterPage, 
 	return api.PrizeCenterLogPageContext(context.Background(), page, pageSize)
 }
 
+// SendSpaceGiftPrize 补发已领取但未发放的空间类奖品。
+// 前端在「领取成功」回调末尾会再调一次该接口；对非空间类奖品是空操作，
+// 因此调用方应按尽力而为处理，单条失败不影响盘点结果。
+func (api *CaiyunAPI) SendSpaceGiftPrize(marketName, oid string) (*CaiyunResponse, error) {
+	marketName = strings.TrimSpace(marketName)
+	oid = strings.TrimSpace(oid)
+	if marketName == "" || oid == "" {
+		return nil, fmt.Errorf("空间卡补发缺少 marketName 或 oId")
+	}
+	return api.marketJSONRequest("POST", MobileMarketURL+"/prizeApi/userdraw/sendSpaceGiftPrize", map[string]string{
+		"marketName": marketName,
+		"oId":        oid,
+	}, nil)
+}
+
 func (api *CaiyunAPI) PrizeCenterLogPageContext(ctx context.Context, page, pageSize int) (*PrizeCenterPage, error) {
 	if page <= 0 {
 		page = 1

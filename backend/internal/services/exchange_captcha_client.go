@@ -3,12 +3,14 @@
 package services
 
 import (
+	"caiyun/internal/core/slider"
 	"caiyun/internal/core/sms"
 	"caiyun/internal/utils"
 	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -20,6 +22,7 @@ type exchangeSlidePayload struct {
 	picWidth    int
 	picHeight   int
 	puzzleWidth int
+	puzzleTop   *int
 }
 
 func obtainExchangeSlideOffset(session *exchangeHTTPSession, authCtx *exchangeAuthContext) (int, string, error) {
@@ -31,6 +34,14 @@ func obtainExchangeSlideOffsetContext(ctx context.Context, session *exchangeHTTP
 		ctx = context.Background()
 	}
 	var lastErr error
+	solver := strings.ToLower(strings.TrimSpace(os.Getenv("CAIYUN_EXCHANGE_SLIDE_SOLVER")))
+	if solver == "" {
+		solver = "builtin"
+	}
+	if solver != "builtin" && solver != "remote" {
+		return 0, "", fmt.Errorf("滑块识别方式无效: %s，未提交兑换", solver)
+	}
+	minimumConfidence := exchangeSlideMinimumConfidence()
 	for attempt := 1; attempt <= exchangeSlideMaxAttempt; attempt++ {
 		payload, err := fetchExchangeSlideContext(ctx, session, authCtx)
 		if err != nil {
@@ -41,16 +52,39 @@ func obtainExchangeSlideOffsetContext(ctx context.Context, session *exchangeHTTP
 			continue
 		}
 
-		result, err := sms.SolveSlideContext(ctx, payload.puzzle, payload.picture)
+		var result *sms.SlideSolveResult
+		var peakMargin float64
+		solveStarted := time.Now()
+		if solver == "remote" {
+			result, err = sms.SolveSlideContext(ctx, payload.puzzle, payload.picture)
+		} else {
+			var localResult *slider.Result
+			localResult, err = slider.Solve(ctx, slider.Request{Puzzle: payload.puzzle, Picture: payload.picture, PictureWidth: payload.picWidth, PuzzleTop: payload.puzzleTop})
+			if err == nil {
+				result = &sms.SlideSolveResult{Offset: localResult.Offset, Confidence: localResult.Confidence, HasConfidence: true, Method: localResult.Method}
+				peakMargin = localResult.PeakMargin
+			}
+		}
 		if err != nil {
 			lastErr = err
-			if err := sleepExchangeContext(ctx, time.Duration(attempt)*200*time.Millisecond); err != nil {
-				return 0, "", err
+			if ctx.Err() != nil {
+				return 0, "", ctx.Err()
+			}
+			// Deterministic local failures need a new challenge, not a delay or
+			// another attempt at the same image pair.
+			if solver == "remote" {
+				if err := sleepExchangeContext(ctx, time.Duration(attempt)*200*time.Millisecond); err != nil {
+					return 0, "", err
+				}
 			}
 			continue
 		}
 		if result == nil {
 			lastErr = fmt.Errorf("识别接口返回为空")
+			continue
+		}
+		if result.HasConfidence && result.Confidence < minimumConfidence {
+			lastErr = fmt.Errorf("滑块识别置信度不足: confidence=%.4f，最低%.2f，未提交兑换", result.Confidence, minimumConfidence)
 			continue
 		}
 		if result.Offset < 0 || result.Offset > payload.picWidth-payload.puzzleWidth {
@@ -64,12 +98,27 @@ func obtainExchangeSlideOffsetContext(ctx context.Context, session *exchangeHTTP
 		if result.Method != "" {
 			info += " method=" + result.Method
 		}
+		if solver == "builtin" {
+			info += fmt.Sprintf(" peak_margin=%.4f", peakMargin)
+		}
+		info += fmt.Sprintf(" solver=%s solve_ms=%.2f", solver, float64(time.Since(solveStarted).Microseconds())/1000)
+		if session.loggedIn {
+			info += " session=bound-h5"
+		}
 		return result.Offset, info, nil
 	}
 	if lastErr == nil {
 		lastErr = fmt.Errorf("识别失败")
 	}
-	return 0, "", lastErr
+	return 0, "", fmt.Errorf("%w，未提交兑换", lastErr)
+}
+
+func exchangeSlideMinimumConfidence() float64 {
+	value, err := strconv.ParseFloat(strings.TrimSpace(os.Getenv("CAIYUN_EXCHANGE_SLIDE_MIN_CONFIDENCE")), 64)
+	if err != nil || !(value > 0 && value <= 1) {
+		return 0.75
+	}
+	return value
 }
 
 func fetchExchangeSlide(session *exchangeHTTPSession, authCtx *exchangeAuthContext) (*exchangeSlidePayload, error) {
@@ -146,6 +195,7 @@ func decodeExchangeSlideResponse(bodyBytes []byte) (*exchangeSlidePayload, error
 			PicWidth    interface{} `json:"picWidth"`
 			PicHeight   interface{} `json:"picHeight"`
 			PuzzleWidth interface{} `json:"puzzleWidth"`
+			PuzzleTop   interface{} `json:"puzzleTop"`
 		} `json:"result"`
 	}
 	if err := json.Unmarshal(bodyBytes, &raw); err != nil {
@@ -164,12 +214,21 @@ func decodeExchangeSlideResponse(bodyBytes []byte) (*exchangeSlidePayload, error
 	if strings.TrimSpace(raw.Result.Puzzle) == "" || strings.TrimSpace(raw.Result.Picture) == "" {
 		return nil, fmt.Errorf("获取滑块验证码失败: 图片数据为空")
 	}
+	var puzzleTop *int
+	if raw.Result.PuzzleTop != nil {
+		top := exchangeIntFromAny(raw.Result.PuzzleTop, -1)
+		if top < 0 {
+			return nil, fmt.Errorf("获取滑块验证码失败: 垂直位置无效")
+		}
+		puzzleTop = &top
+	}
 	return &exchangeSlidePayload{
 		puzzle:      raw.Result.Puzzle,
 		picture:     raw.Result.Picture,
 		picWidth:    exchangeIntFromAny(raw.Result.PicWidth, 680),
 		picHeight:   exchangeIntFromAny(raw.Result.PicHeight, 400),
 		puzzleWidth: exchangeIntFromAny(raw.Result.PuzzleWidth, 96),
+		puzzleTop:   puzzleTop,
 	}, nil
 }
 

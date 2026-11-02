@@ -7,6 +7,7 @@ export interface ExchangeResultDisplay {
 
 const cleanResultMessage = (message?: string) => {
   return `${message ?? ''}`
+    .split(' | build=')[0]
     .replace(/\s+/g, ' ')
     .trim()
 }
@@ -17,6 +18,22 @@ export const formatExchangeResult = (message?: string, status?: string): Exchang
 
   if (!raw) {
     return { label: status === 'success' ? '成功' : '-', type: status === 'success' ? 'success' : 'info' }
+  }
+
+  if (raw.includes('已安排任务') || raw.includes('正在抢兑') || raw.includes('避免同月重复兑换') || raw.includes('跳过本次执行')) {
+    return { label: '本次已跳过', type: 'info' }
+  }
+
+  if (raw.includes('设备认证失败')) {
+    return { label: '设备认证未完成', type: 'warning' }
+  }
+
+  if (raw.includes('兑换资格查询失败')) {
+    return { label: '资格查询失败', type: 'warning' }
+  }
+
+  if (raw.includes('兑换资格校验未通过') || raw.includes('非目标用户')) {
+    return { label: '兑换资格未满足', type: 'warning' }
   }
 
   if (raw.includes('未登录') || raw.includes('登录失效') || raw.includes('重新登录') || raw.includes('JWT') || raw.includes('Token') || raw.includes('账号失效') || raw.includes('账号已失效') || raw.includes('认证为空')) {
@@ -53,6 +70,10 @@ export const formatExchangeResult = (message?: string, status?: string): Exchang
 
   if (raw.includes('活动异常') || raw.includes('Error Code')) {
     return { label: '活动异常', type: 'warning' }
+  }
+
+  if (raw.includes('滑块识别置信度') || raw.includes('滑块验证码识别失败') || raw.includes('验证失败')) {
+    return { label: '滑块验证未通过', type: 'warning' }
   }
 
   if (raw.includes('请求失败') || raw.includes('请求返回异常') || raw.includes('超时') || lower.includes('timeout')) {

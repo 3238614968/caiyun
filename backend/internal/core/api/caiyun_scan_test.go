@@ -27,6 +27,28 @@ func TestScanTransportRoundTripAndPadding(t *testing.T) {
 	}
 }
 
+func TestScanSavePreservesBusinessErrorDetails(t *testing.T) {
+	client := corehttp.NewClient(corehttp.WithTransport(mailRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+		switch req.URL.Path {
+		case "/api/image/aiCamera/algorithmLayout":
+			return mailTestResponse(req, 200, `{"code":"0000","data":{"taskId":"scan-1"}}`), nil
+		case "/api/outer/async/task/resultList":
+			return mailTestResponse(req, 200, `{"code":"0000","data":[{"resultList":[{"fileUrlList":["https://example.com/scan.jpg"]}]}]}`), nil
+		case "/adaptor/ai-camera/scans/pic/save":
+			return mailTestResponse(req, 200, `{"code":"01000001","message":"客户端信息不匹配"}`), nil
+		default:
+			t.Fatalf("unexpected scan endpoint: %s", req.URL.Path)
+		}
+		return nil, nil
+	})))
+	claims := base64.RawURLEncoding.EncodeToString([]byte(`{"sub":{"userDomainId":"12345"}}`))
+	client.SetJWTToken("header." + claims + ".signature")
+	err := NewCaiyunAPI(client).CompleteFunAIScanTask()
+	if err == nil || !strings.Contains(err.Error(), "01000001") || !strings.Contains(err.Error(), "客户端信息不匹配") {
+		t.Fatalf("scan save lost the server error: %v", err)
+	}
+}
+
 func TestCompleteFunAIScanTaskProtocol(t *testing.T) {
 	var saved bool
 	client := corehttp.NewClient(corehttp.WithTransport(mailRoundTripFunc(func(req *http.Request) (*http.Response, error) {
@@ -40,8 +62,8 @@ func TestCompleteFunAIScanTaskProtocol(t *testing.T) {
 			if err := json.Unmarshal(body, &payload); err != nil {
 				t.Fatal(err)
 			}
-			if len(req.Header["x-yun-app-channel"]) == 0 || req.Header["x-yun-app-channel"][0] != "10000023" || payload["channelId"] != "100101" || payload["uploadToCloud"] != true || len(payload["base64"].(string)) < 1000 {
-				t.Fatalf("scan algorithm fields: channel=%q, requestChannel=%v, uploadToCloud=%v", req.Header["x-yun-app-channel"], payload["channelId"], payload["uploadToCloud"])
+			if req.Header.Get("x-yun-app-channel") != "10000023" || payload["channelId"] != "100101" || payload["uploadToCloud"] != true || len(payload["base64"].(string)) < 1000 {
+				t.Fatalf("scan algorithm fields: channel=%q, requestChannel=%v, uploadToCloud=%v", req.Header.Get("x-yun-app-channel"), payload["channelId"], payload["uploadToCloud"])
 			}
 			return mailTestResponse(req, 200, `{"code":"0000","data":{"taskId":1234567890123456789}}`), nil
 		case "/api/outer/async/task/resultList":
@@ -50,8 +72,11 @@ func TestCompleteFunAIScanTaskProtocol(t *testing.T) {
 			}
 			return mailTestResponse(req, 200, `{"data":[{"resultList":[{"fileUrlList":["https://eos.example/test.jpg"]}]}]}`), nil
 		case "/adaptor/ai-camera/scans/pic/save":
-			if len(req.Header["X-YUN-API-VERSION"]) == 0 || req.Header["X-YUN-API-VERSION"][0] != "3" || len(req.Header["hcy-cool-flag"]) == 0 || req.Header["hcy-cool-flag"][0] != "1" {
-				t.Fatalf("scan save version=%v coolFlag=%v", req.Header["X-YUN-API-VERSION"], req.Header["hcy-cool-flag"])
+			if activityTestHeader(req, "x-huawei-channelSrc") != "10000023" || activityTestHeader(req, "x-yun-uni") != "12345" || !strings.HasPrefix(activityTestHeader(req, "x-DeviceInfo"), "6|127.0.0.1|1|") || activityTestHeader(req, "x-DeviceInfo") != activityTestHeader(req, "x-yun-client-info") {
+				return mailTestResponse(req, 200, `{"code":"01000001","message":"客户端信息不匹配"}`), nil
+			}
+			if req.Header.Get("X-YUN-API-VERSION") != "3" || req.Header.Get("hcy-cool-flag") != "1" {
+				t.Fatalf("scan save version=%v coolFlag=%v", req.Header.Get("X-YUN-API-VERSION"), req.Header.Get("hcy-cool-flag"))
 			}
 			decoded, err := decryptScanTransport(string(body))
 			if err != nil || !strings.Contains(string(decoded), "https://eos.example/test.jpg") {

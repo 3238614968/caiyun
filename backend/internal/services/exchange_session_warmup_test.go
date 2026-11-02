@@ -14,6 +14,10 @@ func TestWarmExchangeSessionAvoidsColdStartAndDoesNotMixCookiesOrAccounts(t *tes
 	jar.SetCookies(u, []*http.Cookie{{Name: "session", Value: "base"}})
 	base := &exchangePreparedSession{auth: &exchangeAuthContext{jwtToken: "fixture-jwt"}, http: &exchangeHTTPSession{client: &http.Client{Jar: jar}, deviceID: "device", captchaTID: "old"}, sourceAuth: "Basic original"}
 	a, b := cloneExchangeWarmSession(base), cloneExchangeWarmSession(base)
+	a.auth.jwtToken = "renewed-a"
+	if b.auth.jwtToken != "fixture-jwt" || base.auth.jwtToken != "fixture-jwt" {
+		t.Fatal("warm tasks share mutable authentication")
+	}
 	a.http.client.Jar.SetCookies(u, []*http.Cookie{{Name: "session", Value: "a"}})
 	if b.http.client.Jar.Cookies(u)[0].Value != "base" || b.http.captchaTID != "" {
 		t.Fatal("captcha/cookies shared between tasks")

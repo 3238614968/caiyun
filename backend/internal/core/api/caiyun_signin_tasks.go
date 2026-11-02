@@ -11,7 +11,7 @@ func (api *CaiyunAPI) SignIn() (*SignInResponse, error) {
 	api.prepareSignInCenterSession(false)
 
 	resp, err := api.client.Get(
-		fmt.Sprintf("%s/signin/page/startSignIn?client=app", MobileMarketURL),
+		fmt.Sprintf("%s/signin/page/startSignIn?client=app", api.signInURL()),
 		api.buildReceiveHeaders(""),
 	)
 	if err != nil {
@@ -165,12 +165,12 @@ func (api *CaiyunAPI) GetTaskListV3(marketName string) ([]Task, error) {
 	api.prepareSignInCenterSession(false)
 	headers := api.signInMarketHeaders(marketName)
 	resp, err := api.client.Post(
-		MobileMarketURL+"/signin/task/taskListV3",
+		api.signInURL()+"/signin/task/taskListV3",
 		headers,
 		map[string]interface{}{
 			"marketname":    marketName,
 			"client":        0,
-			"clientVersion": "13.2.2",
+			"clientVersion": "13.2.5",
 		},
 	)
 	if err != nil {
@@ -209,7 +209,7 @@ func isSignInMarket(marketName string) bool {
 func (api *CaiyunAPI) signInMarketHeaders(marketName string) map[string]string {
 	headers := api.buildReceiveHeaders("")
 	headers["activityId"] = marketName
-	headers["appVersion"] = "13.2.2.0"
+	headers["appVersion"] = "13.2.5.0"
 	return headers
 }
 
@@ -246,7 +246,7 @@ func (api *CaiyunAPI) doTaskPost(marketName string, taskID int) (*CaiyunResponse
 		payload["taskId"] = taskID
 	}
 	resp, err := api.client.Post(
-		fmt.Sprintf("%s/signin/page/doTaskPost", MobileMarketURL),
+		fmt.Sprintf("%s/signin/page/doTaskPost", api.signInURL()),
 		api.signInMarketHeaders(marketName),
 		payload,
 	)
@@ -272,7 +272,7 @@ func (api *CaiyunAPI) DoTaskWithMarket(marketName, key, taskID string) error {
 	headers := api.buildMarketHeaders(nil, "")
 	if isSignInMarket(strings.TrimSpace(marketName)) {
 		api.ensureMarketDeviceID()
-		baseURL = MobileMarketURL
+		baseURL = api.signInURL()
 		headers = api.signInMarketHeaders(marketName)
 	}
 

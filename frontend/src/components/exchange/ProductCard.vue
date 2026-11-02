@@ -97,6 +97,8 @@
         <el-button
           :type="actionType"
           class="exchange-btn"
+          :loading="busy"
+          :aria-label="`${actionText}：${product.prize_name}`"
           :size="isMobile ? 'small' : 'default'"
           @click="handleAction"
         >
@@ -120,6 +122,7 @@ const props = defineProps<{
   imageSource?: ProductImageSource | null
   isMobile: boolean
   immediateEnabled: boolean
+  busy?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -181,12 +184,7 @@ const handleAction = () => {
 
 <style scoped>
 .product-card {
-  border-radius: 22px;
   overflow: hidden;
-  border: 1px solid rgba(255, 255, 255, .78);
-  background: rgba(255, 255, 255, .84);
-  box-shadow: 0 16px 32px rgba(37, 99, 235, .09);
-  backdrop-filter: blur(12px);
   transition: transform .2s ease, box-shadow .2s ease, border-color .2s ease;
 }
 
@@ -196,13 +194,11 @@ const handleAction = () => {
 }
 
 .product-card:hover {
-  transform: translateY(-4px);
-  box-shadow: 0 20px 38px rgba(37, 99, 235, .14);
-  border-color: rgba(59, 130, 246, .32);
+  transform: translateY(-2px);
 }
 
 .product-card.sold-out {
-  opacity: .76;
+  opacity: 1;
 }
 
 .product-card.sold-out .product-image {

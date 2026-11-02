@@ -20,7 +20,7 @@ func (r *TaskRunner) runMakeWishExchangeTask() *TaskResult {
 		return activityTaskResult("makewish_exchange", startTime, nil, "当前账号不可兑换，未消耗 AI 豆", "")
 	}
 	err = r.api.ExchangeMakeWishCloud()
-	return activityTaskResult("makewish_exchange", startTime, err, "已发起 300 AI 豆兑换；此操作不改变许愿任务完成位", "")
+	return activityTaskResult("makewish_exchange", startTime, err, "已兑换一次 300 AI 豆抽奖码；任务1008需累计兑满服务端规定次数后完成", "")
 }
 
 // activityTaskResult 统一构造活动任务的执行结果：优先使用任务自述消息，

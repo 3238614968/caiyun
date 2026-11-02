@@ -61,7 +61,13 @@ func decryptScanTransport(encoded string) ([]byte, error) {
 func (api *CaiyunAPI) scanHeaders(save bool) map[string]string {
 	headers := api.funaiImageHeaders()
 	headers["x-yun-app-channel"] = "10000023"
-	headers["x-yun-user-agent"] = "android|23049RAD8C|android 13|mCloud13.2.2-032"
+	headers["x-huawei-channelSrc"] = "10000023"
+	// The adaptor requires Android cloud-client metadata, not the AI WebView's
+	// short device-info string. Keep it aligned with the upload channel.
+	clientInfo := api.client.GetClientInfo()
+	headers["x-yun-client-info"] = clientInfo
+	headers["x-DeviceInfo"] = clientInfo
+	headers["x-yun-user-agent"] = "android|23049RAD8C|android 13|mCloud13.2.5-032"
 	headers["x-NetType"] = "1"
 	headers["x-MM-Source"] = "032"
 	headers["x-SvcType"] = "1"
@@ -92,13 +98,16 @@ func (api *CaiyunAPI) CompleteFunAIScanTask() error {
 		"fileId": nil, "fileUrl": nil, "fileName": fmt.Sprintf("扫描文档_%d", time.Now().UnixMilli()),
 		"supplierType": 7, "sendType": 2, "imageExt": "jpg", "uploadToCloud": true,
 	}
-	resp, err := api.client.Post(AIYunURL+"/api/image/aiCamera/algorithmLayout", api.scanHeaders(false), request)
+	resp, err := api.client.PostWithTimeout(AIYunURL+"/api/image/aiCamera/algorithmLayout", api.scanHeaders(false), request, 120*time.Second)
 	if err != nil {
 		return err
 	}
 	body, err := api.client.ReadResponseBody(resp)
 	if err != nil {
 		return err
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("扫描文档算法 HTTP %d", resp.StatusCode)
 	}
 	var created struct {
 		Code interface{} `json:"code"`
@@ -119,9 +128,9 @@ func (api *CaiyunAPI) CompleteFunAIScanTask() error {
 		if attempt > 0 {
 			time.Sleep(6 * time.Second)
 		}
-		resp, err := api.client.Post(AIYunURL+"/api/outer/async/task/resultList", api.scanHeaders(false), map[string]interface{}{
+		resp, err := api.client.PostWithTimeout(AIYunURL+"/api/outer/async/task/resultList", api.scanHeaders(false), map[string]interface{}{
 			"taskIds": []string{taskID}, "userId": userID,
-		})
+		}, 60*time.Second)
 		if err != nil {
 			return err
 		}
@@ -129,7 +138,11 @@ func (api *CaiyunAPI) CompleteFunAIScanTask() error {
 		if err != nil {
 			return err
 		}
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			return fmt.Errorf("扫描文档结果查询 HTTP %d", resp.StatusCode)
+		}
 		var result struct {
+			Code interface{} `json:"code"`
 			Data []struct {
 				ResultList []struct {
 					FileURLList []string `json:"fileUrlList"`
@@ -138,6 +151,9 @@ func (api *CaiyunAPI) CompleteFunAIScanTask() error {
 		}
 		if err := json.Unmarshal([]byte(body), &result); err != nil {
 			return err
+		}
+		if result.Code != nil && fmt.Sprint(result.Code) != "0" && fmt.Sprint(result.Code) != "0000" {
+			return fmt.Errorf("扫描文档结果查询失败: code=%v", result.Code)
 		}
 		for _, batch := range result.Data {
 			for _, item := range batch.ResultList {
@@ -164,13 +180,16 @@ func (api *CaiyunAPI) CompleteFunAIScanTask() error {
 	if err != nil {
 		return err
 	}
-	resp, err = api.client.Post("https://orches.yun.139.com/adaptor/ai-camera/scans/pic/save", api.scanHeaders(true), encrypted)
+	resp, err = api.client.PostWithTimeout("https://orches.yun.139.com/adaptor/ai-camera/scans/pic/save", api.scanHeaders(true), encrypted, 90*time.Second)
 	if err != nil {
 		return err
 	}
 	body, err = api.client.ReadResponseBody(resp)
 	if err != nil {
 		return err
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("扫描文档保存 HTTP %d", resp.StatusCode)
 	}
 	if !strings.HasPrefix(strings.TrimSpace(body), "{") {
 		decoded, decryptErr := decryptScanTransport(body)
@@ -180,8 +199,10 @@ func (api *CaiyunAPI) CompleteFunAIScanTask() error {
 		body = string(decoded)
 	}
 	var saved struct {
-		Code interface{} `json:"code"`
-		Data struct {
+		Code    interface{} `json:"code"`
+		Message string      `json:"message"`
+		Msg     string      `json:"msg"`
+		Data    struct {
 			ScanRecordID interface{} `json:"scanRecordId"`
 		} `json:"data"`
 	}
@@ -189,7 +210,7 @@ func (api *CaiyunAPI) CompleteFunAIScanTask() error {
 		return err
 	}
 	if fmt.Sprint(saved.Code) != "0" && fmt.Sprint(saved.Code) != "0000" {
-		return fmt.Errorf("扫描文档保存失败: code=%v", saved.Code)
+		return fmt.Errorf("扫描文档保存失败: code=%v %s %s", saved.Code, saved.Message, saved.Msg)
 	}
 	return nil
 }

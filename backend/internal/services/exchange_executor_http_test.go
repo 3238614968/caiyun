@@ -31,6 +31,8 @@ func newMockExchangeTLSServer(t *testing.T, exchangeStatus int, exchangeBody str
 	t.Helper()
 	return httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
+		case "/ycloud/visitlog/journaling":
+			_, _ = io.WriteString(w, `{"code":0}`)
 		case "/api/sms/solve":
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = io.WriteString(w, `{"code":0,"message":"ok","data":{"offset":18,"confidence":0.99,"method":"mock"}}`)
@@ -38,6 +40,10 @@ func newMockExchangeTLSServer(t *testing.T, exchangeStatus int, exchangeBody str
 			w.Header().Set("Content-Type", "application/json")
 			w.Header().Set("x-yun-tid", "fixture-challenge")
 			_, _ = io.WriteString(w, `{"code":0,"msg":"ok","result":{"puzzle":"cHV6emxl","picture":"cGljdHVyZQ==","picWidth":680,"picHeight":400,"puzzleWidth":96}}`)
+		case "/ycloud/signin/page/receivePrizeDetails":
+			// 兑换前的上游资格校验：exchangeCode=0 表示可兑换，不拦截。
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, `{"code":0,"msg":"ok","result":{"exchangeCode":"0"}}`)
 		case "/ycloud/signin/page/exchangeV3":
 			if r.Method != http.MethodPost || r.URL.RawQuery != "" || r.Header.Get("isDeviceId") != "true" {
 				t.Error("exchange must use the captured V3 POST contract")
@@ -46,11 +52,11 @@ func newMockExchangeTLSServer(t *testing.T, exchangeStatus int, exchangeBody str
 			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 				t.Fatal(err)
 			}
-			if payload["puzzleOffset"] != float64(18) || payload["deviceId"] != "mock-device-id" || payload["prizeId"] != float64(12345) || payload["clientVersion"] != "13.2.2" {
+			if payload["puzzleOffset"] != float64(18) || payload["deviceId"] != "mock-device-id" || payload["prizeId"] != float64(12345) || payload["clientVersion"] != "13.2.5" {
 				t.Errorf("unexpected V3 payload: %+v", payload)
 			}
-			if r.Header.Get("x-yun-tid") != "fixture-challenge" {
-				t.Error("exchange did not reuse the challenge trace")
+			if r.Header.Get("x-yun-tid") != "" {
+				t.Error("exchange echoed a response trace header")
 			}
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(exchangeStatus)
@@ -63,6 +69,9 @@ func newMockExchangeTLSServer(t *testing.T, exchangeStatus int, exchangeBody str
 
 func newMockExchangeSession(t *testing.T, server *httptest.Server) *exchangeHTTPSession {
 	t.Helper()
+	// These protocol fixtures deliberately return placeholder image strings.
+	// Local image matching has separate tests with real PNG payloads.
+	t.Setenv("CAIYUN_EXCHANGE_SLIDE_SOLVER", "remote")
 	targetURL, err := url.Parse(server.URL)
 	if err != nil {
 		t.Fatalf("parse server url: %v", err)
@@ -108,6 +117,7 @@ func TestPreparedRetryKeepsAccountSessionAndReportsGKDiagnostics(t *testing.T) {
 	t.Setenv("CAIYUN_SMS_API_BASE_URL", server.URL)
 	t.Setenv("CAIYUN_SMS_INSECURE_SKIP_VERIFY", "true")
 	session := newMockExchangeSession(t, server)
+	session.loggedIn = true // This test starts with an already bound page session.
 	prepared := &exchangePreparedSession{auth: &exchangeAuthContext{jwtToken: "fixture-jwt"}, http: session}
 	for i := 0; i < 2; i++ {
 		ok, message, _ := performExchangePreparedContext(context.Background(), nil, "12345", nil, prepared)
@@ -232,6 +242,11 @@ func TestExecuteExchangeOnceRejectsNestedBusinessFailure(t *testing.T) {
 func TestExecuteExchangeOncePropagatesSlideErrors(t *testing.T) {
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
+		case "/ycloud/visitlog/journaling":
+			_, _ = io.WriteString(w, `{"code":0}`)
+		case "/ycloud/signin/page/receivePrizeDetails":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, `{"code":0,"result":{"exchangeCode":"0"}}`)
 		case "/api/sms/solve":
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = io.WriteString(w, `{"code":1,"message":"solver unavailable"}`)
@@ -254,8 +269,8 @@ func TestExecuteExchangeOncePropagatesSlideErrors(t *testing.T) {
 	if !strings.Contains(result.message, "滑块验证码识别失败") {
 		t.Fatalf("executeExchangeOnce() message = %q", result.message)
 	}
-	if got := exchangeFailureReasonLabel(result.message); got != "other" {
-		t.Fatalf("exchangeFailureReasonLabel(%q) = %q, want %q", result.message, got, "other")
+	if got := exchangeFailureReasonLabel(result.message); got != "captcha" {
+		t.Fatalf("exchangeFailureReasonLabel(%q) = %q, want %q", result.message, got, "captcha")
 	}
 }
 

@@ -11,6 +11,12 @@ import (
 
 var ErrDuplicateAccountIdentity = errors.New("account identity already exists")
 
+func (r *AccountRepository) HasActiveLoginForPhone(phone string, nowMillis int64) (bool, error) {
+	var count int64
+	err := r.db.Model(&models.Account{}).Where("phone = ? AND is_active = ? AND (expire_at = 0 OR expire_at > ?) AND auth <> ''", phone, true, nowMillis).Count(&count).Error
+	return count > 0, err
+}
+
 // FindLoginMetadata includes a removed account but never decrypts old
 // credentials. A new login can replace unreadable credentials safely.
 func (r *AccountRepository) FindLoginMetadata(phone string, userID uint) (*models.Account, error) {

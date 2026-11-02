@@ -31,10 +31,12 @@ type ListAccountsResponse struct {
 // SendSmsCodeRequest 发送短信验证码请求
 type SendSmsCodeRequest struct {
 	Phone string `json:"phone" binding:"required"`
+	Force bool   `json:"force"`
 }
 
 // SmsLoginRequest 短信验证码登录请求
 type SmsLoginRequest struct {
+	Force   bool   `json:"force"`
 	Phone   string `json:"phone" binding:"required"`
 	SmsCode string `json:"sms_code" binding:"required"`
 	TaskID  string `json:"task_id" binding:"required"`

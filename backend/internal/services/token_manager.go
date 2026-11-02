@@ -36,6 +36,7 @@ type TokenInfo struct {
 }
 
 type tokenRefreshSession struct {
+	authErr    error
 	authStr    string
 	authForJWT *auth.Auth
 	jwtToken   string

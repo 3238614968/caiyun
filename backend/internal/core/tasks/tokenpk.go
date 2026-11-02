@@ -14,8 +14,9 @@ import (
 // TokenPKTask 算力大作战（National_TokenPK）。
 type TokenPKTask struct {
 	*activityActions
-	lastMessage string
-	pending     bool
+	lastMessage       string
+	pending           bool
+	unavailablePrizes map[int]bool
 }
 
 func NewTokenPKTask(client *http.Client, log *logger.Logger) *TokenPKTask {
@@ -64,6 +65,10 @@ func planTokenPKActions(tasks []api.ActivityTask) []tokenPKAction {
 			continue
 		}
 		key := task.StepKey()
+		if task.ID == 11 {
+			actions = append(actions, tokenPKAction{Task: task, Kind: tokenPKActionRun, Key: "smartAlbum"})
+			continue
+		}
 		if key == "inviteFriend" {
 			// The cross-account mutual_assist task handles this step.
 			continue
@@ -82,6 +87,7 @@ func planTokenPKActions(tasks []api.ActivityTask) []tokenPKAction {
 
 func (t *TokenPKTask) Run() error {
 	t.pending = false
+	t.unavailablePrizes = make(map[int]bool)
 	var issues []error
 	attempted := make(map[int]bool)
 	t.logger.Start("------【算力大作战】------")
@@ -103,7 +109,9 @@ func (t *TokenPKTask) Run() error {
 		switch action.Kind {
 		case tokenPKActionReceive:
 			if err := t.receiveTokenPKPrize(action.Task); err != nil {
-				issues = append(issues, err)
+				if !t.deferUnavailablePrize(action.Task.ID, err) {
+					issues = append(issues, err)
+				}
 			} else {
 				initialClaimed++
 			}
@@ -138,21 +146,42 @@ func (t *TokenPKTask) Run() error {
 	if claimErr != nil {
 		issues = append(issues, claimErr)
 	}
-	t.pending = len(attempted) > 0
+	t.pending = len(attempted) > 0 || len(t.unavailablePrizes) > 0
 
-	chanceReward, chanceErr := t.api.TokenPKAutoReceiveLotteryChance()
-	if chanceErr != nil {
-		issues = append(issues, chanceErr)
-		t.logger.Debug(fmt.Sprintf("自动领取抽奖次数失败: %v", chanceErr))
-	}
-
-	usedToken, _, progressErr := t.api.TokenPKProgressQueryHome()
+	usedToken, stages, progressErr := t.api.TokenPKProgressQueryHome()
 	if progressErr != nil {
 		issues = append(issues, progressErr)
 		t.logger.Debug(fmt.Sprintf("查询算力进度失败: %v", progressErr))
 	}
 
 	parts := make([]string, 0, 6)
+	if progressErr == nil {
+		count, err := t.receiveProgressRewards(usedToken, stages)
+		if err != nil {
+			issues = append(issues, err)
+		}
+		if count > 0 {
+			parts = append(parts, fmt.Sprintf("阶段奖励领取%d项", count))
+		}
+	}
+	chanceReward, chanceErr := t.api.TokenPKAutoReceiveLotteryChance()
+	if chanceErr != nil {
+		if t.deferUnavailablePrize(-1, chanceErr) {
+			t.pending = true
+		} else {
+			issues = append(issues, chanceErr)
+		}
+		t.logger.Debug(fmt.Sprintf("自动领取抽奖次数失败: %v", chanceErr))
+	}
+
+	month := time.Now().In(time.FixedZone("CST", 8*3600)).Format("200601")
+	if rank, err := t.api.TokenPKRank(month); err != nil {
+		issues = append(issues, err)
+	} else if err := rewardResponseError("算力榜单", rank); err != nil {
+		issues = append(issues, err)
+	} else if result, ok := rank.Result.(map[string]interface{}); ok {
+		parts = append(parts, fmt.Sprintf("榜单%s：排名%v、算力%v", month, result["myRank"], result["myToken"]))
+	}
 	if claimed > 0 {
 		parts = append(parts, fmt.Sprintf("领取奖励%d项", claimed))
 	}
@@ -171,8 +200,11 @@ func (t *TokenPKTask) Run() error {
 	if failures > 0 {
 		parts = append(parts, fmt.Sprintf("%d项步骤失败", failures))
 	}
-	if t.pending {
-		parts = append(parts, fmt.Sprintf("%d项待服务端确认或跨月完成", len(attempted)))
+	if len(attempted) > 0 {
+		parts = append(parts, fmt.Sprintf("%d项待服务端确认或周期结算", len(attempted)))
+	}
+	if len(t.unavailablePrizes) > 0 {
+		parts = append(parts, fmt.Sprintf("%d项奖励暂不可领（奖品发放失败/已耗尽），保留待领取状态", len(t.unavailablePrizes)))
 	}
 	if len(parts) == 0 {
 		parts = append(parts, "本轮无可执行步骤（已完成、达到月上限或待好友互助）")
@@ -196,13 +228,19 @@ func (t *TokenPKTask) receiveFinishedPrizes(attempted map[int]bool) (int, error)
 	for _, task := range tasks {
 		if strings.EqualFold(task.State, activityStateFinish) {
 			delete(attempted, task.ID)
+			delete(t.unavailablePrizes, task.ID)
 		}
 		if strings.EqualFold(task.State, activityStateSuccess) {
+			if t.unavailablePrizes[task.ID] {
+				continue
+			}
 			if err := t.receiveTokenPKPrize(task); err == nil {
 				claimed++
 				delete(attempted, task.ID)
 			} else {
-				issues = append(issues, err)
+				if !t.deferUnavailablePrize(task.ID, err) {
+					issues = append(issues, err)
+				}
 			}
 		}
 	}
@@ -226,6 +264,8 @@ func (t *TokenPKTask) receiveTokenPKPrize(task api.ActivityTask) error {
 func (t *TokenPKTask) executeTokenPKStep(action tokenPKAction) error {
 	var err error
 	switch action.Key {
+	case "smartAlbum":
+		return t.api.TokenPKSmartAlbumOpen()
 	case "backup":
 		err = t.performAlbumBackup()
 	case "uploadPhoto":
@@ -265,6 +305,25 @@ func (t *TokenPKTask) Message() string {
 }
 
 func (t *TokenPKTask) Pending() bool { return t.pending }
+
+// isTokenPKPrizeUnavailable 判断领奖失败是否为 9001“奖品发放失败”。
+// 该码既表示当日奖池/库存耗尽，也会在任务已 FINISH 重复领取时返回；
+// 语义是“当前无可领”，不是任务失败，保留待领状态等次日刷新即可。
+func isTokenPKPrizeUnavailable(err error) bool {
+	var businessErr *api.ActivityBusinessError
+	return errors.As(err, &businessErr) && businessErr.Code == "9001"
+}
+
+func (t *TokenPKTask) deferUnavailablePrize(id int, err error) bool {
+	if !isTokenPKPrizeUnavailable(err) {
+		return false
+	}
+	if t.unavailablePrizes == nil {
+		t.unavailablePrizes = make(map[int]bool)
+	}
+	t.unavailablePrizes[id] = true
+	return true
+}
 
 func formatTokenCount(tokens int64) string {
 	switch {

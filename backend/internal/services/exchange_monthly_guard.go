@@ -102,6 +102,13 @@ func isExchangeMonthlySeriesLockMessage(message string) bool {
 	if msg == "" {
 		return false
 	}
+	// Scheduler coordination is not an upstream receipt. Old failure rows may
+	// contain these messages; they must not suppress a whole month's attempts.
+	for _, marker := range []string{"已安排任务", "正在抢兑", "避免同月重复兑换", "获取本月同系列抢兑锁失败", "跳过本次执行"} {
+		if strings.Contains(msg, marker) {
+			return false
+		}
+	}
 
 	patterns := []string{
 		"本月已兑换",
@@ -113,9 +120,6 @@ func isExchangeMonthlySeriesLockMessage(message string) bool {
 		"每月只能",
 		"该类商品本月",
 		"该类型商品本月",
-		"同系列",
-		"同类商品",
-		"该品类",
 		"重复兑换",
 		"重复兑奖",
 	}

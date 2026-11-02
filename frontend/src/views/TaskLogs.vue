@@ -12,6 +12,7 @@
         :inline="true"
         :model="searchForm"
         class="search-form"
+        @submit.prevent="handleSearch"
       >
         <el-form-item label="任务类型">
           <el-select
@@ -54,7 +55,7 @@
         <el-form-item>
           <el-button
             type="primary"
-            @click="handleSearch"
+            native-type="submit"
           >
             搜索
           </el-button>
@@ -66,7 +67,8 @@
 
       <!-- 日志列表 -->
       <div
-        v-loading="loading"
+        v-loading="showLoading"
+        :aria-busy="loading"
         class="logs-shell"
       >
         <el-table
@@ -337,13 +339,16 @@
 </template>
 
 <script setup lang="ts">
+import { useLatestRequest } from '@/composables/useLatestRequest'
+import { useDeferredLoading } from '@/composables/useDeferredLoading'
 import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { getTaskLogs, type TaskLog } from '../api/task'
 import { getTaskTypeName, taskTypeOptions } from '../utils/task-types'
 import { formatExchangeResult } from '@/utils/exchange-result'
 
-const loading = ref(false)
+const { loading, execute: latestLogRequest } = useLatestRequest()
+const showLoading = useDeferredLoading(loading)
 const detailVisible = ref(false)
 const logList = ref<TaskLog[]>([])
 const currentLog = ref<TaskLog>({} as TaskLog)
@@ -390,23 +395,13 @@ const getStatusType = (status: string) => {
 
 // 加载日志列表
 const loadLogs = async () => {
-  loading.value = true
-  try {
-    const params: any = {
-      page: pagination.page,
-      page_size: pagination.pageSize
-    }
-    if (searchForm.taskType) params.task_type = searchForm.taskType
-    if (searchForm.status) params.status = searchForm.status
-
-    const data = await getTaskLogs(params)
+  const params: any = { page: pagination.page, page_size: pagination.pageSize }
+  if (searchForm.taskType) params.task_type = searchForm.taskType
+  if (searchForm.status) params.status = searchForm.status
+  await latestLogRequest(() => getTaskLogs(params), data => {
     logList.value = data.task_logs
     pagination.total = data.total
-  } catch (error) {
-    ElMessage.error('加载日志列表失败')
-  } finally {
-    loading.value = false
-  }
+  }, () => ElMessage.error('加载日志列表失败'))
 }
 
 // 搜索
@@ -426,6 +421,7 @@ const handleReset = () => {
 // 分页大小变化
 const handleSizeChange = (size: number) => {
   pagination.pageSize = size
+  pagination.page = 1
   loadLogs()
 }
 

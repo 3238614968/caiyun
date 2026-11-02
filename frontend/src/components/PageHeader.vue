@@ -1,9 +1,9 @@
 <template>
   <div class="page-header">
     <div class="header-left">
-      <h2 class="page-title">
+      <h1 class="page-title">
         {{ title }}
-      </h2>
+      </h1>
       <p
         v-if="subtitle"
         class="page-subtitle"

@@ -1,0 +1,163 @@
+{
+  "ConfusionInfo": {
+    "appId": {
+      "is_encrypt": 0,
+      "obfuscated_name": "appId"
+    },
+    "data": {
+      "appId": {
+        "cipher": "DES",
+        "is_encrypt": 1,
+        "key": "a9kbown8",
+        "obfuscated_name": "um"
+      },
+      "box": {
+        "is_encrypt": 0,
+        "obfuscated_name": "aw"
+      },
+      "canvas": {
+        "cipher": "DES",
+        "is_encrypt": 1,
+        "key": "ultuhs59",
+        "obfuscated_name": "iu"
+      },
+      "clientSize": {
+        "cipher": "DES",
+        "is_encrypt": 1,
+        "key": "7s9eixjh",
+        "obfuscated_name": "na"
+      },
+      "organization": {
+        "cipher": "DES",
+        "is_encrypt": 1,
+        "key": "14e30pp1",
+        "obfuscated_name": "nl"
+      },
+      "os": {
+        "cipher": "DES",
+        "is_encrypt": 1,
+        "key": "j862vr1f",
+        "obfuscated_name": "lz"
+      },
+      "platform": {
+        "cipher": "DES",
+        "is_encrypt": 1,
+        "key": "pgutfbo7",
+        "obfuscated_name": "lm"
+      },
+      "plugins": {
+        "cipher": "DES",
+        "is_encrypt": 1,
+        "key": "x98c92bm",
+        "obfuscated_name": "hy"
+      },
+      "pmf": {
+        "cipher": "DES",
+        "is_encrypt": 1,
+        "key": "gwvvsmr4",
+        "obfuscated_name": "yu"
+      },
+      "protocol": {
+        "is_encrypt": 0,
+        "obfuscated_name": "protocol"
+      },
+      "referer": {
+        "cipher": "DES",
+        "is_encrypt": 1,
+        "key": "gka1ljjt",
+        "obfuscated_name": "mf"
+      },
+      "res": {
+        "cipher": "DES",
+        "is_encrypt": 1,
+        "key": "ht2n6dwf",
+        "obfuscated_name": "ut"
+      },
+      "rtype": {
+        "cipher": "DES",
+        "is_encrypt": 1,
+        "key": "k2p9ifij",
+        "obfuscated_name": "fm"
+      },
+      "sdkver": {
+        "cipher": "DES",
+        "is_encrypt": 1,
+        "key": "q4ij0mv5",
+        "obfuscated_name": "ir"
+      },
+      "status": {
+        "cipher": "DES",
+        "is_encrypt": 1,
+        "key": "moyspi7i",
+        "obfuscated_name": "kp"
+      },
+      "subVersion": {
+        "cipher": "DES",
+        "is_encrypt": 1,
+        "key": "egsyl21v",
+        "obfuscated_name": "dk"
+      },
+      "svm": {
+        "cipher": "DES",
+        "is_encrypt": 1,
+        "key": "yf780e9w",
+        "obfuscated_name": "ee"
+      },
+      "time": {
+        "cipher": "DES",
+        "is_encrypt": 1,
+        "key": "btb17oag",
+        "obfuscated_name": "jt"
+      },
+      "timezone": {
+        "cipher": "DES",
+        "is_encrypt": 1,
+        "key": "l94h8clc",
+        "obfuscated_name": "bl"
+      },
+      "tn": {
+        "cipher": "DES",
+        "is_encrypt": 1,
+        "key": "crnw0x7e",
+        "obfuscated_name": "as"
+      },
+      "trees": {
+        "cipher": "DES",
+        "is_encrypt": 1,
+        "key": "x6the9nq",
+        "obfuscated_name": "ij"
+      },
+      "ua": {
+        "cipher": "DES",
+        "is_encrypt": 1,
+        "key": "bewicpxu",
+        "obfuscated_name": "pu"
+      },
+      "url": {
+        "cipher": "DES",
+        "is_encrypt": 1,
+        "key": "llj8yd1x",
+        "obfuscated_name": "sb"
+      },
+      "version": {
+        "is_encrypt": 0,
+        "obfuscated_name": "version"
+      },
+      "vpw": {
+        "cipher": "DES",
+        "is_encrypt": 1,
+        "key": "f1zlae4b",
+        "obfuscated_name": "qb"
+      }
+    },
+    "organization": {
+      "is_encrypt": 0,
+      "obfuscated_name": "organization"
+    },
+    "os": {
+      "is_encrypt": 0,
+      "obfuscated_name": "os"
+    }
+  },
+  "Protocol": 4
+}

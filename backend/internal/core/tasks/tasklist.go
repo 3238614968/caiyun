@@ -25,20 +25,9 @@ var taskListRandomCloudTaskIDs = map[int]bool{
 	478: true,
 }
 
-// 这些任务在 Go 版本中已有独立模块或仍需专门接口，不适合在通用 clickTask 流程里盲点。
+// 通知连续奖励由独立模块处理，不能以通用点击代替每日设备状态。
 var taskListBuiltinSkipTaskIDs = map[int]string{
-	106:  "上传任务需要专门接口流程",
-	107:  "云笔记任务需要专门接口流程",
-	110:  "上传任务需要真实上传实现",
-	113:  "上传任务需要专门接口流程",
-	434:  "分享文件任务建议走独立分享/邀请任务",
-	585:  "AI 相机任务需要专门接口流程",
-	522:  "每月上传任务需要批量上传策略",
 	1021: "邮件通知奖励建议走消息推送奖励任务",
-}
-
-var taskListReminderSkipTaskIDs = map[int]bool{
-	1021: true, // 该任务已有 messagepush 模块处理，避免重复告警
 }
 
 // TaskListTask 任务列表任务（含翻倍奖励和常规任务自动执行）
@@ -52,9 +41,22 @@ type TaskListTask struct {
 	authToken        string
 	claimedCloud     int
 	expansionPending bool
+	pending          bool
+	message          string
+	wait             func(time.Duration)
+	gp               bool
+}
+
+func NewGPTaskListTask(client *http.Client, log *logger.Logger) *TaskListTask {
+	t := NewTaskListTask(client, log)
+	t.api = api.NewGPSignInAPI(client)
+	t.gp = true
+	return t
 }
 
 func (t *TaskListTask) ClaimedCloud() int { return t.claimedCloud }
+func (t *TaskListTask) Pending() bool     { return t.pending }
+func (t *TaskListTask) Message() string   { return t.message }
 
 type taskListItem struct {
 	MarketName string
@@ -71,12 +73,15 @@ func NewTaskListTask(client *http.Client, logger *logger.Logger) *TaskListTask {
 		logger:  logger,
 		api:     api.NewCaiyunAPI(client),
 		fileAPI: api.NewFileAPI(client),
+		storage: NewMemoryStore(),
 	}
 }
 
 // SetStorage 设置任务存储（记录临时资源，供收尾清理）
 func (t *TaskListTask) SetStorage(store Storage) *TaskListTask {
-	t.storage = store
+	if store != nil {
+		t.storage = store
+	}
 	return t
 }
 
@@ -91,6 +96,27 @@ func (t *TaskListTask) SetAccountContext(phone, authToken string) *TaskListTask 
 func (t *TaskListTask) Run() error {
 	t.logger.Start("------【任务列表】------")
 	t.claimedCloud = 0
+	t.pending = false
+	t.message = ""
+	if t.gp {
+		resp, err := t.api.SignIn()
+		if err != nil {
+			return err
+		}
+		if resp == nil || resp.Code == nil || *resp.Code != 0 {
+			return fmt.Errorf("GP 渠道签到失败")
+		}
+		runErr := t.runAutomaticTasks()
+		checkErr := t.checkIncompleteTasks()
+		t.message = "GP 独立任务渠道：" + t.message
+		if t.pending {
+			t.message += "；部分行为可能延迟结算，下次运行复查"
+		}
+		if t.cleanupTemporaryShareLinks() {
+			t.cleanupTemporaryFiles()
+		}
+		return errors.Join(runErr, checkErr)
+	}
 
 	// 1. 先尝试领取已完成未领取的任务奖励
 	_ = t.receiveCompletedTaskRewards()
@@ -104,15 +130,15 @@ func (t *TaskListTask) Run() error {
 	// 4. 再次领取任务奖励（覆盖刚执行完成的任务）
 	rewardErr := t.receiveCompletedTaskRewards()
 
+	// 完成状态必须在回收上传/分享素材之前确认。
+	checkErr := t.checkIncompleteTasks()
+
 	// 5. 先撤销分享链接，再删除临时文件，避免在任务上报前破坏分享行为。
 	if t.cleanupTemporaryShareLinks() {
 		t.cleanupTemporaryFiles()
 	}
 
-	// 6. 输出仍未完成的任务提示
-	t.checkIncompleteTasks()
-
-	return errors.Join(runErr, rewardErr)
+	return errors.Join(runErr, rewardErr, checkErr)
 }
 
 func (t *TaskListTask) registerTaskDevice() {
@@ -161,7 +187,11 @@ func (t *TaskListTask) receiveTaskExpansion() {
 		if !curMonthBackup {
 			if attempt < retryCount {
 				t.logger.Warn("本月未开启备份，尝试自动备份后重试翻倍奖励检查")
-				t.tryBackupForTaskExpansion()
+				if err := t.tryBackupForTaskExpansion(); err != nil {
+					t.logger.Error("备份翻倍前的相册备份失败", err)
+					t.expansionPending = true
+					return
+				}
 				t.logger.Debug(fmt.Sprintf("等待 %d 秒后重试翻倍奖励检查", waitSecond))
 				time.Sleep(time.Duration(waitSecond) * time.Second)
 				continue
@@ -199,28 +229,13 @@ func (t *TaskListTask) receiveTaskExpansion() {
 }
 
 // tryBackupForTaskExpansion 尝试触发一次备份（用于满足翻倍奖励条件）
-func (t *TaskListTask) tryBackupForTaskExpansion() {
-	if t.fileAPI == nil {
-		return
-	}
-
-	name := fmt.Sprintf("caiyun-backup-%d.txt", time.Now().Unix())
-	uploadResp, err := t.fileAPI.UploadRandomFile(&api.UploadRandomFileRequest{
-		ParentFileID: "",
-		Name:         name,
-		ChannelSrc:   "10200153",
-		OpType:       "backup",
-	})
-	if err != nil {
-		t.logger.Debug("自动备份尝试失败", err)
-		return
-	}
-	if uploadResp != nil && uploadResp.FileID != "" {
-		_ = AppendStringList(t.storage, KeyTempFiles, uploadResp.FileID)
-	}
-
-	// 说明：当前上传接口仍为简化实现，实际是否触发成功以平台状态为准。
-	t.logger.Debug("已尝试执行一次自动备份，用于触发翻倍奖励条件")
+func (t *TaskListTask) tryBackupForTaskExpansion() error {
+	actions := newActivityActions(t.client, t.logger)
+	actions.setStorage(t.storage)
+	actions.setAccountContext(t.phone, t.authToken)
+	// A PC text upload is not an Android album backup. Reuse the real photo
+	// upload + createSnapshot/completeSnapshot flow used by activity tasks.
+	return actions.performAlbumBackup()
 }
 
 // runAutomaticTasks 自动执行通用 clickTask 任务
@@ -240,7 +255,7 @@ func (t *TaskListTask) runAutomaticTasks() error {
 		if task.ID <= 0 {
 			continue
 		}
-		if isTaskCompleted(task) {
+		if isTaskCompleted(task) || taskCompletedToday(task) {
 			continue
 		}
 		if skipIDs[task.ID] {
@@ -273,13 +288,8 @@ func (t *TaskListTask) runAutomaticTasks() error {
 			continue
 		}
 
-		var runErr error
-		for _, key := range clickKeys {
-			if err := t.api.DoTaskWithMarket(item.MarketName, key, strconv.Itoa(task.ID)); err != nil {
-				runErr = err
-				break
-			}
-		}
+		// Even a click-only task may have several server-side steps.
+		runErr := t.executeTaskSteps(item, nil)
 		if runErr != nil {
 			t.logger.Debug(fmt.Sprintf("自动执行任务失败（保留手动处理）：%s(%d)：%v", task.Name, task.ID, runErr))
 			actionErrors = append(actionErrors, fmt.Errorf("%s/%d: %w", item.MarketName, task.ID, runErr))
@@ -344,29 +354,33 @@ func taskHasClaimableReward(task api.Task) bool {
 }
 
 // checkIncompleteTasks 检查未完成任务
-func (t *TaskListTask) checkIncompleteTasks() {
+func (t *TaskListTask) checkIncompleteTasks() error {
 	items, err := t.fetchAllTaskItems()
 	if err != nil {
 		t.logger.Error("获取任务列表失败:", err)
-		return
+		t.pending = true
+		t.message = "最终任务状态查询失败，不能确认完成"
+		return err
 	}
 
 	skipIDs := t.loadSkipTaskIDs()
+	var unfinished, today []string
+	finished, skipped := 0, 0
 	for _, item := range items {
 		task := item.Task
 		if task.ID <= 0 {
 			continue
 		}
-		if taskListReminderSkipTaskIDs[task.ID] {
-			continue
-		}
-		if skipIDs[task.ID] {
+		if skipIDs[task.ID] || isTaskDisabledByServer(task) {
+			skipped++
 			continue
 		}
 		if isTaskCompleted(task) {
+			finished++
 			continue
 		}
-		if isTaskDisabledByServer(task) {
+		if taskCompletedToday(task) {
+			today = append(today, taskListLabel(item))
 			continue
 		}
 
@@ -377,17 +391,29 @@ func (t *TaskListTask) checkIncompleteTasks() {
 		}
 
 		t.logger.Warn(fmt.Sprintf("服务端仍显示待完成：%s：%s(%d)，可能需要继续等待、账号资格或 App 内操作", groupName, taskName, task.ID))
+		unfinished = append(unfinished, fmt.Sprintf("%s（步骤%d，进度%d）", taskListLabel(item), task.CurrStep, task.Process))
 	}
+	t.pending = len(unfinished) > 0
+	t.message = fmt.Sprintf("服务端已完成%d项", finished)
+	if len(today) > 0 {
+		t.message += "；今日已完成，继续按日累计：" + strings.Join(today, "、")
+	}
+	if len(unfinished) > 0 {
+		t.message += fmt.Sprintf("；待完成%d项：%s", len(unfinished), strings.Join(unfinished, "、"))
+	}
+	if skipped > 0 {
+		t.message += fmt.Sprintf("；按配置或服务端禁用跳过%d项", skipped)
+	}
+	return nil
 }
 
 // handleSpecialTask executes tasks that require a real cloud, AI or sharing action.
 func (t *TaskListTask) handleSpecialTask(item taskListItem) (bool, error) {
 	task := item.Task
-	if task.ID == 1057 || task.ID == 1028 || (item.MarketName == "newsign_139mail" && strings.Contains(task.Name, "AI工作台")) {
-		return true, t.api.CompleteAIWorkbenchTask()
-	}
 	var action func() error
 	switch task.ID {
+	case 1057, 1028:
+		action = t.api.CompleteAIWorkbenchTask
 	case 106:
 		action = func() error { return t.handleUploadTask(1, "", "") }
 	case 107:
@@ -402,7 +428,7 @@ func (t *TaskListTask) handleSpecialTask(item taskListItem) (bool, error) {
 		action = t.api.CompleteAICameraTask
 	case 617, 1083:
 		action = func() error { return t.api.CompleteFunAIImageTask("006") }
-	case 609:
+	case 609, 1075:
 		action = t.api.CompleteLingxiChat
 	case 547:
 		action = t.api.CreateTaskKnowledgeBase
@@ -414,10 +440,12 @@ func (t *TaskListTask) handleSpecialTask(item taskListItem) (bool, error) {
 	case 522:
 		action = func() error { return t.handleMonthlyUploadTask(item) }
 	default:
-		if hasTaskStep(task, "email") || hasTaskStep(task, "interfacecallback") || hasTaskStep(task, "firsttaskcheck") {
+		if hasTaskStep(task, "email") {
 			return false, nil
 		}
 		switch {
+		case item.MarketName == "newsign_139mail" && strings.Contains(task.Name, "AI工作台"):
+			action = t.api.CompleteAIWorkbenchTask
 		case strings.Contains(task.Name, "智能消除"):
 			action = func() error { return t.api.CompleteFunAIImageTask("006") }
 		case strings.Contains(task.Name, "AI相机"), strings.Contains(task.Name, "拍照问AI"):
@@ -430,34 +458,7 @@ func (t *TaskListTask) handleSpecialTask(item taskListItem) (bool, error) {
 			return false, nil
 		}
 	}
-	maxRounds := 1
-	switch task.ID {
-	case 106, 113, 614, 615, 1080, 1081, 319, 409, 431, 604, 1003, 1005, 1017, 1055, 585, 609, 616, 617, 618, 1082, 1083, 1084:
-		maxRounds = 4
-	}
-	for round := 0; round < maxRounds; round++ {
-		if err := action(); err != nil {
-			t.logger.Debug(fmt.Sprintf("任务真实行为失败：%s(%d)：%v", task.Name, task.ID, err))
-			return true, err
-		}
-		item.Task = task
-		if err := t.reportTaskAction(item); err != nil {
-			t.logger.Debug(fmt.Sprintf("任务步骤登记失败：%s(%d)：%v", task.Name, task.ID, err))
-			return true, err
-		}
-		t.logger.Success(fmt.Sprintf("已完成行为并登记任务步骤：%s(%d)", task.Name, task.ID))
-		if round+1 == maxRounds {
-			break
-		}
-		time.Sleep(1500 * time.Millisecond)
-		refreshed, err := t.queryTaskByMarket(item.MarketName, item.GroupKey, task.ID)
-		if err != nil || refreshed == nil || isTaskCompleted(*refreshed) ||
-			(refreshed.CurrStep <= task.CurrStep && refreshed.Process <= task.Process) {
-			break
-		}
-		task = *refreshed
-	}
-	return true, nil
+	return true, t.executeTaskSteps(item, action)
 }
 
 func (t *TaskListTask) reportTaskAction(item taskListItem) error {
@@ -525,10 +526,11 @@ func (t *TaskListTask) handleUploadTask(times int, channelSrc, opType string) er
 		if err != nil {
 			return err
 		}
-		if resp != nil && resp.FileID != "" {
-			_ = AppendStringList(t.storage, KeyTempFiles, resp.FileID)
-			t.logger.Debug(fmt.Sprintf("上传临时文件成功：%s", resp.FileID))
+		if resp == nil || resp.FileID == "" {
+			return fmt.Errorf("上传任务文件未返回 fileId")
 		}
+		_ = AppendStringList(t.storage, KeyTempFiles, resp.FileID)
+		t.logger.Debug(fmt.Sprintf("上传临时文件成功：%s", resp.FileID))
 		if i < times-1 {
 			time.Sleep(500 * time.Millisecond)
 		}
@@ -611,40 +613,63 @@ func (t *TaskListTask) handleShareFileTask() error {
 }
 
 func (t *TaskListTask) handleMonthlyUploadTask(item taskListItem) error {
-	task := item.Task
+	// Counts in the batch snapshot predate the other upload/photo/share tasks.
+	current, err := t.queryTaskByMarket(item.MarketName, item.GroupKey, item.Task.ID)
+	if err != nil {
+		return err
+	}
+	if current == nil {
+		return fmt.Errorf("读取月上传任务进度失败")
+	}
+	task := *current
 	currentProcess := task.Process
 	target := 100
 	if currentProcess >= target || strings.EqualFold(task.State, "FINISH") {
 		return nil
 	}
 
-	for attempt := 0; attempt < 3; attempt++ {
+	for attempt := 0; attempt < 5; attempt++ {
 		remaining := target - currentProcess
 		if remaining <= 0 {
 			return nil
+		}
+		// Reconcile in small batches; never upload another 100 files just because
+		// the callback has not caught up with the previous batch.
+		if remaining > 20 {
+			remaining = 20
 		}
 		if err := t.handleUploadTask(remaining, "10000023", ""); err != nil {
 			return err
 		}
 
-		refreshedTask, err := t.queryTaskByMarket(item.MarketName, "time", task.ID)
-		if err != nil {
-			return err
-		}
-		if refreshedTask == nil {
-			return fmt.Errorf("刷新月上传任务进度失败")
+		var refreshedTask *api.Task
+		for poll := 0; poll < 3; poll++ {
+			t.waitForTask(4 * time.Second)
+			refreshedTask, err = t.queryTaskByMarket(item.MarketName, "time", task.ID)
+			if err != nil {
+				return err
+			}
+			if refreshedTask == nil {
+				return fmt.Errorf("刷新月上传任务进度失败")
+			}
+			if isTaskCompleted(*refreshedTask) || refreshedTask.Process >= currentProcess+remaining {
+				break
+			}
 		}
 		if strings.EqualFold(refreshedTask.State, "FINISH") || refreshedTask.Process >= target {
 			t.logger.Success("月上传补传任务执行成功")
 			return nil
 		}
-		if refreshedTask.Process <= currentProcess {
-			return fmt.Errorf("月上传进度未推进，当前 %d/%d", refreshedTask.Process, target)
+		if refreshedTask.Process < currentProcess+remaining {
+			t.pending = true
+			t.logger.Warn(fmt.Sprintf("月上传回调尚未确认本批次，当前 %d/%d，下次复查后继续", refreshedTask.Process, target))
+			return nil
 		}
 		currentProcess = refreshedTask.Process
 	}
 
-	return fmt.Errorf("月上传补传未完成，当前 %d/%d", currentProcess, target)
+	t.pending = true
+	return nil
 }
 
 func (t *TaskListTask) queryTaskByMarket(marketName, group string, taskID int) (*api.Task, error) {
@@ -657,7 +682,7 @@ func (t *TaskListTask) queryTaskByMarket(marketName, group string, taskID int) (
 		}
 		return nil, nil
 	}
-	if marketName == "sign_in_3" {
+	if !t.gp && marketName == "sign_in_3" {
 		return t.queryTaskV2ByGroup(group, taskID)
 	}
 	return nil, err
@@ -741,6 +766,9 @@ func (t *TaskListTask) fetchAllTaskItems() ([]taskListItem, error) {
 			}
 			continue
 		} else {
+			if t.gp {
+				return nil, fmt.Errorf("GP 任务列表查询失败(%s): %w", marketName, err)
+			}
 			t.logger.Debug(fmt.Sprintf("V3 任务列表不可用，回退旧版(%s): %v", marketName, err))
 		}
 		if marketName == "sign_in_3" {
@@ -981,6 +1009,14 @@ func getTaskName(taskID int) string {
 }
 
 func (t *TaskListTask) getTaskClickKeys(task api.Task) []string {
+	// 105「绑定公众号」没有协议侧动作；但用户手动绑定后，下一轮发送
+	// wechatbinding 步就能被服务端收掉（参考实现每轮都会发这个 key）。
+	if task.ID == 105 {
+		return []string{"wechatbinding"}
+	}
+	if hasTaskStep(task, "wechatbinding") {
+		return []string{"task", "wechatbinding"}
+	}
 	if task.ID == 549 {
 		seenAvailability := false
 		canReceive := false
@@ -1006,13 +1042,20 @@ func (t *TaskListTask) getTaskClickKeys(task api.Task) []string {
 		}
 		return []string{"task"}
 	}
+	clickable := false
 	for _, stepType := range task.StepTypeSet {
-		if !strings.EqualFold(stepType, "click") {
+		switch strings.ToLower(stepType) {
+		case "click":
+			clickable = true
+		case "sendcloud", "finish":
+			// These are reward/finalization steps, not external actions. Rejecting
+			// them skipped ordinary two-step tasks added by the server.
+		default:
 			// 多步骤任务必须先完成真实行为；通用点击不能代替上传、邮箱或 AI 回调。
 			return nil
 		}
 	}
-	if len(task.StepTypeSet) == 1 {
+	if clickable {
 		return []string{"task"}
 	}
 	return nil
