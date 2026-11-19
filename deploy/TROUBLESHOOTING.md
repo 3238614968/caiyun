@@ -156,6 +156,30 @@ curl -i -X OPTIONS https://cloud.example.com/api/health \
   -H 'Access-Control-Request-Method: GET'
 ```
 
+### 部署后页面提示权限不足
+
+页面能打开，提交登录后提示“没有权限执行此操作”或“跨域来源未被允许”。在浏览器 Network 面板查看登录请求。若返回 HTTP 403 且响应的 `message` 为 `跨域来源未被允许`，说明请求在校验账号前被 CORS 中间件拦截。
+
+本地一键部署优先将宿主机端口 `8088` 映射到前端容器的 `8080`，由 Nginx 将 `/api/` 转发到 `backend-api:8080`。同源登录请求也会携带 `Origin`，Nginx 会将它原样转发。后端用完整 Origin 精确匹配 `ALLOWED_ORIGINS`。通过 `http://localhost:8088` 或 `http://127.0.0.1:8088` 打开页面时，默认的 `http://localhost,http://127.0.0.1` 因端口不同而无法匹配。
+
+在 Compose 项目目录修改 `.env`。本机通过 `8088` 端口访问时可使用以下配置。
+
+```dotenv
+ALLOWED_ORIGINS=http://localhost:8088,http://127.0.0.1:8088
+```
+
+使用域名或服务器 IP 访问时，填写浏览器实际访问的 Origin，例如 `https://cloud.example.com` 或 `http://192.168.1.20:8088`。包含协议、域名或 IP、非默认端口，省略路径和末尾斜杠。多个 Origin 用逗号分隔。
+
+重建 API 容器以加载新的环境变量，再重启前端让 Nginx 重新解析上游地址。单独执行 `docker compose restart` 会沿用容器已有的环境变量。
+
+```bash
+docker compose up -d --no-deps --force-recreate --wait backend-api
+docker compose restart frontend
+docker compose exec -T backend-api printenv ALLOWED_ORIGINS
+```
+
+确认容器中的值正确后，刷新页面并通过同一地址重新登录。
+
 ## 10. Worker 积压或重复任务
 
 1. 记录积压开始时间和受影响任务类型。
