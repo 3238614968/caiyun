@@ -451,9 +451,9 @@ jobs:
 
       - name: Run real Docker Compose E2E
         run: |
-          # 保留实时日志的同时捕获尾部,失败时以 ::error:: 注解暴露关键行。
+          # 保留完整诊断日志并输出末尾。失败时为关键行添加错误注解。
           set +e
-          bash scripts/e2e-compose.sh 2>&1 | tail -n 200 | tee "$RUNNER_TEMP/e2e.log"
+          bash scripts/e2e-compose.sh 2>&1 | tee "$RUNNER_TEMP/e2e.log" | tail -n 400
           code=${PIPESTATUS[0]}
           set -e
           if [ "$code" -ne 0 ]; then

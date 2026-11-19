@@ -16,6 +16,11 @@ ON DUPLICATE KEY UPDATE
   deleted_at = NULL,
   updated_at = NOW();
 
+-- Allow the manual monthly operation to reach the Worker with no exchange accounts.
+INSERT INTO system_configs (key_name, key_value, description)
+VALUES ('exchange_enabled', 'true', 'E2E manual monthly operation')
+ON DUPLICATE KEY UPDATE key_value = VALUES(key_value);
+
 INSERT INTO accounts (id, user_id, phone, auth, token, jwt_token, platform, expire_at, cloud_count, remark, is_active, created_at, updated_at, deleted_at) VALUES
   (900001, 900001, '13900009001', 'enc:v1:AAECAwQFBgcICQoLSNfeUbhtpsSFrB3fEqq5a4psZvVjavutQYWWvHOUR+6zwNwB', 'enc:v1:EBESExQVFhcYGRobSD4TfnPzD4OtTk8yQeJ1a/9XZPsMSavsYQQh/eugcmU4vgsYOg', 'enc:v1:ICEiIyQlJicoKSory1viOrJgRpSEklu7Dk50eU9nxmKSCPdpXLue05PRi/mNHNI', 'pc', 4102415999000, 6666, 'E2E 主账号', TRUE, NOW(), NOW(), NULL)
 ON DUPLICATE KEY UPDATE

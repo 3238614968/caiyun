@@ -12,6 +12,10 @@ async function loginAsE2EAdmin(page: import('@playwright/test').Page) {
   await page.getByPlaceholder('请输入密码').fill(adminPassword)
   await page.getByRole('button', { name: '登录' }).click()
   await expect(page).toHaveURL(/\/(?:dashboard)?$/)
+  await expect.poll(() => page.evaluate(async () => {
+    const response = await fetch('/api/v1/auth/me', { credentials: 'same-origin', cache: 'no-store' })
+    return response.status
+  }), { message: 'the browser session should be authenticated after login' }).toBe(200)
 }
 
 test('真实 Compose 服务健康检查通过', async ({ request }) => {
@@ -35,9 +39,9 @@ test('真实前后端链路可登录并访问核心页面', async ({ page }) => 
 
   await page.goto('/logs')
   await expect(page.getByText('运行日志')).toBeVisible()
-  const logsTable = page.locator('.task-logs-container .el-table')
-  await expect(logsTable.getByText('13900009001', { exact: true })).toBeVisible()
-  await expect(logsTable.getByText('+6', { exact: true })).toBeVisible()
+  await page.getByRole('button', { name: '任务明细', exact: true }).click()
+  const accountLogs = page.getByRole('row').filter({ hasText: '139****9001' })
+  await expect(accountLogs.getByText('+6', { exact: true })).toBeVisible()
 
   await page.goto('/exchange')
   await expect(page.getByText('商品中心')).toBeVisible()
@@ -56,11 +60,12 @@ test('真实 Operation 经 Redis Worker 到达终态', async ({ page }) => {
   const submit = await api.post(new URL('/api/v1/admin/exchange/execute-monthly', page.url()).toString(), {
     headers: {
       'Idempotency-Key': `e2e-operation-${Date.now()}`,
+      Origin: new URL(page.url()).origin,
       'X-CSRF-Token': csrfToken!
     }
   })
-  expect(submit.status()).toBe(202)
   const accepted = await submit.json()
+  expect(submit.status(), accepted.message).toBe(202)
   const operationID = accepted.data?.operation_id as string | undefined
   expect(operationID).toBeTruthy()
 
@@ -90,8 +95,10 @@ test('真实 Operation 终态通过 SSE operation.updated 到达浏览器', asyn
       resolve(value)
     }
     source.onerror = () => {
-      // EventSource may report a transient error during reconnect. Keep the
-      // stream alive until the bounded test timeout decides the result.
+      if (source.readyState === EventSource.CLOSED) {
+        window.clearTimeout(timeout)
+        reject(new Error('the authenticated SSE connection closed before delivery'))
+      }
     }
     const handleUpdate = (update: { operation_id?: string; status?: string }) => {
       if (update.operation_id === operationID && update.status === 'succeeded') {
@@ -148,10 +155,12 @@ test('SSE 通过前端代理重放 Last-Event-ID 之后的持久化消息', asyn
     try {
       const response = await fetch('/events', {
         headers: { 'Last-Event-ID': '41' },
+        credentials: 'same-origin',
+        cache: 'no-store',
         signal: controller.signal
       })
       if (!response.ok || !response.body) {
-        return { status: response.status, body: '' }
+        return { status: response.status, body: await response.text() }
       }
       const reader = response.body.getReader()
       const decoder = new TextDecoder()
@@ -171,7 +180,7 @@ test('SSE 通过前端代理重放 Last-Event-ID 之后的持久化消息', asyn
     }
   })
 
-  expect(replay.status).toBe(200)
+  expect(replay.status, replay.body).toBe(200)
   expect(replay.body).toContain('e2e-sse-42')
   expect(replay.body).toContain('operation.updated')
 })
