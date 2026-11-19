@@ -11,7 +11,7 @@ async function loginAsE2EAdmin(page: import('@playwright/test').Page) {
   await page.getByPlaceholder('请输入用户名').fill(adminUsername)
   await page.getByPlaceholder('请输入密码').fill(adminPassword)
   await page.getByRole('button', { name: '登录' }).click()
-  await expect(page).toHaveURL(/\/(?:dashboard)?$/)
+  await expect(page).toHaveURL(url => url.pathname === '/dashboard')
   await expect.poll(() => page.evaluate(async () => {
     const response = await fetch('/api/v1/auth/me', { credentials: 'same-origin', cache: 'no-store' })
     return response.status
