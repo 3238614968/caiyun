@@ -1,6 +1,8 @@
 -- Real Docker Compose E2E seed data.
 -- Password for e2e-admin is: E2eAdminPass123!
 
+SET NAMES utf8mb4;
+
 -- normalized_username / normalized_email are NOT derived columns: the login
 -- path queries users by normalized_username = LOWER(TRIM(username)) (migration
 -- 012), so the seed must populate them explicitly or authentication 401s.

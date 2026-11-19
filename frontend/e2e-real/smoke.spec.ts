@@ -33,7 +33,14 @@ test('真实前后端链路可登录并访问核心页面', async ({ page }) => 
   await expect(page.getByText('移动云盘').first()).toBeVisible()
   await expect(page.getByText('当前云朵数')).toBeVisible()
 
-  await page.goto('/accounts')
+  const [accountList] = await Promise.all([
+    page.waitForResponse(response => response.request().method() === 'GET' &&
+      new URL(response.url()).pathname === '/api/v1/admin/accounts'),
+    page.goto('/accounts')
+  ])
+  expect(accountList.status(), 'the admin account list should load').toBe(200)
+  const { data } = await accountList.json()
+  expect(data?.accounts?.find((account: { id: number }) => account.id === 900001)?.remark).toBe('E2E 主账号')
   await expect(page.getByText('账号管理')).toBeVisible()
   await expect(page.getByText('E2E 主账号')).toBeVisible()
 
