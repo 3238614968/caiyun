@@ -8,7 +8,7 @@
         页面未找到
       </h2>
       <p class="error-description">
-        抱歉，您访问的页面不存在或已被移除。
+        这个地址可能已更改，返回工作台继续。
       </p>
       <button
         class="back-home-btn"

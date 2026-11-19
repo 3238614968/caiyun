@@ -10,6 +10,8 @@ import type {
   QueueStatus as QueueStatusContract,
   TaskLog as TaskLogContract,
   TaskLogList as TaskLogListContract,
+  TaskDailySummary as TaskDailySummaryContract,
+  TaskDailySummaryList as TaskDailySummaryListContract,
   TaskStatus as TaskStatusContract,
   TaskStatusItem as TaskStatusItemContract,
   TotalCloudCount as TotalCloudCountContract,
@@ -29,12 +31,23 @@ export type TrendDataResponse = TrendDataContract
 export type TotalCloudCountResponse = TotalCloudCountContract
 
 export type TaskLogsResponse = TaskLogListContract
+export type TaskDailySummary = TaskDailySummaryContract
+export type TaskDailySummaryList = TaskDailySummaryListContract
+
+export function getTaskDailySummary(date: string, page = 1, pageSize = 20): Promise<TaskDailySummaryList> {
+  return request<TaskDailySummaryList | ApiResponse<TaskDailySummaryList>>({
+    url: '/api/v1/tasks/daily-summary', method: 'get', params: { date, page, page_size: pageSize }
+  }).then(res => unwrapApiData(res, { date, accounts: [], total: 0, page, page_size: pageSize }))
+}
 
 // 云朵统计响应
 export interface TaskLogQuery {
   account_id?: number
   task_type?: string
   status?: string
+  has_reward?: boolean
+  date?: string
+  latest?: boolean
   page?: number
   page_size?: number
 }
@@ -55,6 +68,9 @@ export function getTaskLogs(accountIdOrQuery?: number | TaskLogQuery, page: numb
       account_id: query.account_id,
       task_type: query.task_type,
       status: query.status,
+      has_reward: query.has_reward ? 1 : undefined,
+      date: query.date,
+      latest: query.latest ? 1 : undefined,
       page: normalizedPage,
       page_size: normalizedPageSize
     }

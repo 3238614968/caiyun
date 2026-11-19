@@ -7,7 +7,7 @@
       <div class="card-header">
         <span>任务执行状态</span>
         <el-button
-          type="text"
+          text
           size="small"
           @click="refreshStatus"
         >
@@ -168,6 +168,8 @@ import { Refresh } from '@element-plus/icons-vue'
 import { getQueueStatus, getTaskStatus, type QueueStatus, type TaskStatus } from '../api/task'
 import { wsClient, type WsMessage } from '../api/websocket'
 import { getTaskTypeName } from '../utils/task-types'
+import { isActiveTaskStatus, taskLogStatus } from '../utils/task-log-status'
+import { createCoalescedRefresh } from '../utils/coalesced-refresh'
 
 const queueStatus = ref<QueueStatus>({
   queue_length: 0,
@@ -189,9 +191,7 @@ const queueErrors = computed(() => queueStatus.value.errors || [])
 // 执行中的任务
 const activeTasks = computed(() => {
   const list = Array.isArray(taskStatuses.value) ? taskStatuses.value : []
-  return list.filter(
-    task => task.status === 'running' || task.status === 'pending' || task.status === 'retrying'
-  )
+  return list.filter(isActiveTaskStatus)
 })
 
 // 成功率
@@ -224,6 +224,7 @@ const refreshStatus = async () => {
 }
 
 // WebSocket消息处理
+const liveRefresh = createCoalescedRefresh(refreshStatus)
 const handleTaskComplete = (msg: WsMessage) => {
   const data = msg.data
   // 更新或添加到任务状态列表
@@ -233,8 +234,9 @@ const handleTaskComplete = (msg: WsMessage) => {
   const item: TaskStatus = {
     account_id: data.account_id,
     task_type: data.task_type,
-    status: data.status,
-    progress: data.status === 'success' || data.status === 'failed' ? 1 : 0.5,
+    status: taskLogStatus(data.status),
+    progress: 1,
+    end_time: new Date(msg.created_at || Date.now()).toISOString(),
     message: data.message
   }
   if (idx >= 0) {
@@ -247,23 +249,11 @@ const handleTaskComplete = (msg: WsMessage) => {
     }
   }
 
-  // 更新计数
-  queueStatus.value.completed_tasks++
-  if (data.status === 'success') {
-    queueStatus.value.successful_tasks++
-  } else if (data.status === 'failed') {
-    queueStatus.value.failed_tasks++
-  }
+  liveRefresh.trigger()
 }
 
 const handleTaskSummary = () => {
-  // 汇总到达时，减少pending
-  if (queueStatus.value.pending_tasks > 0) {
-    queueStatus.value.pending_tasks--
-  }
-  if (queueStatus.value.queue_length > 0) {
-    queueStatus.value.queue_length--
-  }
+  liveRefresh.trigger()
 }
 
 onMounted(() => {
@@ -275,6 +265,7 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
+  liveRefresh.dispose()
   wsClient.off('task_complete', handleTaskComplete)
   wsClient.off('task_summary', handleTaskSummary)
 })
@@ -300,7 +291,7 @@ onUnmounted(() => {
   gap: 20px;
   margin-bottom: 24px;
   padding: 20px;
-  background: rgba(59, 130, 246, 0.05);
+  background: rgba(15, 23, 42, 0.05);
   border-radius: 12px;
 }
 
@@ -364,7 +355,7 @@ onUnmounted(() => {
 }
 
 .queue-length {
-  color: #3b82f6;
+  color: #409eff;
 }
 
 .processing-count {

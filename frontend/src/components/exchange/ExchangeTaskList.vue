@@ -57,18 +57,18 @@
           </div>
 
           <div
-            v-if="task.last_result || task.skip_reason"
+            v-if="task.last_result || task.outcome || task.skip_reason"
             class="mobile-result-card"
           >
             <div
-              v-if="task.last_result"
+              v-if="task.last_result || task.outcome"
               class="result-heading"
             >
               <el-tag
-                :type="formatExchangeResult(task.last_result).type"
+                :type="formatExchangeResult(task.last_result, undefined, task.outcome).type"
                 size="small"
               >
-                {{ formatExchangeResult(task.last_result).label }}
+                {{ formatExchangeResult(task.last_result, undefined, task.outcome).label }}
               </el-tag>
               <span class="result-message">{{ formatResultMessage(task.last_result) }}</span>
             </div>
@@ -205,18 +205,18 @@
         >
           <template #default="{ row }">
             <div
-              v-if="row.last_result || row.skip_reason"
+              v-if="row.last_result || row.outcome || row.skip_reason"
               class="result-cell"
             >
               <div
-                v-if="row.last_result"
+                v-if="row.last_result || row.outcome"
                 class="result-heading"
               >
                 <el-tag
-                  :type="formatExchangeResult(row.last_result).type"
+                  :type="formatExchangeResult(row.last_result, undefined, row.outcome).type"
                   size="small"
                 >
-                  {{ formatExchangeResult(row.last_result).label }}
+                  {{ formatExchangeResult(row.last_result, undefined, row.outcome).label }}
                 </el-tag>
                 <el-tooltip
                   :content="formatResultMessage(row.last_result)"
@@ -371,8 +371,8 @@ const isTerminalTaskStatus = (status?: string) => (
   status === 'completed' || status === 'cancelled' || status === 'canceled'
 )
 const canExecute = (task: ExchangeTask) => {
-  if (!canManage(task) || task.status === 'running' || isTerminalTaskStatus(String(task.status))) return false
-  return formatExchangeResult(task.last_result).type !== 'success'
+  if (!canManage(task) || task.status === 'running' || task.outcome === 'unknown' || task.outcome === 'accepted' || isTerminalTaskStatus(String(task.status))) return false
+  return formatExchangeResult(task.last_result, undefined, task.outcome).type !== 'success'
 }
 </script>
 
@@ -384,7 +384,7 @@ const canExecute = (task: ExchangeTask) => {
 .primary-cell, .schedule-cell, .progress-cell, .result-cell { min-width: 0; display: flex; flex-direction: column; gap: 5px; }
 .primary-title { display: block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #0f172a; font-weight: 700; }
 .secondary-text { color: #64748b; font-size: 12px; line-height: 1.45; }
-.owner-text { width: fit-content; color: #2563eb; font-size: 11px; padding: 1px 7px; border-radius: 999px; background: #eff6ff; }
+.owner-text { width: fit-content; color: #409eff; font-size: 11px; padding: 1px 7px; border-radius: 999px; background: #eff6ff; }
 .tag-stack { display: flex; flex-wrap: wrap; gap: 6px; }
 .tag-stack.center { justify-content: center; }
 .task-schedule { color: #334155; font-size: 13px; line-height: 1.55; word-break: break-word; }
@@ -397,7 +397,7 @@ const canExecute = (task: ExchangeTask) => {
 .action-cell :deep(.el-button + .el-button) { margin-left: 0; }
 .button-tooltip-wrap { display: inline-flex; }
 .mobile-card-list { display: grid; gap: 12px; }
-.mobile-task-card { border-radius: 18px; border: 1px solid rgba(226,232,240,.9); background: rgba(255,255,255,.92); box-shadow: 0 12px 28px rgba(37,99,235,.08); }
+.mobile-task-card { border-radius: 18px; border: 1px solid rgba(226,232,240,.9); background: rgba(255,255,255,.92); box-shadow: 0 12px 28px rgba(15, 23, 42, .08); }
 .mobile-task-card :deep(.el-card__body) { padding: 16px; }
 .mobile-task-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; margin-bottom: 14px; }
 .mobile-task-heading { min-width: 0; display: flex; flex-direction: column; gap: 4px; }

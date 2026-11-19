@@ -135,9 +135,13 @@ export function useExchangeTaskActions(options: UseExchangeTaskActionsOptions) {
       return null
     }
 
-    syncExchangeRuleSelection(options.taskForm.value)
-    options.taskForm.value.account_ids = Array.from(new Set((options.taskForm.value.account_ids || []).filter(Boolean)))
-    options.taskForm.value.account_id = options.taskForm.value.account_ids[0] ?? options.taskForm.value.account_id ?? null
+    // Immediate exchange uses only the dialog's single selection. Batch
+    // defaults may still be present in this shared form after it is changed.
+    if (allowBatch) {
+      syncExchangeRuleSelection(options.taskForm.value)
+      options.taskForm.value.account_ids = Array.from(new Set((options.taskForm.value.account_ids || []).filter(Boolean)))
+      options.taskForm.value.account_id = options.taskForm.value.account_ids[0] ?? options.taskForm.value.account_id ?? null
+    }
 
     let schedule: ReturnType<typeof normalizeExchangeSchedule>
     try {
@@ -155,7 +159,7 @@ export function useExchangeTaskActions(options: UseExchangeTaskActionsOptions) {
 
     const accountIds = options.taskForm.value.account_ids
     const exchangeRuleIds = options.taskForm.value.exchange_rule_ids
-    const exchangeRuleId = options.taskForm.value.exchange_rule_id ?? options.taskForm.value.exchange_account_id ?? exchangeRuleIds[0] ?? null
+    const exchangeRuleId = options.taskForm.value.exchange_rule_id ?? options.taskForm.value.exchange_account_id
 
     if (allowBatch && accountIds.length > 0) {
       payload.account_ids = accountIds
@@ -165,8 +169,8 @@ export function useExchangeTaskActions(options: UseExchangeTaskActionsOptions) {
       payload.exchange_rule_id = exchangeRuleIds[0]
       payload.exchange_account_ids = exchangeRuleIds
       payload.exchange_account_id = exchangeRuleIds[0]
-    } else if (options.taskForm.value.account_id || accountIds[0]) {
-      payload.account_id = options.taskForm.value.account_id || accountIds[0]
+    } else if (options.taskForm.value.account_id) {
+      payload.account_id = options.taskForm.value.account_id
     } else if (exchangeRuleId) {
       payload.exchange_rule_id = exchangeRuleId
       payload.exchange_account_id = exchangeRuleId

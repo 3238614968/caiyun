@@ -54,6 +54,12 @@ const router = createRouter({
           meta: { title: '管理', requiresAdmin: true }
         },
         {
+          path: 'announcements',
+          name: 'Announcements',
+          redirect: { path: '/admin', query: { tab: 'announcements' } },
+          meta: { title: '公告管理', requiresAdmin: true }
+        },
+        {
           path: 'exchange',
           name: 'Exchange',
           component: () => import('@/views/ExchangeCenter.vue'),

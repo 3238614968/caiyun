@@ -7,16 +7,22 @@
     :show-close="!submitting"
     :width="isMobile ? '92%' : '640px'"
   >
-    <el-alert
-      class="task-tip"
-      type="info"
-      :closable="false"
-      show-icon
-      title="选择商品与账号，添加抢兑时间即可。"
-    />
+    <ol
+      class="task-stepper"
+      aria-label="任务配置进度"
+    >
+      <li :class="{ complete: form.product_id }">
+        <i>{{ form.product_id ? '✓' : '01' }}</i>选择商品
+      </li><li :class="{ complete: selectedAccountCount }">
+        <i>{{ selectedAccountCount ? '✓' : '02' }}</i>选择账号
+      </li><li :class="{ complete: form.restock_times.length }">
+        <i>{{ form.restock_times.length ? '✓' : '03' }}</i>安排时间
+      </li>
+    </ol>
 
     <el-form
       :model="form"
+      :label-position="isMobile ? 'top' : 'right'"
       :label-width="isMobile ? '80px' : '104px'"
     >
       <el-form-item
@@ -218,6 +224,12 @@
         </div>
       </el-form-item>
     </el-form>
+    <div
+      class="task-plan-preview"
+      aria-live="polite"
+    >
+      <span class="status-dot" /><span>{{ selectedAccountCount ? `已选择 ${selectedAccountCount} 个账号` : '等待选择账号' }}<small>{{ form.restock_times.length ? `${form.restock_times.join(' / ')} · ${longTerm ? '每天执行' : '执行一次'}` : '添加时间后，即可创建任务' }}</small></span>
+    </div>
     <template #footer>
       <el-button
         :disabled="submitting"
@@ -350,4 +362,11 @@ const clearSelectedAccounts = () => {
   .time-input-row { gap:8px; }
   .time-picker { width:124px; }
 }
+.task-stepper { display: flex; justify-content: space-between; gap: 12px; list-style: none; margin: 0 0 28px; padding: 0 0 20px; border-bottom: 1px solid var(--line); }
+.task-stepper li { display: flex; align-items: center; gap: 8px; font-size: 11px; color: var(--text-muted); }
+.task-stepper i { font-style: normal; width: 24px; height: 24px; display: grid; place-items: center; border: 1px solid var(--line); border-radius: 50%; font-size: 9px; transition: background .2s, color .2s; }
+.task-stepper .complete { color: var(--text-secondary); }
+.task-stepper .complete i { background: var(--accent-soft); border-color: #c6e2ff; color: var(--accent); }
+.task-plan-preview { display: flex; align-items: center; gap: 12px; background: var(--surface-subtle); border: 1px solid var(--line); border-radius: 9px; padding: 14px; font-size: 11px; color: var(--text-secondary); }
+.task-plan-preview small { display: block; margin-top: 6px; color: var(--text-muted); font-size: 10px; }
 </style>

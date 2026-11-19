@@ -7,6 +7,8 @@
     "contracts:generate": "cd .. && python scripts/generate-openapi-local.py && python scripts/generate-asyncapi-local.py && python scripts/generate-api-client-types.py",
     "predev": "npm run contracts:generate",
     "dev": "vite",
+    "predev:preview": "npm run contracts:generate",
+    "dev:preview": "node scripts/start-ui-preview.mjs",
     "prebuild": "npm run contracts:generate",
     "build": "vite build",
     "preview": "vite preview",
@@ -39,6 +41,7 @@
   },
   "devDependencies": {
     "@playwright/test": "^1.60.0",
+    "@types/node": "^22.20.5",
     "@typescript-eslint/eslint-plugin": "^7.10.0",
     "@typescript-eslint/parser": "^7.10.0",
     "@vitejs/plugin-vue": "^6.0.7",

@@ -1,19 +1,21 @@
 <template>
   <div class="account-manage-container">
-    <el-card shadow="hover">
-      <template #header>
-        <div class="card-header">
-          <span>账号管理</span>
-          <el-button
-            type="primary"
-            @click="showAddDialog"
-          >
-            <el-icon><Plus /></el-icon>
-            添加账号
-          </el-button>
-        </div>
+    <PageHeader
+      title="账号管理"
+      subtitle="管理云盘账号、凭据与自动任务"
+    >
+      <template #actions>
+        <el-button
+          type="primary"
+          :icon="Plus"
+          @click="showAddDialog"
+        >
+          添加账号
+        </el-button>
       </template>
+    </PageHeader>
 
+    <el-card shadow="hover">
       <!-- 搜索栏 -->
       <el-form
         :inline="true"
@@ -43,12 +45,20 @@
 
       <!-- 账号列表 -->
       <el-table
+        v-if="!isMobile"
+        ref="accountTable"
         v-loading="showLoading"
         :aria-busy="loading"
         :data="accountList"
         stripe
         style="width: 100%"
+        @selection-change="selectedAccounts = $event"
       >
+        <el-table-column
+          type="selection"
+          width="44"
+          :selectable="canManageAccount"
+        />
         <el-table-column
           prop="phone"
           label="手机号"
@@ -133,6 +143,85 @@
           </template>
         </el-table-column>
       </el-table>
+
+      <div
+        v-else
+        v-loading="showLoading"
+        class="account-mobile-list"
+      >
+        <article
+          v-for="row in accountList"
+          :key="row.id"
+          class="account-mobile-card"
+        >
+          <div class="account-mobile-head">
+            <span class="account-letter">{{ (row.remark || row.phone).slice(0,1) }}</span><div><strong>{{ row.remark || row.phone }}</strong><small>{{ row.phone }}</small></div><el-switch
+              v-model="row.is_active"
+              :aria-label="`启用账号 ${row.phone}`"
+              @change="handleStatusChange(row)"
+            />
+          </div>
+          <div class="account-mobile-balance">
+            <span>当前云朵</span><b>{{ row.cloud_count.toLocaleString() }}<small>朵</small></b>
+          </div>
+          <div class="account-mobile-actions">
+            <el-button
+              link
+              @click="handleView(row)"
+            >
+              查看
+            </el-button><el-button
+              link
+              :disabled="!canManageAccount(row)"
+              @click="handleEdit(row)"
+            >
+              编辑
+            </el-button><el-button
+              type="primary"
+              plain
+              :loading="row.executing"
+              :disabled="!canManageAccount(row)"
+              @click="handleTriggerTask(row)"
+            >
+              执行任务
+            </el-button><el-button
+              type="danger"
+              link
+              @click="handleDelete(row)"
+            >
+              删除
+            </el-button>
+          </div>
+        </article>
+        <el-empty
+          v-if="!loading && !accountList.length"
+          description="还没有账号，添加你的第一个云盘账号"
+        />
+      </div>
+      <Transition name="bulk-toolbar">
+        <div
+          v-if="selectedAccounts.length && !isMobile"
+          class="bulk-action-bar"
+          role="status"
+        >
+          <span class="bulk-count">{{ selectedAccounts.length }}</span><span>个账号已选择</span><el-button
+            type="primary"
+            :loading="bulkExecuting"
+            @click="runSelectedAccounts"
+          >
+            执行所选任务
+          </el-button><el-button
+            text
+            :disabled="bulkExecuting"
+            @click="accountTable?.clearSelection()"
+          >
+            取消选择
+          </el-button>
+        </div>
+      </Transition>
+      <div class="table-note">
+        <span>共 {{ pagination.total }} 个托管账号</span><span>凭据加密保存</span>
+      </div>
 
       <!-- 分页 -->
       <el-pagination
@@ -328,11 +417,15 @@
 </template>
 
 <script setup lang="ts">
+import PageHeader from '@/components/PageHeader.vue'
+import { Plus } from '@element-plus/icons-vue'
+import { useMediaQuery } from '@/composables/useMediaQuery'
+import { useRoute, useRouter } from 'vue-router'
 import { useLatestRequest } from '@/composables/useLatestRequest'
 import { useDeferredLoading } from '@/composables/useDeferredLoading'
-import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
+import { ref, reactive, computed, watch, onMounted, onUnmounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import type { FormInstance, FormRules } from 'element-plus'
+import type { FormInstance, FormRules, TableInstance } from 'element-plus'
 import AccountDetailDialog from '@/components/account/AccountDetailDialog.vue'
 import { operationQueuedMessage } from '@/api/operation'
 import { useAuthStore } from '@/store/auth'
@@ -356,13 +449,31 @@ import {
 const { loading, execute: latestAccountRequest } = useLatestRequest()
 const showLoading = useDeferredLoading(loading)
 const submitting = ref(false)
+const isMobile = useMediaQuery('(max-width: 768px)')
+const accountTable = ref<TableInstance>()
+const selectedAccounts = ref<Account[]>([])
+const bulkExecuting = ref(false)
+watch(isMobile, () => { selectedAccounts.value = []; accountTable.value?.clearSelection() })
+const runSelectedAccounts = async () => {
+  if (bulkExecuting.value || !selectedAccounts.value.length) return
+  bulkExecuting.value = true
+  const selected = [...selectedAccounts.value]
+  try {
+    const results = await Promise.allSettled(selected.map(row => triggerAccountTask(row.id)))
+    const count = results.filter(result => result.status === 'fulfilled').length
+    if (count === selected.length) ElMessage.success(`${count} 个账号的任务已加入队列`)
+    else ElMessage.warning(`${count} 个已加入队列，${selected.length - count} 个提交失败，请重试`)
+    accountTable.value?.clearSelection()
+  } finally { bulkExecuting.value = false }
+}
 const dialogVisible = ref(false)
 const detailVisible = ref(false)
 const dialogTitle = ref('添加账号')
 const formRef = ref<FormInstance>()
 const smsFormRef = ref<FormInstance>()
 const loginMode = ref('ck')
-const isEditMode = ref(false)
+const editingAccountId = ref<number | null>(null)
+const isEditMode = computed(() => editingAccountId.value !== null)
 const authStore = useAuthStore()
 const isAdmin = computed(() => authStore.user?.role === 'admin')
 
@@ -417,7 +528,7 @@ const resetSmsFlow = (status: 'idle' | 'processing' | 'completed' | 'failed' | '
   smsForm.smsStatus = status
 }
 
-const accountList = ref<Account[]>([])
+const accountList = ref<(Account & { executing?: boolean })[]>([])
 const currentAccount = ref<Account>({} as Account)
 
 const searchForm = reactive({
@@ -517,7 +628,7 @@ const handleCurrentChange = (page: number) => {
 const showAddDialog = () => {
   resetSmsFlow()
   dialogTitle.value = '添加账号'
-  isEditMode.value = false
+  editingAccountId.value = null
   loginMode.value = 'ck'
   form.phone = ''
   form.auth = ''
@@ -540,11 +651,10 @@ const handleView = (row: Account) => {
 const handleEdit = (row: Account) => {
   resetSmsFlow()
   dialogTitle.value = '编辑账号'
-  isEditMode.value = true
+  editingAccountId.value = row.id
   form.phone = row.phone
   form.auth = ''
   form.remark = row.remark
-  ;(form as any).id = row.id
   dialogVisible.value = true
 }
 
@@ -640,8 +750,8 @@ const handleSubmit = async () => {
       if (valid) {
         submitting.value = true
         try {
-          const id = (form as any).id
-          if (id) {
+          const id = editingAccountId.value
+          if (id !== null) {
             const payload: UpdateAccountRequest = {
               phone: form.phone,
               remark: form.remark
@@ -713,6 +823,7 @@ const handleSubmit = async () => {
 const handleDialogClose = () => {
   formRef.value?.resetFields()
   smsFormRef.value?.resetFields()
+  editingAccountId.value = null
   resetSmsFlow()
 }
 
@@ -727,7 +838,19 @@ const formatExpireTime = (expireAt: number) => {
   return new Date(expireAt).toLocaleString('zh-CN')
 }
 
+const accountRoute = useRoute()
+const accountRouter = useRouter()
+const consumeCreateIntent = () => {
+  if (accountRoute.query.new === '1') {
+    showAddDialog()
+    const query = { ...accountRoute.query }
+    delete query.new
+    void accountRouter.replace({ query })
+  }
+}
+watch(() => accountRoute.query.new, consumeCreateIntent)
 onMounted(() => {
+  consumeCreateIntent()
   loadAccounts()
 })
 
@@ -761,16 +884,6 @@ onUnmounted(() => {
   backdrop-filter: blur(10px);
 }
 
-:deep(.el-button--primary:not(.is-link):not(.is-text)) {
-  background: linear-gradient(135deg, #3b82f6 0%, #0ea5e9 100%);
-  border: none;
-  box-shadow: 0 4px 15px rgba(59, 130, 246, 0.3);
-}
-
-:deep(.el-button--primary:not(.is-link):not(.is-text):hover) {
-  background: linear-gradient(135deg, #2563eb 0%, #0284c7 100%);
-  box-shadow: 0 6px 20px rgba(59, 130, 246, 0.4);
-}
 
 :deep(.el-button.is-link) {
   background: none !important;
@@ -799,4 +912,23 @@ onUnmounted(() => {
 :deep(.login-tabs .el-tabs__header) {
   margin-bottom: 16px;
 }
+
+.account-mobile-list { display: grid; gap: 13px; }
+.account-mobile-card { background: white; border: 1px solid var(--line); border-radius: 10px; padding: 17px; }
+.account-mobile-head { display: flex; align-items: center; gap: 10px; }
+.account-letter { width: 35px; height: 35px; display: grid; place-items: center; background: var(--accent-soft); color: var(--accent); border-radius: 9px; font-size: 12px; }
+.account-mobile-head > div:not(.el-switch) { flex: 1; min-width: 0; }
+.account-mobile-head .el-switch, .account-letter { flex-shrink: 0; }
+.account-mobile-head strong { display: block; font-size: 12px; font-weight: 550; }
+.account-mobile-head small { display: block; font-size: 10px; color: var(--text-muted); margin-top: 5px; }
+.account-mobile-balance { padding: 22px 0; display: flex; align-items: center; justify-content: space-between; font-size: 11px; color: var(--text-muted); }
+.account-mobile-balance b { font-size: 24px; font-weight: 500; letter-spacing: -.04em; color: var(--text); }
+.account-mobile-balance b small { font-size: 10px; color: var(--text-muted); margin-left: 6px; font-weight: 400; }
+.account-mobile-actions { display: flex; align-items: center; justify-content: space-between; padding-top: 14px; border-top: 1px solid var(--line); }
+.bulk-action-bar { position: sticky; bottom: 20px; z-index: 6; display: flex; align-items: center; justify-content: center; gap: 14px; width: max-content; max-width: 100%; padding: 10px 16px; background: white; border: 1px solid var(--line-strong); border-radius: 12px; box-shadow: none; font-size: 11px; color: var(--text-secondary); margin: -8px auto 16px; }
+.bulk-count { background: var(--accent-soft); color: var(--accent); border-radius: 5px; padding: 5px 8px; font-variant-numeric: tabular-nums; }
+.bulk-toolbar-enter-active,.bulk-toolbar-leave-active { transition: opacity .2s, transform .25s; }
+.bulk-toolbar-enter-from,.bulk-toolbar-leave-to { opacity: 0; transform: translateY(10px) scale(.97); }
+
+
 </style>

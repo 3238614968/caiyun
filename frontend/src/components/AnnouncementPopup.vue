@@ -11,8 +11,8 @@
     <div class="popup-content">
       <div class="popup-icon">
         <el-icon
-          :size="48"
-          color="#409EFF"
+          :size="28"
+          color="var(--accent)"
         >
           <Bell />
         </el-icon>

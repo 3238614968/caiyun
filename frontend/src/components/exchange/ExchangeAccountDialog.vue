@@ -238,7 +238,7 @@ defineEmits<{
 .dialog-content { max-height: min(70vh, 720px); overflow-y: auto; padding: 4px; }
 .form-section { background: rgba(248,250,252,.85); border: 1px solid rgba(226,232,240,.9); border-radius: 18px; padding: 16px; margin-bottom: 14px; }
 .section-title { display: flex; align-items: center; gap: 8px; margin-bottom: 14px; font-size: 15px; font-weight: 700; color: #0f172a; }
-.section-title .el-icon { color: #2563eb; }
+.section-title .el-icon { color: #409eff; }
 .dialog-footer { display: flex; justify-content: flex-end; gap: 10px; }
 @media (max-width: 768px) {
   .dialog-content { max-height: 76vh; padding: 0; }

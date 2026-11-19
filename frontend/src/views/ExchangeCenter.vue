@@ -678,7 +678,7 @@ onUnmounted(() => {
 
 <style scoped>
 .exchange-center { padding: clamp(12px, 2vw, 24px); max-width: 1680px; margin: 0 auto; }
-.content { background: rgba(255,255,255,.74); backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px); border-radius:24px; padding: clamp(16px, 2vw, 24px); box-shadow: 0 18px 42px rgba(37,99,235,.1); border:1px solid rgba(255,255,255,.76); }
+.content { background: rgba(255,255,255,.74); backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px); border-radius:24px; padding: clamp(16px, 2vw, 24px); box-shadow: 0 18px 42px rgba(15, 23, 42, .1); border:1px solid rgba(255,255,255,.76); }
 .exchange-tabs { min-height:0; }
 .exchange-tabs :deep(.el-tabs__header) { margin:0 0 18px; }
 .exchange-tabs :deep(.el-tabs__nav-wrap) { overflow-x:auto; scrollbar-width:none; }

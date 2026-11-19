@@ -1,5 +1,6 @@
 import axios, { type AxiosError, type AxiosInstance, type AxiosRequestConfig, type AxiosResponse } from 'axios'
 import { ElMessage } from 'element-plus'
+import { withSessionRefreshLock } from './session-refresh-lock'
 
 interface AppAxiosRequestConfig extends AxiosRequestConfig {
   /**
@@ -54,12 +55,25 @@ function canAttemptSessionRefresh(config?: AppAxiosRequestConfig): config is App
   ].some(path => url.includes(path))
 }
 
-async function refreshBrowserSession(): Promise<void> {
+export async function refreshBrowserSession(): Promise<void> {
   if (!refreshSessionPromise) {
-    refreshSessionPromise = service.post('/api/v1/auth/refresh', undefined, {
-      silentAuthError: true,
-      _authRetry: true
-    } as AppAxiosRequestConfig).then(() => undefined).finally(() => {
+    refreshSessionPromise = withSessionRefreshLock(async () => {
+      // Another tab may have rotated the shared HttpOnly cookie while this
+      // request was waiting. Probe inside the lock before consuming it again.
+      try {
+        await service.get('/api/v1/auth/me', {
+          silentAuthError: true,
+          _authRetry: true
+        } as AppAxiosRequestConfig)
+        return
+      } catch (error) {
+        if ((error as AxiosError).response?.status !== 401) throw error
+      }
+      await service.post('/api/v1/auth/refresh', undefined, {
+        silentAuthError: true,
+        _authRetry: true
+      } as AppAxiosRequestConfig)
+    }).finally(() => {
       refreshSessionPromise = null
     })
   }
@@ -131,6 +145,10 @@ function redirectToLogin(): void {
 service.interceptors.response.use(
   (response: AxiosResponse) => {
     const { data } = response
+    const operation = data?.data?.operation_id ? data.data : data?.operation_id ? data : undefined
+    if (operation && typeof operation.status === 'string' && typeof operation.type === 'string') {
+      window.dispatchEvent(new CustomEvent('caiyun:operation', { detail: operation }))
+    }
     return data
   },
   async (error: AxiosError<ErrorResponseBody>) => {

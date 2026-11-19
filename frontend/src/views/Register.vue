@@ -1,11 +1,15 @@
 <template>
   <div class="register-container">
+    <span
+      v-if="uiPreview"
+      class="preview-label auth-preview-label"
+    >交互预览 · 示例数据</span>
     <div class="register-card glass-effect">
       <div class="card-header">
         <div class="logo">
           <el-icon
             :size="48"
-            color="#fff"
+            color="#409eff"
           >
             <Cloudy />
           </el-icon>
@@ -26,6 +30,8 @@
         <el-form-item prop="username">
           <el-input
             v-model="registerForm.username"
+            aria-label="用户名"
+            autocomplete="username"
             placeholder="请输入用户名"
             :prefix-icon="User"
             clearable
@@ -35,6 +41,8 @@
         <el-form-item prop="password">
           <el-input
             v-model="registerForm.password"
+            aria-label="密码"
+            autocomplete="new-password"
             type="password"
             placeholder="请输入密码"
             :prefix-icon="Lock"
@@ -46,6 +54,8 @@
         <el-form-item prop="confirmPassword">
           <el-input
             v-model="registerForm.confirmPassword"
+            aria-label="确认密码"
+            autocomplete="new-password"
             type="password"
             placeholder="请确认密码"
             :prefix-icon="Lock"
@@ -57,6 +67,8 @@
         <el-form-item prop="email">
           <el-input
             v-model="registerForm.email"
+            aria-label="邮箱"
+            autocomplete="email"
             placeholder="请输入邮箱（可选）"
             :prefix-icon="Message"
             clearable
@@ -97,6 +109,7 @@
 </template>
 
 <script setup lang="ts">
+const uiPreview = import.meta.env.VITE_UI_PREVIEW === 'true'
 import { ref, reactive } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
@@ -195,7 +208,7 @@ const handleRegister = async () => {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: linear-gradient(135deg, #e0f2fe 0%, #bae6fd 50%, #7dd3fc 100%);
+  background: linear-gradient(135deg, #f0f9ff 0%, #e0f2fe 55%, #d9ecff 100%);
   position: relative;
   overflow: hidden;
 }
@@ -206,7 +219,7 @@ const handleRegister = async () => {
   backdrop-filter: blur(20px);
   -webkit-backdrop-filter: blur(20px);
   border: 1px solid rgba(255, 255, 255, 0.5);
-  box-shadow: 0 8px 32px 0 rgba(59, 130, 246, 0.15);
+  box-shadow: 0 8px 32px 0 rgba(15, 23, 42, 0.15);
 }
 
 .register-card {
@@ -225,13 +238,13 @@ const handleRegister = async () => {
 .logo {
   width: 80px;
   height: 80px;
-  background: linear-gradient(135deg, #3b82f6 0%, #0ea5e9 50%, #06b6d4 100%);
+  background: #ecf5ff;
   border-radius: 20px;
   display: flex;
   align-items: center;
   justify-content: center;
   margin: 0 auto 20px;
-  box-shadow: 0 8px 20px rgba(59, 130, 246, 0.3);
+  box-shadow: 0 8px 20px rgba(15, 23, 42, 0.3);
 }
 
 .card-header h2 {
@@ -262,16 +275,12 @@ const handleRegister = async () => {
   border-radius: 10px;
   font-size: 16px;
   font-weight: 500;
-  background: linear-gradient(135deg, #3b82f6 0%, #0ea5e9 50%, #06b6d4 100%);
+  background: #409eff;
   border: none;
-  box-shadow: 0 4px 15px rgba(59, 130, 246, 0.3);
   transition: all 0.3s ease;
 }
 
-.submit-btn:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 6px 20px rgba(59, 130, 246, 0.4);
-}
+.submit-btn:hover { background: #66b1ff; }
 
 .login-link {
   text-align: center;
@@ -280,13 +289,7 @@ const handleRegister = async () => {
   font-size: 14px;
 }
 
-.gradient-text {
-  background: linear-gradient(135deg, #3b82f6 0%, #0ea5e9 50%, #06b6d4 100%);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  text-decoration: none;
-  font-weight: 500;
-}
+.gradient-text { margin-left: 6px; color: #409eff; text-decoration: none; font-weight: 500;}
 
 .gradient-text:hover {
   text-decoration: underline;

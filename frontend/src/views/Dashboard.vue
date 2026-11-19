@@ -156,32 +156,28 @@ const stats = ref<DashboardStatItem[]>([
     label: '当前云朵数',
     value: 0,
     diff: 0,
-    icon: 'Cloudy',
-    color: 'linear-gradient(135deg, #3b82f6 0%, #0ea5e9 100%)'
+    icon: 'Cloudy'
   },
   {
     key: 'account_count',
     label: '账号数',
     value: 0,
     diff: 0,
-    icon: 'User',
-    color: 'linear-gradient(135deg, #10b981 0%, #34d399 100%)'
+    icon: 'User'
   },
   {
     key: 'today_gained',
     label: '今日获得',
     value: 0,
     diff: 0,
-    icon: 'TrendCharts',
-    color: 'linear-gradient(135deg, #f59e0b 0%, #fbbf24 100%)'
+    icon: 'TrendCharts'
   },
   {
     key: 'success_rate',
     label: '今日成功率',
     value: '0%',
     diff: 0,
-    icon: 'CircleCheck',
-    color: 'linear-gradient(135deg, #ef4444 0%, #f87171 100%)'
+    icon: 'CircleCheck'
   }
 ])
 
@@ -387,18 +383,6 @@ onUnmounted(() => {
 
 
 
-:deep(.el-button--primary) {
-  background: linear-gradient(135deg, #3b82f6 0%, #0ea5e9 50%, #06b6d4 100%);
-  border: none;
-  box-shadow: 0 4px 15px rgba(59, 130, 246, 0.35);
-  border-radius: 10px;
-}
-
-:deep(.el-button--primary:hover) {
-  background: linear-gradient(135deg, #2563eb 0%, #0284c7 100%);
-  box-shadow: 0 6px 20px rgba(59, 130, 246, 0.45);
-  transform: translateY(-2px);
-}
 
 :deep(.el-button--success) {
   background: linear-gradient(135deg, #10b981 0%, #34d399 100%);
@@ -415,7 +399,7 @@ onUnmounted(() => {
 
 :deep(.el-card) {
   border-radius: 16px;
-  box-shadow: 0 8px 32px rgba(59, 130, 246, 0.1);
+  box-shadow: 0 8px 32px rgba(15, 23, 42, 0.1);
   border: 1px solid rgba(255, 255, 255, 0.6);
   background: rgba(255, 255, 255, 0.7);
   backdrop-filter: blur(20px);
@@ -423,8 +407,8 @@ onUnmounted(() => {
 }
 
 :deep(.el-radio-button__original-radio:checked + .el-radio-button__inner) {
-  background: linear-gradient(135deg, #3b82f6 0%, #0ea5e9 100%);
-  border-color: #3b82f6;
+  background: #409eff;
+  border-color: #409eff;
 }
 
 
@@ -434,7 +418,7 @@ onUnmounted(() => {
   gap: 8px;
   font-size: 20px;
   font-weight: 700;
-  color: #1e3a8a;
+  color: #303133;
   margin-bottom: 10px;
 }
 

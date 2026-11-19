@@ -1,15 +1,14 @@
 <template>
   <div class="admin-panel-container">
+    <PageHeader
+      title="管理员面板"
+      subtitle="管理用户、任务配置与系统统计"
+    />
+
     <el-card
       shadow="hover"
       class="admin-shell"
     >
-      <template #header>
-        <div class="card-header">
-          <span>管理员面板</span>
-        </div>
-      </template>
-
       <el-tabs
         v-model="activeTab"
         class="admin-tabs"
@@ -49,6 +48,7 @@
               :is-mobile="isMobile"
               :loading="taskConfigLoading"
               :configs="taskConfigs"
+              :pending-codes="pendingTaskCodes"
               :format-date="formatDate"
               @toggle="handleTaskConfigToggle"
             />
@@ -164,7 +164,9 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
+import PageHeader from '@/components/PageHeader.vue'
+import { ref, reactive, computed, onMounted, onUnmounted, watch } from 'vue'
+import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox, type TabPaneName } from 'element-plus'
 import {
   type Account,
@@ -210,7 +212,11 @@ import AdminAnnouncementDialog from '@/components/admin/AdminAnnouncementDialog.
 import AdminAnnouncementViewDialog from '@/components/admin/AdminAnnouncementViewDialog.vue'
 import { operationQueuedMessage } from '@/api/operation'
 
-const activeTab = ref('summaries')
+const route = useRoute()
+const allowedTabs = ['summaries', 'tasks', 'exchange', 'users', 'stats', 'announcements']
+const requestedTab = () => typeof route.query.tab === 'string' && allowedTabs.includes(route.query.tab) ? route.query.tab : 'summaries'
+const activeTab = ref(requestedTab())
+watch(() => route.query.tab, () => { activeTab.value = requestedTab() })
 const viewportWidth = ref(typeof window !== 'undefined' ? window.innerWidth : 1440)
 const isMobile = computed(() => viewportWidth.value <= 768)
 
@@ -225,6 +231,7 @@ const summaryPagination = reactive({ page: 1, pageSize: 20, total: 0 })
 
 // Task configs
 const taskConfigLoading = ref(false)
+const pendingTaskCodes = ref<string[]>([])
 const taskConfigs = ref<TaskConfig[]>([])
 
 // Exchange config
@@ -257,10 +264,10 @@ const userKeyword = ref('')
 
 // Stats
 const statsOverview = ref([
-  { key: 'user_count', label: '用户总数', value: 0 as any, icon: 'User', color: 'linear-gradient(135deg, #3b82f6 0%, #0ea5e9 100%)' },
-  { key: 'account_count', label: '账号总数', value: 0 as any, icon: 'Document', color: 'linear-gradient(135deg, #10b981 0%, #34d399 100%)' },
-  { key: 'total_cloud', label: '总云朵数', value: 0 as any, icon: 'Cloudy', color: 'linear-gradient(135deg, #f59e0b 0%, #fbbf24 100%)' },
-  { key: 'active_tasks', label: '活跃任务', value: 0 as any, icon: 'TrendCharts', color: 'linear-gradient(135deg, #ef4444 0%, #f87171 100%)' }
+  { key: 'user_count', label: '用户总数', value: 0, icon: 'User' },
+  { key: 'account_count', label: '账号总数', value: 0, icon: 'Document' },
+  { key: 'total_cloud', label: '总云朵数', value: 0, icon: 'Cloudy' },
+  { key: 'active_tasks', label: '活跃任务', value: 0, icon: 'TrendCharts' }
 ])
 
 // Role dialog
@@ -333,6 +340,8 @@ const loadTaskConfigs = async () => {
 }
 
 const handleTaskConfigToggle = async (row: TaskConfig, enabled: boolean) => {
+  if (pendingTaskCodes.value.includes(row.task_type)) return
+  pendingTaskCodes.value.push(row.task_type)
   const previous = row.is_enabled
   row.is_enabled = enabled
   try {
@@ -341,6 +350,8 @@ const handleTaskConfigToggle = async (row: TaskConfig, enabled: boolean) => {
   } catch {
     row.is_enabled = previous
     ElMessage.error('操作失败')
+  } finally {
+    pendingTaskCodes.value = pendingTaskCodes.value.filter(code => code !== row.task_type)
   }
 }
 
@@ -617,7 +628,7 @@ const deleteAnnouncement = async (row: Announcement) => {
 onMounted(() => {
   syncViewport()
   window.addEventListener('resize', syncViewport)
-  loadSummaries()
+  handleTabChange(activeTab.value)
 })
 
 onUnmounted(() => {
@@ -628,7 +639,7 @@ onUnmounted(() => {
 <style scoped>
 .admin-panel-container { padding: clamp(12px, 2vw, 24px); max-width: 1680px; margin: 0 auto; }
 .admin-shell { overflow: hidden; }
-:deep(.el-card) { border-radius: 24px; box-shadow: 0 16px 42px rgba(37, 99, 235, 0.1); border: 1px solid rgba(255,255,255,.74); background: rgba(255,255,255,.88); backdrop-filter: blur(14px); }
+:deep(.el-card) { border-radius: 24px; box-shadow: 0 16px 42px rgba(15, 23, 42, 0.1); border: 1px solid rgba(255,255,255,.74); background: rgba(255,255,255,.88); backdrop-filter: blur(14px); }
 .card-header { display:flex; justify-content:space-between; align-items:center; gap:12px; font-size:clamp(20px,2.4vw,26px); font-weight:700; color:#0f172a; }
 .admin-tabs { margin-top: 6px; }
 .admin-tabs :deep(.el-tabs__header) { margin:0; padding-bottom:10px; }
@@ -637,8 +648,8 @@ onUnmounted(() => {
 .admin-tabs :deep(.el-tabs__nav-scroll) { display:flex; }
 .admin-tabs :deep(.el-tabs__nav) { flex-wrap:nowrap; }
 .admin-tabs :deep(.el-tabs__item) { height:44px; padding:0 18px; font-size:15px; font-weight:600; white-space:nowrap; }
-.admin-tabs :deep(.el-tabs__item.is-active) { color:#2563eb; }
-.admin-tabs :deep(.el-tabs__active-bar) { background: linear-gradient(90deg, #2563eb, #0ea5e9); }
+.admin-tabs :deep(.el-tabs__item.is-active) { color:#409eff; }
+.admin-tabs :deep(.el-tabs__active-bar) { background: linear-gradient(90deg, #409eff, #0ea5e9); }
 .tab-content { padding: 22px 0 0; display:flex; flex-direction:column; gap:20px; }
 .tab-content > p { margin:0; line-height:1.6; }
 :deep(.el-table) { border-radius:18px; overflow:hidden; --el-table-border-color: rgba(148,163,184,.18); --el-table-header-bg-color: rgba(248,250,252,.9); --el-table-row-hover-bg-color: rgba(239,246,255,.72); }

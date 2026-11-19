@@ -119,12 +119,12 @@ const handleSelectionChange = (selection: any[]) => {
 }
 
 :deep(.el-table th) {
-  background: rgba(59, 130, 246, 0.05);
+  background: rgba(15, 23, 42, 0.05);
   color: #1e293b;
   font-weight: 600;
 }
 
 :deep(.el-table--striped .el-table__body tr.el-table__row--striped td) {
-  background: rgba(59, 130, 246, 0.02);
+  background: rgba(15, 23, 42, 0.02);
 }
 </style>

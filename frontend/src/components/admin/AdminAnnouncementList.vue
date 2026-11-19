@@ -203,7 +203,7 @@ defineEmits<{
 .title-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ml-2 { margin-left: 4px; }
 .mobile-admin-list { display: grid; gap: 12px; }
-.mobile-admin-card { border-radius: 18px; border: 1px solid rgba(226, 232, 240, 0.9); background: rgba(255, 255, 255, 0.94); box-shadow: 0 14px 28px rgba(37, 99, 235, 0.08); }
+.mobile-admin-card { border-radius: 18px; border: 1px solid rgba(226, 232, 240, 0.9); background: rgba(255, 255, 255, 0.94); box-shadow: 0 14px 28px rgba(15, 23, 42, 0.08); }
 .mobile-admin-card :deep(.el-card__body) { padding: 16px; }
 .mobile-admin-card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
 .mobile-admin-card-title { font-size: 15px; font-weight: 700; color: #0f172a; line-height: 1.4; word-break: break-word; }

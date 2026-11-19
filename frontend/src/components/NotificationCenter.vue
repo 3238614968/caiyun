@@ -12,7 +12,7 @@
         class="notification-badge"
       >
         <el-button
-          type="text"
+          text
           class="header-btn"
           :aria-label="unreadCount ? `通知中心，${unreadCount} 条未读` : '通知中心'"
         >
@@ -29,14 +29,14 @@
         <div class="header-actions">
           <el-button
             v-if="unreadCount > 0"
-            type="text"
+            text
             size="small"
             @click="markAllRead"
           >
             全部已读
           </el-button>
           <el-button
-            type="text"
+            text
             size="small"
             @click="clearAll"
           >
@@ -92,7 +92,7 @@
 
       <div class="notification-footer">
         <el-button
-          type="text"
+          text
           @click="viewAllNotifications"
         >
           查看全部
@@ -173,17 +173,8 @@ import { Bell, CircleCheck, Warning, InfoFilled, Close } from '@element-plus/ico
 import { ElMessage } from 'element-plus'
 import { isOperationUpdatedMessage, wsClient, type WsMessage } from '../api/websocket'
 import { useAuthStore } from '../store/auth'
-
-interface Notification {
-  id: string
-  level: 'success' | 'error' | 'warning' | 'info'
-  title: string
-  message: string
-  timestamp: string
-  read: boolean
-  account_id?: number
-  task_type?: string
-}
+import { formatNotificationMessage } from '../utils/notification-message'
+import { exchangeNotification, mergeNotification, operationNotification, restoreNotifications, taskSummaryNotification, type Notification } from '../utils/notification-feed'
 
 const notifications = ref<Notification[]>([])
 const historyVisible = ref(false)
@@ -195,7 +186,10 @@ const maskPhoneNumbers = (value: string) => value.replace(/1[3-9]\d{9}/g, (phone
 const sanitizeNotification = (notification: Notification): Notification => ({
   ...notification,
   title: maskPhoneNumbers(notification.title),
-  message: maskPhoneNumbers(notification.message)
+  message: maskPhoneNumbers(formatNotificationMessage(
+    notification.message,
+    notification.id.startsWith('exchange_') || notification.task_type === 'exchange' || /抢兑|兑换/.test(notification.title)
+  ))
 })
 
 // 未读数量
@@ -255,82 +249,23 @@ const viewAllNotifications = () => {
 }
 
 const appendNotification = (notification: Notification) => {
-  if (notifications.value.some((existing) => existing.id === notification.id)) {
-    return false
-  }
-  notifications.value.unshift(sanitizeNotification(notification))
-  if (notifications.value.length > 50) {
-    notifications.value = notifications.value.slice(0, 50)
-  }
-  return true
+  notifications.value = mergeNotification(notifications.value, sanitizeNotification(notification))
 }
 
 const handleExchangeNotification = (msg: WsMessage) => {
-  const data = (msg.data || {}) as Record<string, unknown>
-  const message = String(data.message || '抢兑任务状态已更新')
-  const productName = String(data.product_name || data.prize_name || '抢兑任务')
-  const accountName = String(data.account_name || '')
-  const skipped = msg.type === 'exchange_skipped'
-  const completed = msg.type === 'exchange_completed'
-  const success = data.success === true
-  const level: Notification['level'] = completed ? 'info' : skipped ? 'warning' : success ? 'success' : 'error'
-  const title = completed ? '抢兑调度完成' : skipped ? '抢兑任务已跳过' : success ? '抢兑成功' : '抢兑失败'
-  const detail = completed ? message : `${accountName ? `${accountName} · ` : ''}${productName}：${message}`
-  const safeDetail = maskPhoneNumbers(detail)
-
-  const appended = appendNotification({
-    id: `exchange_${msg.type}_${msg.message_id || Date.now()}_${data.task_id || ''}`,
-    level,
-    title,
-    message: safeDetail,
-    timestamp: new Date().toISOString(),
-    read: false
-  })
-
-  if (appended && level === 'warning') ElMessage.warning(safeDetail)
-  if (appended && level === 'error') ElMessage.error(safeDetail)
+  const notification = exchangeNotification(notifications.value, msg)
+  if (notification) appendNotification(notification)
 }
 
 const handleTaskSummary = (msg: WsMessage) => {
-  const data = msg.data
-  const phone = data.phone ? ` [${maskPhoneNumbers(String(data.phone))}]` : ''
-  const gained = data.total_gained > 0 ? `，获得 ${data.total_gained} 云朵` : ''
-
-  appendNotification({
-    id: `summary_${msg.message_id || `${data.account_id}_${msg.sequence || Date.now()}`}`,
-    level: 'info',
-    title: `任务汇总${phone}`,
-    message: `共执行 ${data.task_count} 个任务${gained}，当前云朵: ${data.cloud_count}`,
-    timestamp: new Date().toISOString(),
-    read: false,
-    account_id: data.account_id
-  })
+  const notification = taskSummaryNotification(notifications.value, msg)
+  if (notification) appendNotification(notification)
 }
 
 const handleOperationUpdate = (msg: WsMessage) => {
   if (!isOperationUpdatedMessage(msg)) return
-  const { data } = msg
-  const operationID = data.operation_id
-  const status = data.status
-  const labels: Record<typeof status, { title: string; level: Notification['level']; message: string }> = {
-    queued: { title: '操作已加入队列', level: 'info', message: '操作正在等待执行' },
-    running: { title: '操作执行中', level: 'info', message: '操作已由 Worker 接管执行' },
-    succeeded: { title: '操作执行成功', level: 'success', message: '操作已完成' },
-    failed: { title: '操作执行失败', level: 'error', message: '操作执行失败，请稍后重试' },
-    canceled: { title: '操作已取消', level: 'warning', message: '排队中的操作已取消' }
-  }
-  const presentation = labels[status]
-  const detail = operationID ? `${presentation.message}（${operationID.slice(0, 8)}）` : presentation.message
-  const appended = appendNotification({
-    id: `operation_${msg.message_id || `${operationID}_${status}_${Date.now()}`}`,
-    level: presentation.level,
-    title: presentation.title,
-    message: detail,
-    timestamp: new Date().toISOString(),
-    read: false
-  })
-
-  if (appended && presentation.level === 'error') ElMessage.error(detail)
+  const notification = operationNotification(notifications.value, msg)
+  if (notification) appendNotification(notification)
 }
 
 const loadNotifications = () => {
@@ -339,7 +274,7 @@ const loadNotifications = () => {
     if (cached) {
       const parsed = JSON.parse(cached)
       if (Array.isArray(parsed)) {
-        notifications.value = parsed.slice(0, 200).map(sanitizeNotification)
+        notifications.value = restoreNotifications(parsed.slice(0, 200)).map(sanitizeNotification)
         return
       }
     }
@@ -413,8 +348,8 @@ defineExpose({
 }
 
 .header-btn:hover {
-  background: rgba(59, 130, 246, 0.1);
-  color: #3b82f6;
+  background: rgba(15, 23, 42, 0.1);
+  color: #409eff;
 }
 
 .notification-center {
@@ -458,11 +393,11 @@ defineExpose({
 }
 
 .notification-item:hover {
-  background: rgba(59, 130, 246, 0.05);
+  background: rgba(15, 23, 42, 0.05);
 }
 
 .notification-item.unread {
-  background: rgba(59, 130, 246, 0.08);
+  background: rgba(15, 23, 42, 0.08);
 }
 
 .notification-icon {
@@ -492,8 +427,8 @@ defineExpose({
 }
 
 .notification-icon.info {
-  background: linear-gradient(135deg, #3b82f6 0%, #0ea5e9 100%);
-  color: #fff;
+  background: #ecf5ff;
+  color: #409eff;
 }
 
 .notification-content {

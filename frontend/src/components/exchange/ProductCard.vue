@@ -285,7 +285,7 @@ const handleAction = () => {
 .product-title {
   font-size: 15px;
   font-weight: 700;
-  color: #1e3a8a;
+  color: #303133;
   line-height: 1.45;
   min-height: 44px;
   display: -webkit-box;
@@ -309,7 +309,7 @@ const handleAction = () => {
   margin-left: auto;
   font-size: 14px;
   font-weight: 700;
-  color: #2563eb;
+  color: #409eff;
   background: rgba(239, 246, 255, .92);
   padding: 5px 10px;
   border-radius: 999px;
@@ -319,7 +319,7 @@ const handleAction = () => {
 .cloud-icon {
   width: 16px;
   height: 16px;
-  color: #2563eb;
+  color: #409eff;
 }
 
 .product-stock {

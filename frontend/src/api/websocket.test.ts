@@ -1,5 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { isOperationUpdatedMessage, WebSocketClient, type WsMessage } from './websocket'
+import { refreshBrowserSession } from './axios'
+
+vi.mock('./axios', () => ({ refreshBrowserSession: vi.fn() }))
 
 vi.mock('@/router', () => ({
   default: {
@@ -110,6 +113,7 @@ describe('WebSocketClient', () => {
   let originalEventSource: typeof EventSource
 
   beforeEach(() => {
+    vi.mocked(refreshBrowserSession).mockReset().mockResolvedValue(undefined)
     vi.useFakeTimers()
     MockWebSocket.instances = []
     MockEventSource.instances = []
@@ -204,7 +208,7 @@ describe('WebSocketClient', () => {
     client.disconnect()
   })
 
-  it('does not advance the SSE replay cursor for malformed events', () => {
+  it('does not advance the SSE replay cursor for malformed events', async () => {
     vi.stubEnv('VITE_PUSH_TRANSPORT', 'sse')
     vi.spyOn(Math, 'random').mockReturnValue(0)
     const client = new WebSocketClient()
@@ -218,7 +222,7 @@ describe('WebSocketClient', () => {
     first.message({ type: 'task_complete', message_id: 'missing-data', sequence: 37 })
     first.message({ type: 'operation.updated', data: { operation_id: 'op-1' }, message_id: 'invalid-operation', sequence: 38 })
     first.fail()
-    vi.advanceTimersByTime(3000)
+    await vi.advanceTimersByTimeAsync(3000)
 
     expect(handler).not.toHaveBeenCalled()
     expect(consoleWarn).toHaveBeenCalledTimes(2)
@@ -226,7 +230,7 @@ describe('WebSocketClient', () => {
     client.disconnect()
   })
 
-  it('reconnects SSE with exponential backoff and preserves the last event sequence', () => {
+  it('reconnects SSE with exponential backoff and preserves the last event sequence', async () => {
     vi.stubEnv('VITE_PUSH_TRANSPORT', 'sse')
     vi.spyOn(Math, 'random').mockReturnValue(0)
     const client = new WebSocketClient()
@@ -236,7 +240,7 @@ describe('WebSocketClient', () => {
     first.message({ type: 'task_complete', data: { ok: true }, message_id: 'sse-21', sequence: 21 })
     first.fail()
 
-    vi.advanceTimersByTime(3000)
+    await vi.advanceTimersByTimeAsync(3000)
 
     expect(MockEventSource.instances).toHaveLength(2)
     expect(MockEventSource.instances[1].url).toBe('/events?last_event_id=21')
@@ -332,7 +336,7 @@ describe('WebSocketClient', () => {
     client.disconnect()
   })
 
-  it('closes half-open socket when heartbeat pong times out and reconnects', () => {
+  it('closes half-open socket when heartbeat pong times out and reconnects', async () => {
     const client = new WebSocketClient()
 
     client.connect()
@@ -345,7 +349,7 @@ describe('WebSocketClient', () => {
     vi.advanceTimersByTime(10000)
     expect(socket.closeCalls).toBe(1)
 
-    vi.advanceTimersByTime(5000)
+    await vi.advanceTimersByTimeAsync(5000)
     expect(MockWebSocket.instances).toHaveLength(2)
 
     client.disconnect()
@@ -370,6 +374,7 @@ describe('WebSocketClient', () => {
 
 
   it('dispatches auth clear and skips reconnect on auth close code', async () => {
+    vi.mocked(refreshBrowserSession).mockRejectedValue({ response: { status: 401 } })
     const client = new WebSocketClient()
     const authClear = vi.fn()
     window.addEventListener('auth:clear', authClear)
@@ -379,12 +384,41 @@ describe('WebSocketClient', () => {
     socket.open()
     socket.close(1008)
 
-    vi.advanceTimersByTime(30000)
-    await Promise.resolve()
+    await vi.advanceTimersByTimeAsync(30000)
 
     expect(authClear).toHaveBeenCalledTimes(1)
     expect(MockWebSocket.instances).toHaveLength(1)
 
     window.removeEventListener('auth:clear', authClear)
+  })
+
+  it('renews an expired session before reconnecting WebSocket without logging out', async () => {
+    const client = new WebSocketClient()
+    const authClear = vi.fn()
+    window.addEventListener('auth:clear', authClear)
+    client.connect()
+    MockWebSocket.instances[0].open()
+    MockWebSocket.instances[0].close(4001)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(refreshBrowserSession).toHaveBeenCalledTimes(1)
+    expect(MockWebSocket.instances).toHaveLength(2)
+    expect(authClear).not.toHaveBeenCalled()
+    client.disconnect()
+    window.removeEventListener('auth:clear', authClear)
+  })
+
+  it('does not reopen SSE after disconnect while a session renewal is in flight', async () => {
+    vi.stubEnv('VITE_PUSH_TRANSPORT', 'sse')
+    vi.spyOn(Math, 'random').mockReturnValue(0)
+    let finish!: () => void
+    vi.mocked(refreshBrowserSession).mockReturnValue(new Promise(resolve => { finish = resolve }))
+    const client = new WebSocketClient()
+    client.connect()
+    MockEventSource.instances[0].fail()
+    await vi.advanceTimersByTimeAsync(3000)
+    client.disconnect()
+    finish()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(MockEventSource.instances).toHaveLength(1)
   })
 })

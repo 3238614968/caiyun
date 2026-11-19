@@ -1,243 +1,312 @@
 <template>
   <div class="task-logs-container">
-    <el-card shadow="hover">
-      <template #header>
-        <div class="card-header">
-          <span>运行日志</span>
-        </div>
+    <PageHeader
+      title="运行日志"
+      subtitle="按日查看云朵与音符收益，展开查看任务结果"
+    >
+      <template #actions>
+        <el-button
+          :loading="loading"
+          @click="loadLogs"
+        >
+          刷新记录
+        </el-button>
       </template>
+    </PageHeader>
 
-      <!-- 筛选栏 -->
-      <el-form
-        :inline="true"
-        :model="searchForm"
-        class="search-form"
-        @submit.prevent="handleSearch"
-      >
-        <el-form-item label="任务类型">
-          <el-select
-            v-model="searchForm.taskType"
-            placeholder="请选择"
-            clearable
-          >
-            <el-option
-              v-for="option in taskTypeOptions"
-              :key="option.value || 'all'"
-              :label="option.label"
-              :value="option.value"
-            />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="状态">
-          <el-select
-            v-model="searchForm.status"
-            placeholder="请选择"
-            clearable
-          >
-            <el-option
-              label="全部"
-              value=""
-            />
-            <el-option
-              label="成功"
-              value="success"
-            />
-            <el-option
-              label="失败"
-              value="failed"
-            />
-            <el-option
-              label="执行中"
-              value="pending"
-            />
-          </el-select>
-        </el-form-item>
-        <el-form-item>
-          <el-button
-            type="primary"
-            native-type="submit"
-          >
-            搜索
-          </el-button>
-          <el-button @click="handleReset">
-            重置
-          </el-button>
-        </el-form-item>
-      </el-form>
-
-      <!-- 日志列表 -->
-      <div
-        v-loading="showLoading"
-        :aria-busy="loading"
-        class="logs-shell"
-      >
-        <el-table
-          v-if="!isMobile"
-          :data="logList"
-          stripe
-          style="width: 100%"
+    <el-card shadow="hover">
+      <div class="logs-view-switch">
+        <SegmentedControl
+          :model-value="viewMode"
+          :options="[{ label: '每日汇总', value: 'daily' }, { label: '任务明细', value: 'details' }]"
+          label="日志视图"
+          @update:model-value="changeView"
+        />
+      </div>
+      <TaskDailySummary
+        v-if="viewMode === 'daily'"
+        ref="dailySummary"
+        v-model:date="selectedDate"
+        :is-mobile="isMobile"
+        @detail="showAccountDetails"
+      />
+      <template v-else>
+        <!-- 筛选栏 -->
+        <el-form
+          :inline="true"
+          :model="searchForm"
+          :label-position="isMobile ? 'top' : 'left'"
+          class="search-form logs-filter-form"
+          @submit.prevent="handleSearch"
         >
-          <el-table-column
-            prop="account.phone"
-            label="手机号"
-            width="150"
-          >
-            <template #default="{ row }">
-              {{ maskPhone(row.account?.phone) }}
-            </template>
-          </el-table-column>
-          <el-table-column
-            prop="task_type"
+          <el-form-item label="日期">
+            <el-date-picker
+              v-model="selectedDate"
+              type="date"
+              value-format="YYYY-MM-DD"
+              :clearable="false"
+              aria-label="明细日期"
+              @change="handleSearch"
+            />
+          </el-form-item>
+          <el-form-item
             label="任务类型"
-            width="120"
+            class="logs-filter-type"
           >
-            <template #default="{ row }">
-              <el-tag>{{ getTaskTypeName(row.task_type) }}</el-tag>
-            </template>
-          </el-table-column>
-          <el-table-column
-            prop="status"
-            label="状态"
-            width="100"
-          >
-            <template #default="{ row }">
-              <el-tag :type="getStatusType(getDisplayStatus(row))">
-                {{ getStatusName(getDisplayStatus(row)) }}
-              </el-tag>
-            </template>
-          </el-table-column>
-          <el-table-column
-            prop="cloud_gained"
-            label="获得云朵"
-            width="100"
-          >
-            <template #default="{ row }">
-              <span
-                v-if="row.cloud_gained > 0"
-                style="color: #67c23a"
-              >+{{ row.cloud_gained }}</span>
-              <span v-else>-</span>
-            </template>
-          </el-table-column>
-          <el-table-column
-            label="执行结果"
-            min-width="340"
-          >
-            <template #default="{ row }">
-              <div class="log-result-preview">
-                <el-tag
-                  v-if="isExchangeLog(row)"
-                  :type="getExchangeResultDisplay(row).type"
-                  size="small"
-                >
-                  {{ getExchangeResultDisplay(row).label }}
-                </el-tag>
-                <div class="log-message-preview">
-                  {{ formatLogMessageForPreview(row) }}
-                </div>
-              </div>
-            </template>
-          </el-table-column>
-          <el-table-column
-            prop="created_at"
-            label="执行时间"
-            width="180"
-          >
-            <template #default="{ row }">
-              {{ formatDate(row.created_at) }}
-            </template>
-          </el-table-column>
-          <el-table-column
-            label="操作"
-            width="100"
-            fixed="right"
-          >
-            <template #default="{ row }">
-              <el-button
-                type="primary"
-                link
-                @click="handleViewDetail(row)"
-              >
-                详情
-              </el-button>
-            </template>
-          </el-table-column>
-        </el-table>
-
-        <!-- 分页 -->
-
-        <div
-          v-else
-          class="mobile-log-list"
-        >
-          <el-empty
-            v-if="logList.length === 0"
-            description="暂无日志"
-          />
-          <template v-else>
-            <el-card
-              v-for="row in logList"
-              :key="row.id"
-              class="mobile-log-card"
-              shadow="never"
+            <el-select
+              v-model="searchForm.taskType"
+              placeholder="请选择"
+              clearable
             >
-              <div class="mobile-log-head">
-                <div>
-                  <div class="mobile-log-title">
-                    {{ maskPhone(row.account?.phone) }}
-                  </div>
-                  <div class="mobile-log-meta">
-                    {{ getTaskTypeName(row.task_type) }}
-                  </div>
-                </div>
+              <el-option
+                v-for="option in taskTypeOptions"
+                :key="option.value || 'all'"
+                :label="option.label"
+                :value="option.value"
+              />
+            </el-select>
+          </el-form-item>
+          <el-form-item
+            label="状态"
+            class="logs-filter-status"
+          >
+            <SegmentedControl
+              :model-value="searchForm.status"
+              :options="[{ label: '全部', value: '' },{ label: '成功', value: 'success' },{ label: '失败', value: 'failed' },{ label: '待确认', value: 'pending' }]"
+              label="日志状态"
+              @update:model-value="changeStatus"
+            />
+          </el-form-item>
+          <el-form-item class="logs-filter-actions">
+            <el-button
+              type="primary"
+              native-type="submit"
+            >
+              搜索
+            </el-button>
+            <el-button @click="handleReset">
+              重置
+            </el-button>
+          </el-form-item>
+        </el-form>
+
+        <div class="log-view-options">
+          <el-tag
+            v-if="latestOnly && !onlyRewards"
+            closable
+            @close="showAllAttempts"
+          >
+            各任务最近结果
+          </el-tag>
+          <el-tag
+            v-if="selectedAccountID"
+            closable
+            @close="clearAccountFilter"
+          >
+            仅看所选账号
+          </el-tag>
+          <span>{{ pagination.total }} 条执行记录</span><el-switch
+            v-model="onlyRewards"
+            size="small"
+            aria-label="仅看确认收益"
+            active-text="仅看确认收益"
+            @change="handleSearch"
+          />
+        </div>
+        <!-- 日志列表 -->
+        <div
+          v-loading="showLoading"
+          :aria-busy="loading"
+          class="logs-shell"
+        >
+          <el-table
+            v-if="!isMobile"
+            :data="logList"
+            stripe
+            style="width: 100%"
+          >
+            <el-table-column
+              prop="account.phone"
+              label="手机号"
+              width="150"
+            >
+              <template #default="{ row }">
+                {{ maskPhone(row.account?.phone) }}
+              </template>
+            </el-table-column>
+            <el-table-column
+              prop="task_type"
+              label="任务类型"
+              width="120"
+            >
+              <template #default="{ row }">
+                <el-tag>{{ getTaskTypeName(row.task_type) }}</el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column
+              prop="status"
+              label="状态"
+              width="100"
+            >
+              <template #default="{ row }">
                 <el-tag :type="getStatusType(getDisplayStatus(row))">
                   {{ getStatusName(getDisplayStatus(row)) }}
                 </el-tag>
-              </div>
-              <div class="mobile-log-grid">
-                <div class="mobile-log-row">
-                  <span class="mobile-log-label">任务类型</span>
-                  <span class="mobile-log-value">{{ getTaskTypeName(row.task_type) }}</span>
+              </template>
+            </el-table-column>
+            <el-table-column
+              prop="cloud_gained"
+              label="获得云朵"
+              width="100"
+            >
+              <template #default="{ row }">
+                <span
+                  v-if="row.cloud_gained > 0"
+                  style="color: #67c23a"
+                >+{{ row.cloud_gained }}</span>
+                <span v-else>-</span>
+              </template>
+            </el-table-column>
+            <el-table-column
+              prop="migu_notes_gained"
+              label="获得音符"
+              width="100"
+            >
+              <template #default="{ row }">
+                <span
+                  v-if="row.migu_notes_gained > 0"
+                  style="color: #67c23a"
+                >+{{ row.migu_notes_gained }}</span>
+                <span v-else>-</span>
+              </template>
+            </el-table-column>
+            <el-table-column
+              label="执行结果"
+              min-width="340"
+            >
+              <template #default="{ row }">
+                <div class="log-result-preview">
+                  <el-tag
+                    v-if="isExchangeLog(row)"
+                    :type="getExchangeResultDisplay(row).type"
+                    size="small"
+                  >
+                    {{ getExchangeResultDisplay(row).label }}
+                  </el-tag>
+                  <div class="log-message-preview">
+                    {{ formatLogMessageForPreview(row) }}
+                  </div>
                 </div>
-                <div class="mobile-log-row">
-                  <span class="mobile-log-label">获得云朵</span>
-                  <span
-                    class="mobile-log-value"
-                    :class="{ 'positive': row.cloud_gained > 0 }"
-                  >{{ row.cloud_gained > 0 ? `+${row.cloud_gained}` : '-' }}</span>
-                </div>
-                <div class="mobile-log-row">
-                  <span class="mobile-log-label">执行时间</span>
-                  <span class="mobile-log-value">{{ formatDate(row.created_at) }}</span>
-                </div>
-                <div class="mobile-log-row full">
-                  <span class="mobile-log-label">执行结果</span>
-                  <span class="mobile-log-value multiline">{{ formatLogMessageForPreview(row) }}</span>
-                </div>
-              </div>
-              <div class="mobile-log-actions">
+              </template>
+            </el-table-column>
+            <el-table-column
+              prop="created_at"
+              label="执行时间"
+              width="180"
+            >
+              <template #default="{ row }">
+                {{ formatDate(row.created_at) }}
+              </template>
+            </el-table-column>
+            <el-table-column
+              label="操作"
+              width="100"
+              fixed="right"
+            >
+              <template #default="{ row }">
                 <el-button
                   type="primary"
-                  plain
+                  link
                   @click="handleViewDetail(row)"
                 >
-                  查看详情
+                  详情
                 </el-button>
-              </div>
-            </el-card>
-          </template>
+              </template>
+            </el-table-column>
+          </el-table>
+
+          <!-- 分页 -->
+
+          <div
+            v-else
+            class="mobile-log-list"
+          >
+            <el-empty
+              v-if="logList.length === 0"
+              description="暂无日志"
+            />
+            <template v-else>
+              <el-card
+                v-for="row in logList"
+                :key="row.id"
+                class="mobile-log-card"
+                shadow="never"
+              >
+                <div class="mobile-log-head">
+                  <div>
+                    <div class="mobile-log-title">
+                      {{ maskPhone(row.account?.phone) }}
+                    </div>
+                    <div class="mobile-log-meta">
+                      {{ getTaskTypeName(row.task_type) }}
+                    </div>
+                  </div>
+                  <el-tag :type="getStatusType(getDisplayStatus(row))">
+                    {{ getStatusName(getDisplayStatus(row)) }}
+                  </el-tag>
+                </div>
+                <div class="mobile-log-grid">
+                  <div class="mobile-log-row">
+                    <span class="mobile-log-label">任务类型</span>
+                    <span class="mobile-log-value">{{ getTaskTypeName(row.task_type) }}</span>
+                  </div>
+                  <div class="mobile-log-row">
+                    <span class="mobile-log-label">获得云朵</span>
+                    <span
+                      class="mobile-log-value"
+                      :class="{ 'positive': row.cloud_gained > 0 }"
+                    >{{ row.cloud_gained > 0 ? `+${row.cloud_gained}` : '-' }}</span>
+                  </div>
+                  <div class="mobile-log-row">
+                    <span class="mobile-log-label">获得音符</span>
+                    <span
+                      class="mobile-log-value"
+                      :class="{ 'positive': row.migu_notes_gained > 0 }"
+                    >{{ row.migu_notes_gained > 0 ? `+${row.migu_notes_gained}` : '-' }}</span>
+                  </div>
+                  <div class="mobile-log-row">
+                    <span class="mobile-log-label">执行时间</span>
+                    <span class="mobile-log-value">{{ formatDate(row.created_at) }}</span>
+                  </div>
+                  <div class="mobile-log-row full">
+                    <span class="mobile-log-label">执行结果</span>
+                    <span class="mobile-log-value multiline">{{ formatLogMessageForPreview(row) }}</span>
+                  </div>
+                </div>
+                <div class="mobile-log-actions">
+                  <el-button
+                    type="primary"
+                    plain
+                    @click="handleViewDetail(row)"
+                  >
+                    查看详情
+                  </el-button>
+                </div>
+              </el-card>
+            </template>
+          </div>
         </div>
-      </div>
-      <el-pagination
-        v-model:current-page="pagination.page"
-        v-model:page-size="pagination.pageSize"
-        :page-sizes="[20, 50, 100]"
-        :total="pagination.total"
-        layout="total, sizes, prev, pager, next, jumper"
-        style="margin-top: 20px"
-        @size-change="handleSizeChange"
-        @current-change="handleCurrentChange"
-      />
+        <el-pagination
+          v-model:current-page="pagination.page"
+          v-model:page-size="pagination.pageSize"
+          :page-sizes="[20, 50, 100]"
+          :total="pagination.total"
+          layout="total, sizes, prev, pager, next, jumper"
+          style="margin-top: 20px"
+          @size-change="handleSizeChange"
+          @current-change="handleCurrentChange"
+        />
+      </template>
     </el-card>
 
     <!-- 详情对话框 -->
@@ -266,6 +335,9 @@
           </el-descriptions-item>
           <el-descriptions-item label="获得云朵">
             {{ currentLog.cloud_gained > 0 ? `+${currentLog.cloud_gained}` : '-' }}
+          </el-descriptions-item>
+          <el-descriptions-item label="获得音符">
+            {{ currentLog.migu_notes_gained > 0 ? `+${currentLog.migu_notes_gained}` : '-' }}
           </el-descriptions-item>
           <el-descriptions-item label="执行耗时">
             {{ formatExecutionTime(currentLog.execution_time) }}
@@ -326,19 +398,26 @@
             {{ formatLogMessageForDetail(currentLog) }}
           </div>
         </section>
-        <details
-          v-if="isExchangeLog(currentLog) && currentLog.message"
-          class="log-technical-details"
-        >
-          <summary>原始响应与诊断信息</summary>
-          <pre>{{ currentLog.message }}</pre>
-        </details>
       </div>
+      <template #footer>
+        <el-button @click="copyLog">
+          复制记录
+        </el-button><el-button
+          type="primary"
+          @click="detailVisible = false"
+        >
+          完成
+        </el-button>
+      </template>
     </el-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
+import PageHeader from '@/components/PageHeader.vue'
+import SegmentedControl from '@/components/ui/SegmentedControl.vue'
+import TaskDailySummary from '@/components/TaskDailySummary.vue'
+import { taskLogDate, taskLogStatus } from '@/utils/task-log-status'
 import { useLatestRequest } from '@/composables/useLatestRequest'
 import { useDeferredLoading } from '@/composables/useDeferredLoading'
 import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
@@ -349,6 +428,38 @@ import { formatExchangeResult } from '@/utils/exchange-result'
 
 const { loading, execute: latestLogRequest } = useLatestRequest()
 const showLoading = useDeferredLoading(loading)
+const onlyRewards = ref(false)
+const viewMode = ref<'daily' | 'details'>('daily')
+const selectedDate = ref(taskLogDate())
+const selectedAccountID = ref<number>()
+const latestOnly = ref(false)
+const dailySummary = ref<InstanceType<typeof TaskDailySummary>>()
+const changeView = (value: string | number) => {
+  viewMode.value = value === 'details' ? 'details' : 'daily'
+  if (viewMode.value === 'details') loadLogs()
+}
+const showAccountDetails = (accountID: number, date: string, status: string) => {
+  selectedAccountID.value = accountID
+  selectedDate.value = date
+  latestOnly.value = true
+  searchForm.status = status
+  onlyRewards.value = false
+  viewMode.value = 'details'
+  handleSearch()
+}
+const clearAccountFilter = () => { selectedAccountID.value = undefined; handleSearch() }
+const showAllAttempts = () => { latestOnly.value = false; handleSearch() }
+const changeStatus = (value: string | number) => {
+  searchForm.status = String(value)
+  if (value === 'failed' || value === 'pending') onlyRewards.value = false
+  handleSearch()
+}
+const copyLog = async () => {
+  try {
+    await navigator.clipboard.writeText(`${currentLog.value.account?.phone || ''} · ${getTaskTypeName(currentLog.value.task_type)}\n${currentLog.value.message || ''}`)
+    ElMessage.success('记录已复制')
+  } catch { ElMessage.info('复制失败，请选择记录内容手动复制') }
+}
 const detailVisible = ref(false)
 const logList = ref<TaskLog[]>([])
 const currentLog = ref<TaskLog>({} as TaskLog)
@@ -374,7 +485,8 @@ const pagination = reactive({
 const statusNames: Record<string, string> = {
   success: '成功',
   failed: '失败',
-  pending: '执行中'
+  pending: '待确认',
+  skipped: '已跳过'
 }
 
 
@@ -395,9 +507,15 @@ const getStatusType = (status: string) => {
 
 // 加载日志列表
 const loadLogs = async () => {
+  if (viewMode.value === 'daily') { await dailySummary.value?.refresh(); return }
   const params: any = { page: pagination.page, page_size: pagination.pageSize }
+  params.date = selectedDate.value
+  params.latest = latestOnly.value && !onlyRewards.value
+  if (selectedAccountID.value) params.account_id = selectedAccountID.value
   if (searchForm.taskType) params.task_type = searchForm.taskType
   if (searchForm.status) params.status = searchForm.status
+  // COC 等活动产生流量券/权益奖励，也必须能看到没有云朵收益的执行记录。
+  params.has_reward = onlyRewards.value
   await latestLogRequest(() => getTaskLogs(params), data => {
     logList.value = data.task_logs
     pagination.total = data.total
@@ -414,6 +532,9 @@ const handleSearch = () => {
 const handleReset = () => {
   searchForm.taskType = ''
   searchForm.status = ''
+  onlyRewards.value = false
+  selectedAccountID.value = undefined
+  latestOnly.value = false
   pagination.page = 1
   loadLogs()
 }
@@ -442,7 +563,7 @@ const formatDate = (date: string) => {
   return new Date(date).toLocaleString('zh-CN')
 }
 
-const hiddenLogDetailPrefixes = ['http_status=', 'code=', 'result_code=', 'result=', 'desc=', 'sub_msg=', 'trace_id=', 'body=']
+const hiddenLogDetailPrefixes = ['http_status=', 'code=', 'result_code=', 'result=', 'desc=', 'sub_msg=', 'trace_id=', 'body=', 'build=']
 const exchangeTaskTypes = new Set(['exchange'])
 
 const maskPhone = (value?: string) => {
@@ -460,7 +581,7 @@ type LabeledLogSegment = {
 }
 
 const getDefaultLogMessage = (status?: string) => {
-  if (status === 'pending') return '\u6267\u884c\u4e2d'
+  if (status === 'pending') return '待确认'
   if (status === 'failed') return '\u6267\u884c\u5931\u8d25'
   if (status === 'success') return '\u5df2\u5b8c\u6210'
   return '-'
@@ -522,7 +643,7 @@ const getExchangeResultDisplay = (log?: Partial<TaskLog>) => {
 }
 
 const getDisplayStatus = (log?: Partial<TaskLog>) => {
-  if (!isExchangeLog(log)) return `${log?.status || ''}`
+  if (!isExchangeLog(log)) return taskLogStatus(log?.status)
   const resultType = getExchangeResultDisplay(log).type
   if (resultType === 'danger' || resultType === 'warning') return 'failed'
   if (resultType === 'success') return 'success'
@@ -622,57 +743,9 @@ const formatExchangeLogMessage = (log?: Partial<TaskLog>, detail = false) => {
 }
 
 const normalizeLogSegment = (segment: string, status?: string, detail = false) => {
-  let value = normalizeLogText(segment)
+  const value = normalizeLogText(segment).replace(/^(?:结果|原因)[:：]\s*/, '')
   if (!value) return getDefaultLogMessage(status)
-
-  value = value
-    .replace(/^(?:\u7ed3\u679c|\u539f\u56e0)[:\uFF1A]\s*/, '')
-    .replace(/^.*?(?:\u5931\u8d25|\u5f02\u5e38)[:\uFF1A]\s*/, '')
-    .replace(/\s*Error Code:\s*[A-Z0-9_-]+/ig, '')
-
-  value = normalizeLogText(value)
-
-  if (/\u672c\u6708\u5df2\u9886\u53d6\u590d\u6d3b\u5361\u5956\u52b1/.test(value)) {
-    return detail ? '\u672c\u6708\u5df2\u9886\u53d6\u590d\u6d3b\u5361\u5956\u52b1' : '\u672c\u6708\u5df2\u9886'
-  }
-
-  if (/\u5df2\u9886\u53d6\u590d\u6d3b\u5361\u5956\u52b1|\u9886\u53d6\u590d\u6d3b\u5361\u5956\u52b1\u6210\u529f/.test(value)) {
-    return detail ? '\u5df2\u9886\u53d6\u590d\u6d3b\u5361\u5956\u52b1' : '\u5df2\u9886\u53d6'
-  }
-
-  if (/\u8bf7\u524d\u5f80\u79fb\u52a8\u4e91\u76d8\u624b\u52a8\u5b8c\u6210|\u624b\u52a8\u5b8c\u6210\u6bcf\u6708\u4efb\u52a1|\u672a\u5b8c\u6210/.test(value)) {
-    return detail ? '\u9700\u524d\u5f80\u79fb\u52a8\u4e91\u76d8\u624b\u52a8\u5b8c\u6210' : '\u9700\u624b\u52a8\u5b8c\u6210'
-  }
-
-  if (/\u6d3b\u52a8\u5f02\u5e38\uff0c\u8bf7\u7a0d\u540e\u91cd\u8bd5/.test(value)) {
-    return '\u6d3b\u52a8\u5f02\u5e38\uff0c\u8bf7\u7a0d\u540e\u91cd\u8bd5'
-  }
-
-  if (/\u5df2\u9886\u53d6|\u5df2\u7ecf\u9886\u53d6|\u91cd\u590d\u9886\u53d6/.test(value)) {
-    return '\u5df2\u9886\u53d6'
-  }
-
-  if (/\u5151\u6362\u6210\u529f|\u62a2\u5151\u6210\u529f/.test(value)) {
-    return detail ? '\u5151\u6362\u6210\u529f' : '\u5df2\u5151\u6362'
-  }
-
-  if (/\u6267\u884c\u6210\u529f|\u4efb\u52a1\u6267\u884c\u6210\u529f|\u9886\u53d6\u6210\u529f|\u5237\u65b0\u6210\u529f|\u540c\u6b65\u6210\u529f|\u66f4\u65b0\u6210\u529f/.test(value)) {
-    return '\u5df2\u5b8c\u6210'
-  }
-
-  if (status === 'success') {
-    return '\u5df2\u5b8c\u6210'
-  }
-
-  if (status === 'pending') {
-    return '\u6267\u884c\u4e2d'
-  }
-
-  if (status === 'failed') {
-    return detail ? value : shortenText(value, 20)
-  }
-
-  return detail ? value : shortenText(value, 20)
+  return detail ? value : shortenText(value, 80)
 }
 
 const formatLogMessage = (log?: Partial<TaskLog>, detail = false) => {
@@ -681,7 +754,9 @@ const formatLogMessage = (log?: Partial<TaskLog>, detail = false) => {
   }
 
   const segments = getVisibleLogSegments(log?.message)
+  if (taskLogStatus(log?.status) === 'pending' && ['执行中', '正在执行', '等待执行'].includes(segments.join(''))) return '执行已结束，结果待确认'
   if (segments.length === 0) return getDefaultLogMessage(log?.status)
+  if (detail) return segments.map(segment => normalizeLogSegment(segment, log?.status, true)).join('；')
   return normalizeLogSegment(pickPrimaryLogSegment(segments), log?.status, detail)
 }
 
@@ -696,7 +771,7 @@ const formatLogMessageForDetail = (log?: Partial<TaskLog>) => {
 onMounted(() => {
   syncViewport()
   window.addEventListener('resize', syncViewport)
-  loadLogs()
+  if (viewMode.value === 'details') loadLogs()
 })
 
 onUnmounted(() => {
@@ -705,6 +780,7 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
+.logs-view-switch { margin-bottom: 22px; }
 .task-logs-container {
   padding: 20px;
   background: linear-gradient(135deg, #f0f9ff 0%, #e0f2fe 100%);
@@ -753,7 +829,7 @@ onUnmounted(() => {
 
 .logs-shell { min-height: 140px; }
 .mobile-log-list { display: grid; gap: 12px; }
-.mobile-log-card { border-radius: 18px; border: 1px solid rgba(226, 232, 240, 0.9); background: rgba(255, 255, 255, 0.94); box-shadow: 0 14px 28px rgba(37, 99, 235, 0.08); }
+.mobile-log-card { border-radius: 18px; border: 1px solid rgba(226, 232, 240, 0.9); background: rgba(255, 255, 255, 0.94); box-shadow: 0 14px 28px rgba(15, 23, 42, 0.08); }
 .mobile-log-card :deep(.el-card__body) { padding: 16px; }
 .mobile-log-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
 .mobile-log-title { font-size: 15px; font-weight: 700; color: #0f172a; }
@@ -816,4 +892,22 @@ onUnmounted(() => {
 @media (max-width: 480px) {
   .execution-result-header { align-items: stretch; flex-direction: column; }
 }
+
+.log-view-options { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 8px 12px; font-size: 10px; color: var(--text-muted); margin: 19px 0 15px; }
+.log-view-options label { display: flex; align-items: center; gap: 9px; cursor: pointer; }
+
+.search-form.logs-filter-form { display: flex; flex-wrap: wrap; align-items: center; gap: 14px 20px; padding: 16px 18px; }
+.logs-filter-form :deep(.el-form-item) { flex: 0 0 auto; align-items: center; min-width: 0; margin: 0; }
+.logs-filter-form :deep(.el-form-item__label) { flex-shrink: 0; white-space: nowrap; }
+.logs-filter-type :deep(.el-select) { width: 180px; }
+.logs-filter-status :deep(.el-form-item__content) { flex: 0 0 auto; min-width: max-content; }
+.logs-filter-status :deep(.segmented-control) { flex-shrink: 0; min-width: max-content; }
+.logs-filter-actions :deep(.el-form-item__content) { display: flex; flex-wrap: nowrap; gap: 8px; }
+.logs-filter-actions :deep(.el-button + .el-button) { margin-left: 0; }
+@media(max-width:768px) {
+  .search-form.logs-filter-form { align-items: stretch; padding: 14px; }
+  .logs-filter-form :deep(.el-form-item__label) { line-height: 20px; }
+  .logs-filter-form :deep(.el-form-item__content) { width: 100%; }
+}
+
 </style>

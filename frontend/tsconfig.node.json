@@ -1,11 +1,14 @@
 {
   "compilerOptions": {
     "composite": true,
+    "target": "ES2022",
+    "skipLibCheck": true,
+    "tsBuildInfoFile": ".local/tsconfig.node.tsbuildinfo",
     "module": "ESNext",
     "moduleResolution": "Bundler",
     "allowSyntheticDefaultImports": true,
     "types": ["node"]
   },
-  "include": ["vite.config.ts"]
+  "include": ["vite.config.ts", "scripts/ui-preview.ts", "e2e/helpers/mockApi.ts"]
 }
 

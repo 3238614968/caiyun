@@ -41,8 +41,12 @@
         v-for="item in announcements"
         :key="item.id"
         class="announcement-item"
+        role="button"
+        tabindex="0"
         :class="{ unread: !isRead(item.id), top: item.is_top }"
         @click="$emit('open', item)"
+        @keydown.enter="$emit('open', item)"
+        @keydown.space.prevent="$emit('open', item)"
       >
         <div class="announcement-main">
           <div class="announcement-line">
@@ -118,7 +122,7 @@ const formatDateTime = (value: string) => {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  color: #1e40af;
+  color: #337ecc;
   font-weight: 600;
 }
 
@@ -126,7 +130,7 @@ const formatDateTime = (value: string) => {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  color: #1e3a8a;
+  color: #303133;
   font-size: 18px;
   font-weight: 700;
 }
@@ -134,16 +138,16 @@ const formatDateTime = (value: string) => {
 .announcement-read-all-btn {
   color: #ffffff;
   font-weight: 700;
-  background: #2563eb;
-  border-color: #2563eb;
-  box-shadow: 0 8px 18px rgba(37, 99, 235, 0.24);
+  background: #409eff;
+  border-color: #409eff;
+  box-shadow: 0 8px 18px rgba(15, 23, 42, 0.24);
 }
 
 .announcement-read-all-btn:hover,
 .announcement-read-all-btn:focus {
   color: #ffffff;
-  background: #1d4ed8;
-  border-color: #1d4ed8;
+  background: #337ecc;
+  border-color: #337ecc;
 }
 
 .announcement-list {
@@ -193,7 +197,7 @@ const formatDateTime = (value: string) => {
 .announcement-name {
   font-size: 15px;
   font-weight: 700;
-  color: #1e3a8a;
+  color: #303133;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

@@ -7,21 +7,12 @@
     <template #header>
       <div class="card-header">
         <span>云朵趋势</span>
-        <el-radio-group
+        <SegmentedControl
           :model-value="days"
-          size="small"
-          @change="handleDaysChange"
-        >
-          <el-radio-button :label="7">
-            7天
-          </el-radio-button>
-          <el-radio-button :label="14">
-            14天
-          </el-radio-button>
-          <el-radio-button :label="30">
-            30天
-          </el-radio-button>
-        </el-radio-group>
+          :options="[{ label: '7 天', value: 7 }, { label: '14 天', value: 14 }, { label: '30 天', value: 30 }]"
+          label="趋势时间范围"
+          @update:model-value="handleDaysChange"
+        />
       </div>
     </template>
 
@@ -47,12 +38,12 @@
           >
             <stop
               offset="0%"
-              stop-color="#3b82f6"
+              stop-color="#409eff"
               stop-opacity="0.34"
             />
             <stop
               offset="100%"
-              stop-color="#3b82f6"
+              stop-color="#409eff"
               stop-opacity="0.08"
             />
           </linearGradient>
@@ -199,12 +190,13 @@
       <span :class="latestSummary.diffClass">较前日余额 {{ latestSummary.diff }}</span>
     </div>
     <p class="trend-note">
-      {{ hasMissingSnapshots ? '历史快照未覆盖全部账号，已保留断点，不计算虚假涨跌。' : '图表展示账号余额，兑换支出也会影响余额变化。' }}
+      {{ hasMissingSnapshots ? '部分日期缺少完整记录，图中留空显示。' : '图表展示账号余额，兑换支出也会影响余额变化。' }}
     </p>
   </el-card>
 </template>
 
 <script setup lang="ts">
+import SegmentedControl from '@/components/ui/SegmentedControl.vue'
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import {
   buildTrendChartGeometry,
@@ -354,7 +346,7 @@ onUnmounted(() => {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  color: #1e40af;
+  color: #337ecc;
   font-weight: 600;
 }
 
@@ -397,7 +389,7 @@ onUnmounted(() => {
 
 .trend-line {
   fill: none;
-  stroke: #3b82f6;
+  stroke: #409eff;
   stroke-width: 4;
   stroke-linecap: round;
   stroke-linejoin: round;
@@ -414,16 +406,16 @@ onUnmounted(() => {
 
 .trend-point {
   fill: #ffffff;
-  stroke: #3b82f6;
+  stroke: #409eff;
   stroke-width: 3;
   transition: all 0.2s ease;
 }
 
 .trend-point--active {
-  fill: #3b82f6;
+  fill: #409eff;
   stroke: #ffffff;
   stroke-width: 4;
-  filter: drop-shadow(0 0 10px rgba(59, 130, 246, 0.24));
+  filter: drop-shadow(0 0 10px rgba(15, 23, 42, 0.24));
 }
 
 .trend-tooltip {
@@ -481,8 +473,8 @@ onUnmounted(() => {
   width: 12px;
   height: 12px;
   border-radius: 999px;
-  background: #3b82f6;
-  box-shadow: 0 0 0 4px rgba(59, 130, 246, 0.14);
+  background: #409eff;
+  box-shadow: 0 0 0 4px rgba(15, 23, 42, 0.14);
 }
 
 .trend-tooltip__meta {
@@ -505,7 +497,7 @@ onUnmounted(() => {
 }
 
 .trend-empty strong {
-  color: #1d4ed8;
+  color: #337ecc;
   font-size: 16px;
 }
 
@@ -524,7 +516,7 @@ onUnmounted(() => {
 }
 
 .trend-summary strong {
-  color: #1d4ed8;
+  color: #337ecc;
   font-size: 15px;
 }
 

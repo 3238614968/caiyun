@@ -12,12 +12,18 @@ const cleanResultMessage = (message?: string) => {
     .trim()
 }
 
-export const formatExchangeResult = (message?: string, status?: string): ExchangeResultDisplay => {
+export const formatExchangeResult = (message?: string, status?: string, outcome?: string): ExchangeResultDisplay => {
+  if (outcome === 'unknown') return { label: '结果待核对', type: 'warning' }
+  if (outcome === 'accepted') return { label: '兑换成功', type: 'success' }
   const raw = cleanResultMessage(message)
   const lower = raw.toLowerCase()
 
   if (!raw) {
     return { label: status === 'success' ? '成功' : '-', type: status === 'success' ? 'success' : 'info' }
+  }
+
+  if (raw.includes('兑换结果待确认')) {
+    return { label: '结果待核对', type: 'warning' }
   }
 
   if (raw.includes('已安排任务') || raw.includes('正在抢兑') || raw.includes('避免同月重复兑换') || raw.includes('跳过本次执行')) {

@@ -1,4 +1,5 @@
 import { ref, type Ref } from 'vue'
+import { refreshBrowserSession } from './axios'
 import { operationStatuses, type OperationUpdatedEvent } from './generated/operation-contract'
 
 export interface WsMessage {
@@ -58,6 +59,7 @@ export class WebSocketClient {
   private url = ''
   private handlers: Map<string, Set<MessageHandler>> = new Map()
   private reconnectTimer: number | null = null
+  private sessionReconnectPromise: Promise<void> | null = null
   private autoWebSocketProbeTimer: number | null = null
   private reconnectDelay = 3000
   private maxReconnectDelay = 30000
@@ -182,6 +184,7 @@ export class WebSocketClient {
     const source = new EventSource(url, { withCredentials: true })
     this.sse = source
     source.onopen = () => {
+      if (this.sse !== source || this.manualClose) return
       this.connected.value = true
       this.transport.value = 'sse'
       this.currentDelay = this.reconnectDelay
@@ -190,6 +193,7 @@ export class WebSocketClient {
       }
     }
     source.onmessage = (event) => {
+      if (this.sse !== source || this.manualClose) return
       try {
         const parsed: unknown = JSON.parse(event.data)
         if (!isValidInboundMessage(parsed)) {
@@ -226,7 +230,8 @@ export class WebSocketClient {
 
   private rememberSSESequence(sequence?: number) {
     if (typeof sequence === 'number' && Number.isFinite(sequence) && sequence > 0) {
-      this.sseLastEventID = String(Math.trunc(sequence))
+      const current = Number(this.sseLastEventID) || 0
+      this.sseLastEventID = String(Math.max(current, Math.trunc(sequence)))
     }
   }
 
@@ -243,6 +248,7 @@ export class WebSocketClient {
       this.ws = socket
 
       socket.onopen = () => {
+        if (this.ws !== socket || this.manualClose) return
         this.connected.value = true
         this.transport.value = 'ws'
         this.autoFallbackToSSE = false
@@ -256,6 +262,7 @@ export class WebSocketClient {
       }
 
       socket.onmessage = (event) => {
+        if (this.ws !== socket || this.manualClose) return
         try {
           const parsed: unknown = JSON.parse(event.data)
           if (!isValidInboundMessage(parsed)) {
@@ -291,11 +298,7 @@ export class WebSocketClient {
           return
         }
         if (this.isAuthClose(event)) {
-          this.manualClose = true
-          window.dispatchEvent(new Event('auth:clear'))
-          void import('@/router').then(({ default: router }) => {
-            router.replace({ name: 'Login' })
-          })
+          void this.reconnectWithSession()
           return
         }
         if (!this.manualClose) {
@@ -399,13 +402,35 @@ export class WebSocketClient {
     console.log(`[WS] ${Math.round(delay / 100) / 10}秒后重连...`)
     this.reconnectTimer = window.setTimeout(() => {
       this.reconnectTimer = null
-      if (this.usesSSE()) {
-        this.connectSSE()
-      } else {
-        this.doConnect()
-      }
+      void this.reconnectWithSession()
       this.currentDelay = Math.min(Math.round(this.currentDelay * 1.6), this.maxReconnectDelay)
     }, delay)
+  }
+
+  private reconnectWithSession(): Promise<void> {
+    if (this.manualClose) return Promise.resolve()
+    if (this.sessionReconnectPromise) return this.sessionReconnectPromise
+    this.sessionReconnectPromise = refreshBrowserSession().then(() => {
+      if (this.manualClose) return
+      if (this.usesSSE()) this.connectSSE()
+      else this.doConnect()
+    }).catch((error: unknown) => {
+      if (this.manualClose) return
+      const status = (error as { response?: { status?: number } })?.response?.status
+      if (status === 401 || status === 403) {
+        this.manualClose = true
+        this.clearReconnectTimer()
+        window.dispatchEvent(new Event('auth:clear'))
+        void import('@/router').then(({ default: router }) => {
+          router.replace({ name: 'Login' })
+        })
+      } else {
+        this.scheduleReconnect()
+      }
+    }).finally(() => {
+      this.sessionReconnectPromise = null
+    })
+    return this.sessionReconnectPromise
   }
 
   private scheduleAutoWebSocketProbe() {
@@ -541,7 +566,8 @@ export class WebSocketClient {
     this.sse?.close()
     this.sse = null
     this.sseLastEventID = ''
-    this.transport.value = 'none'
+    this.seenMessageIds.clear()
+    this.sessionReconnectPromise = null
     this.connected.value = false
   }
 }

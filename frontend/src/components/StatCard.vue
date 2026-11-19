@@ -10,9 +10,9 @@
       >
         <el-icon
           :size="30"
-          color="#fff"
+          :color="iconColor"
         >
-          <component :is="icon" />
+          <component :is="icons[icon] || Document" />
         </el-icon>
       </div>
       <div class="stat-info">
@@ -27,7 +27,7 @@
           class="stat-diff"
           :class="diff > 0 ? 'positive' : 'negative'"
         >
-          <el-icon><component :is="diff > 0 ? 'ArrowUp' : 'ArrowDown'" /></el-icon>
+          <el-icon><component :is="diff > 0 ? ArrowUp : ArrowDown" /></el-icon>
           {{ Math.abs(diff) }}
         </div>
       </div>
@@ -36,6 +36,8 @@
 </template>
 
 <script setup lang="ts">
+import { Cloudy, User, Document, CircleCheck, CircleClose, Timer, TrendCharts, ArrowUp, ArrowDown } from '@element-plus/icons-vue'
+const icons: Record<string, unknown> = { Cloudy, User, Document, CircleCheck, CircleClose, Timer, TrendCharts }
 import { computed } from 'vue'
 
 interface Props {
@@ -48,14 +50,19 @@ interface Props {
 }
 
 const props = withDefaults(defineProps<Props>(), {
-  color: '#3b82f6',
+  color: '#409eff',
   diff: 0,
   showDiff: true
 })
 
+const iconColor = computed(() => {
+  const value = props.color || ''
+  return value.includes('gradient') ? '#fff' : '#409eff'
+})
+
 const gradientColor = computed(() => {
   const colors: Record<string, string> = {
-    blue: 'linear-gradient(135deg, #2563eb 0%, #0ea5e9 100%)',
+    blue: '#ecf5ff',
     green: 'linear-gradient(135deg, #10b981 0%, #34d399 100%)',
     orange: 'linear-gradient(135deg, #f59e0b 0%, #fbbf24 100%)',
     red: 'linear-gradient(135deg, #ef4444 0%, #f87171 100%)',
@@ -77,7 +84,7 @@ const formattedValue = computed(() => {
 .stat-card {
   height: 100%;
   border-radius: 22px;
-  box-shadow: 0 14px 30px rgba(37, 99, 235, 0.08);
+  box-shadow: 0 14px 30px rgba(15, 23, 42, 0.08);
   border: 1px solid rgba(255, 255, 255, 0.72);
   backdrop-filter: blur(14px);
   background: rgba(255, 255, 255, 0.9);

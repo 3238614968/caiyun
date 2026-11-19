@@ -30,7 +30,7 @@ const currentRoute = computed(() => route)
 }
 
 .breadcrumb-text.current {
-  color: #3b82f6;
+  color: #409eff;
   font-weight: 500;
 }
 
@@ -41,7 +41,7 @@ const currentRoute = computed(() => route)
 }
 
 :deep(.el-breadcrumb__inner.is-link:hover) {
-  color: #3b82f6;
+  color: #409eff;
 }
 
 :deep(.el-breadcrumb__separator) {

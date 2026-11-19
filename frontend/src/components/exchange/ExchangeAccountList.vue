@@ -138,7 +138,7 @@ defineEmits<{
 .account-section { padding-top:0; display:flex; flex-direction:column; gap:10px; }
 .section-header { display:flex; justify-content:flex-end; align-items:center; min-height:34px; margin-bottom:0; }
 .mobile-card-list { display:grid; gap:12px; }
-.mobile-account-card { border-radius:18px; border:1px solid rgba(255,255,255,.78); background: rgba(255,255,255,.84); box-shadow:0 12px 28px rgba(37,99,235,.08); }
+.mobile-account-card { border-radius:18px; border:1px solid rgba(255,255,255,.78); background: rgba(255,255,255,.84); box-shadow:0 12px 28px rgba(15, 23, 42, .08); }
 .mobile-account-card :deep(.el-card__body) { padding:16px; }
 .mobile-account-header { display:flex; justify-content:space-between; align-items:flex-start; gap:10px; margin-bottom:12px; }
 .mobile-account-title { font-size:15px; font-weight:700; color:#0f172a; }

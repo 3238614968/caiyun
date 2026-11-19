@@ -56,14 +56,4 @@ const handleReset = () => {
   border: 1px solid rgba(255, 255, 255, 0.5);
 }
 
-:deep(.el-button--primary) {
-  background: linear-gradient(135deg, #3b82f6 0%, #0ea5e9 100%);
-  border: none;
-  box-shadow: 0 4px 15px rgba(59, 130, 246, 0.3);
-}
-
-:deep(.el-button--primary:hover) {
-  background: linear-gradient(135deg, #2563eb 0%, #0284c7 100%);
-  box-shadow: 0 6px 20px rgba(59, 130, 246, 0.4);
-}
 </style>

@@ -33,9 +33,9 @@
     left: 0 !important;
     z-index: 1000 !important;
     flex-direction: row !important;
-    background: linear-gradient(90deg, #e0f2fe 0%, #bae6fd 50%, #7dd3fc 100%) !important;
-    border-top: 1px solid rgba(255, 255, 255, 0.3);
-    box-shadow: 0 -4px 20px rgba(0, 0, 0, 0.1);
+    background: #ffffff !important;
+    border-top: 1px solid #e4e7ed;
+    box-shadow: 0 -2px 8px rgba(0, 0, 0, 0.06);
   }
 
   .logo-container,
@@ -168,25 +168,9 @@
   }
 
   /* 对话框 */
-  .el-dialog {
-    width: 95% !important;
-    max-width: 400px;
-    margin: 20px auto !important;
-    border-radius: 16px !important;
-  }
 
-  .el-dialog__header {
-    padding: 16px 20px !important;
-    font-size: 16px !important;
-  }
 
-  .el-dialog__body {
-    padding: 16px 20px !important;
-  }
 
-  .el-dialog__footer {
-    padding: 12px 20px 16px !important;
-  }
 
   /* 分页 */
   .el-pagination {
@@ -881,9 +865,6 @@
     padding: 16px !important;
   }
 
-  .el-dialog {
-    max-width: calc(100vw - 48px) !important;
-  }
 
   .el-pagination {
     flex-wrap: wrap !important;
@@ -1119,7 +1100,7 @@ body {
 .exchange-records .el-card {
   border-radius: 22px;
   border: 1px solid rgba(255, 255, 255, 0.74);
-  box-shadow: 0 16px 36px rgba(37, 99, 235, 0.08);
+  box-shadow: 0 16px 36px rgba(15, 23, 42, 0.08);
   background: rgba(255, 255, 255, 0.88);
   backdrop-filter: blur(14px);
 }
@@ -1301,11 +1282,6 @@ body {
     overflow: hidden;
   }
 
-  .el-dialog {
-    width: calc(100vw - 20px) !important;
-    max-width: calc(100vw - 20px) !important;
-    margin-top: 6vh !important;
-  }
 
   .el-pagination {
     justify-content: center !important;

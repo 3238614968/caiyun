@@ -16,7 +16,7 @@
         <div class="logo">
           <el-icon
             :size="28"
-            color="#fff"
+            color="#409eff"
           >
             <Cloudy />
           </el-icon>
@@ -44,8 +44,8 @@
           router
           class="sidebar-menu"
           background-color="transparent"
-          text-color="#1e3a8a"
-          active-text-color="#2563eb"
+          text-color="#303133"
+          active-text-color="#409eff"
         >
           <el-menu-item
             index="/dashboard"
@@ -54,7 +54,7 @@
           >
             <el-icon><DataLine /></el-icon>
             <template #title>
-              首页
+              <span>首页</span>
             </template>
           </el-menu-item>
 
@@ -65,7 +65,7 @@
           >
             <el-icon><User /></el-icon>
             <template #title>
-              账号
+              <span>账号</span>
             </template>
           </el-menu-item>
 
@@ -76,7 +76,7 @@
           >
             <el-icon><List /></el-icon>
             <template #title>
-              日志
+              <span>日志</span>
             </template>
           </el-menu-item>
 
@@ -87,7 +87,7 @@
           >
             <el-icon><Shop /></el-icon>
             <template #title>
-              兑换
+              <span>兑换</span>
             </template>
           </el-menu-item>
 
@@ -99,7 +99,7 @@
           >
             <el-icon><Setting /></el-icon>
             <template #title>
-              管理
+              <span>管理</span>
             </template>
           </el-menu-item>
         </el-menu>
@@ -107,7 +107,7 @@
 
       <div class="sidebar-footer">
         <el-button
-          type="text"
+          text
           class="collapse-btn"
           :aria-label="isCollapse ? '展开导航' : '收起导航'"
           :aria-expanded="!isCollapse"
@@ -142,12 +142,24 @@
         </div>
 
         <div class="header-right">
+          <span
+            v-if="uiPreview"
+            class="preview-label"
+          >交互预览 · 示例数据</span>
+          <button
+            class="workspace-search"
+            type="button"
+            aria-label="打开快捷导航"
+            @click="commandVisible = true"
+          >
+            <el-icon><Search /></el-icon><span>搜索与快捷操作</span><kbd>{{ commandShortcut }}</kbd>
+          </button>
           <!-- 通知中心 -->
           <NotificationCenter />
 
           <!-- 全屏 -->
           <el-button
-            type="text"
+            text
             class="header-btn hidden-mobile-control"
             aria-label="切换全屏"
             @click="toggleFullscreen"
@@ -423,6 +435,13 @@
       </el-button>
     </div>
   </el-dialog>
+  <CommandPalette
+    v-model="commandVisible"
+    :is-admin="isAdmin"
+    @profile="profileVisible = true"
+    @settings="settingsVisible = true"
+  />
+  <ActivityDock />
   <!-- 公告弹窗 -->
   <AnnouncementPopup
     v-model="popupVisible"
@@ -452,9 +471,12 @@ import {
   Connection,
   Refresh,
   ArrowRight,
-  Shop
+  Shop,
+  Search
 } from '@element-plus/icons-vue'
 import { useAuthStore } from '@/store/auth'
+import CommandPalette from '@/components/ui/CommandPalette.vue'
+import ActivityDock from '@/components/ui/ActivityDock.vue'
 import Breadcrumb from '@/components/Breadcrumb.vue'
 import NotificationCenter from '@/components/NotificationCenter.vue'
 import AnnouncementPopup from '@/components/AnnouncementPopup.vue'
@@ -464,9 +486,15 @@ import { useWorkspaceMotion } from '@/composables/useWorkspaceMotion'
 import { useNavigationIndicator } from '@/composables/useNavigationIndicator'
 import { useDeferredLoading } from '@/composables/useDeferredLoading'
 
+const commandShortcut = /Mac|iPhone|iPad/.test(navigator.platform) ? '⌘ K' : 'Ctrl K'
+const commandVisible = ref(false)
+const uiPreview = import.meta.env.VITE_UI_PREVIEW === 'true'
 const route = useRoute()
 const router = useRouter()
 const authStore = useAuthStore()
+watch(() => authStore.logoutPending, pending => {
+  if (pending) void router.replace({ name: 'Login' })
+})
 const profileVisible = ref(false)
 const settingsVisible = ref(false)
 const popupVisible = ref(false)
@@ -502,9 +530,9 @@ const viewportWidth = ref(typeof window !== 'undefined' ? window.innerWidth : 14
 const activeMenu = computed(() => route.path.startsWith('/exchange') ? '/exchange' : route.path)
 const currentTitle = computed(() => (route.meta?.title as string) || "移动云盘")
 const isMobileViewport = computed(() => viewportWidth.value <= 768)
-const isTabletViewport = computed(() => viewportWidth.value <= 1280 && viewportWidth.value > 768)
+const isTabletViewport = computed(() => viewportWidth.value <= 1024 && viewportWidth.value > 768)
 const menuCollapsed = computed(() => !isMobileViewport.value && (isCollapse.value || isTabletViewport.value))
-const asideWidth = computed(() => (isMobileViewport.value ? '100%' : isTabletViewport.value ? '84px' : isCollapse.value ? '64px' : '200px'))
+const asideWidth = computed(() => (isMobileViewport.value ? '100%' : isTabletViewport.value ? '84px' : isCollapse.value ? '72px' : '240px'))
 const navigationShell = ref<HTMLElement>()
 const { indicatorStyle, measureIndicator } = useNavigationIndicator(navigationShell, activeMenu)
 watch(menuCollapsed, () => { void nextTick(measureIndicator) })
@@ -649,12 +677,14 @@ const handleUserMenuVisibility = async (visible: boolean) => {
           cancelButtonText: '取消',
           type: 'warning'
         })
-        wsClient.disconnect()
+      } catch {
+        return
+      }
+      try {
         await authStore.logout()
-        router.push('/login')
         ElMessage.success('已退出登录')
       } catch {
-        // 用户取消
+        ElMessage.warning('本机已锁定，服务端尚未确认退出')
       }
       break
   }
@@ -721,9 +751,22 @@ const handlePopupDismiss = () => {
   popupAnnouncement.value = null
 }
 
+const handleWorkspaceKeys = (event: KeyboardEvent) => {
+  if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
+    event.preventDefault()
+    commandVisible.value = !commandVisible.value
+  }
+  if (event.altKey && !event.ctrlKey && !event.metaKey && /^[1-5]$/.test(event.key)) {
+    const paths = ['/dashboard', '/accounts', '/logs', '/exchange', ...(isAdmin.value ? ['/admin'] : [])]
+    const path = paths[Number(event.key) - 1]
+    if (path) { event.preventDefault(); commandVisible.value = false; void router.push(path) }
+  }
+}
+
 onMounted(() => {
   syncViewport()
   window.addEventListener('resize', syncViewport)
+  window.addEventListener('keydown', handleWorkspaceKeys)
   // 用户已登录时建立WebSocket连接
   if (authStore.isAuthenticated) {
     wsClient.connect()
@@ -737,6 +780,7 @@ onUnmounted(() => {
   removeNavigationEnd()
   removeNavigationError()
   window.removeEventListener('resize', syncViewport)
+  window.removeEventListener('keydown', handleWorkspaceKeys)
   wsClient.disconnect()
 })
 </script>
@@ -747,35 +791,35 @@ onUnmounted(() => {
 .sidebar { display: flex; flex-direction: column; position: relative; transition: width var(--motion-surface) var(--ease-standard); }
 .navigation-shell { flex: 1; min-height: 0; overflow-y: auto; }
 .logo-container { height: 64px; display: flex; align-items: center; justify-content: center; padding: 0 16px; border-bottom: 1px solid var(--workspace-border); }
-.logo { width: 36px; height: 36px; background: linear-gradient(135deg, #3b82f6, #0ea5e9 50%, #06b6d4); border-radius: 10px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; box-shadow: 0 4px 15px #3b82f659; }
-.logo-text { margin-left: 10px; font-size: 18px; font-weight: 600; color: #1e40af; white-space: nowrap; }
+.logo { width: 36px; height: 36px; background: #ecf5ff; border-radius: 10px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; border: 1px solid #d9ecff; }
+.logo-text { margin-left: 10px; font-size: 18px; font-weight: 600; color: #337ecc; white-space: nowrap; }
 .sidebar-menu { border-right: 0; padding: 12px 0; }
 .sidebar-menu :deep(.el-menu-item) { margin: 6px 10px; height: 46px; line-height: 46px; font-size: 14px; }
-.sidebar-menu :deep(.el-menu-item:hover) { color: #2563eb; }
+.sidebar-menu :deep(.el-menu-item:hover) { color: #409eff; }
 .sidebar-menu :deep(.el-menu-item.is-active) { font-weight: 600; }
 .sidebar-menu :deep(.el-icon) { font-size: 18px; margin-right: 10px; color: inherit; }
 .sidebar-menu :deep(.el-tooltip__trigger) { display: flex; align-items: center; justify-content: center; }
 .sidebar-menu :deep(.el-menu--collapse .el-menu-item) { margin: 6px 8px; padding: 0 !important; justify-content: center; }
 .sidebar-menu :deep(.el-menu--collapse .el-icon) { margin: 0; font-size: 20px; }
 .sidebar-footer { padding: 12px; border-top: 1px solid var(--workspace-border); display: flex; justify-content: center; }
-.collapse-btn { color: #3b82f6; padding: 8px; border-radius: 8px; }
-.collapse-btn:hover { color: #2563eb; }
+.collapse-btn { color: #409eff; padding: 8px; border-radius: 8px; }
+.collapse-btn:hover { color: #409eff; }
 .main-container { display: flex; flex-direction: column; overflow: hidden; }
 .header { position: relative; height: 70px; display: flex; align-items: center; justify-content: space-between; padding: 0 24px; }
 .header-left { min-width: 0; flex: 1; }
 .header-right { display: flex; align-items: center; gap: 16px; flex-shrink: 0; }
-.header-btn { color: #3b82f6; padding: 10px; border-radius: 10px; }
-.header-btn:hover { color: #2563eb; }
+.header-btn { color: #409eff; padding: 10px; border-radius: 10px; }
+.header-btn:hover { color: #409eff; }
 .user-dropdown { cursor: pointer; }
 .user-info { display: flex; align-items: center; gap: 10px; padding: 8px 14px; border: 1px solid transparent; border-radius: 12px; font: inherit; cursor: pointer; text-align: left; transition: background-color var(--motion-fast); }
-.user-avatar { background: linear-gradient(135deg, #3b82f6, #0ea5e9 50%, #06b6d4); color: #fff; font-weight: 600; box-shadow: 0 2px 8px #3b82f64d; }
-.username { font-size: 14px; color: #1e40af; font-weight: 500; }
+.user-avatar { background: #ecf5ff; color: #409eff; font-weight: 600; border: 1px solid #d9ecff; }
+.username { font-size: 14px; color: #337ecc; font-weight: 500; }
 .main-content { min-width: 0; flex: 1; padding: 24px; overflow-y: auto; }
 .main-content:focus { outline: none; }
 .main-content::-webkit-scrollbar { width: 6px; height: 6px; }
 .main-content::-webkit-scrollbar-thumb { background: #c0c4cc; border-radius: 3px; }
 .main-content::-webkit-scrollbar-track { background: transparent; }
-.footer { height: 50px; display: flex; align-items: center; justify-content: center; border-top: 1px solid var(--workspace-border); color: #3b82f6; font-size: 13px; }
+.footer { height: 50px; display: flex; align-items: center; justify-content: center; border-top: 1px solid var(--workspace-border); color: #409eff; font-size: 13px; }
 
 /* 个人中心与系统设置 */
 :deep(.profile-dialog),
@@ -816,12 +860,12 @@ onUnmounted(() => {
   display: grid;
   place-items: center;
   flex: 0 0 auto;
-  color: #fff;
-  background: linear-gradient(135deg, #3b82f6, #06b6d4);
-  box-shadow: 0 8px 18px rgba(37, 99, 235, 0.2);
+  color: #409eff;
+  background: #ecf5ff;
+  border: 1px solid #d9ecff;
 }
 .dialog-heading-icon { width: 38px; height: 38px; border-radius: 12px; font-size: 19px; }
-.settings-heading-icon { background: linear-gradient(135deg, #6366f1, #8b5cf6); }
+.settings-heading-icon { background: #ecf5ff; border: 1px solid #d9ecff; color: #409eff; }
 .dialog-heading strong { display: block; color: #1e293b; font-size: 19px; line-height: 1.2; }
 .dialog-heading span { display: block; margin-top: 4px; color: #94a3b8; font-size: 12px; }
 
@@ -832,12 +876,12 @@ onUnmounted(() => {
   padding: 18px;
   border: 1px solid #dbeafe;
   border-radius: 18px;
-  background: linear-gradient(135deg, #eff6ff, #f0fdfa);
+  background: #f5faff;
 }
-.profile-avatar { flex: 0 0 auto; color: #fff; font-size: 24px; font-weight: 700; background: linear-gradient(135deg, #2563eb, #06b6d4); box-shadow: 0 10px 20px rgba(37, 99, 235, 0.25); }
+.profile-avatar { flex: 0 0 auto; color: #409eff; font-size: 24px; font-weight: 700; background: #ecf5ff; border: 1px solid #d9ecff; }
 .profile-main-copy { min-width: 0; flex: 1; }
 .profile-name-row { gap: 8px; min-width: 0; }
-.profile-name-row h2 { overflow: hidden; margin: 0; color: #1e3a8a; font-size: 20px; text-overflow: ellipsis; white-space: nowrap; }
+.profile-name-row h2 { overflow: hidden; margin: 0; color: #303133; font-size: 20px; text-overflow: ellipsis; white-space: nowrap; }
 .profile-main-copy p { overflow: hidden; margin: 5px 0 9px; color: #64748b; font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
 .connection-chip { display: inline-flex; gap: 6px; align-items: center; color: #64748b; font-size: 12px; }
 .connection-chip .el-icon { color: #94a3b8; }
@@ -866,7 +910,7 @@ onUnmounted(() => {
 .settings-section { padding: 17px; margin-top: 14px; }
 .settings-section-title { gap: 11px; }
 .settings-section-icon { width: 34px; height: 34px; border-radius: 10px; font-size: 16px; }
-.realtime-icon { background: linear-gradient(135deg, #0ea5e9, #14b8a6); }
+.realtime-icon { background: #ecf5ff; border: 1px solid #d9ecff; color: #409eff; }
 .settings-section-title p { margin: 4px 0 0; color: #94a3b8; font-size: 12px; line-height: 1.45; }
 .setting-row { justify-content: space-between; gap: 16px; padding: 14px 0; border-bottom: 1px solid #f1f5f9; }
 .setting-row:last-child { padding-bottom: 0; border-bottom: 0; }
@@ -923,7 +967,7 @@ onUnmounted(() => {
 .mobile-page-title {
   font-size: 18px;
   font-weight: 700;
-  color: #1d4ed8;
+  color: #337ecc;
   letter-spacing: 0.01em;
 }
 
@@ -999,7 +1043,7 @@ onUnmounted(() => {
     order: 2;
     border-right: none;
     border-top: 1px solid rgba(255, 255, 255, 0.6);
-    box-shadow: 0 -10px 24px rgba(37, 99, 235, 0.12);
+    box-shadow: 0 -10px 24px rgba(15, 23, 42, 0.12);
   }
 
   .logo-container,

@@ -1,4 +1,5 @@
 import request from './axios'
+import { withSessionRefreshLock } from './session-refresh-lock'
 import { unwrapApiData, type ApiResponse } from './response'
 import type {
   AuthResponse as AuthResponseContract,
@@ -64,10 +65,10 @@ export function resetPassword(data: ResetPasswordRequest): Promise<{ message: st
 // 刷新Token
 export function refreshToken(): Promise<RefreshTokenResponse> {
   const fallback: RefreshTokenResponse = { expires_at: 0, refresh_expires_at: 0 }
-  return request<RefreshTokenResponse | ApiResponse<RefreshTokenResponse>>({
+  return withSessionRefreshLock(() => request<RefreshTokenResponse | ApiResponse<RefreshTokenResponse>>({
     url: '/api/v1/auth/refresh',
     method: 'post'
-  }).then((res) => unwrapRequired(res, fallback))
+  })).then((res) => unwrapRequired(res, fallback))
 }
 
 // 退出登录

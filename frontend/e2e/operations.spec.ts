@@ -98,6 +98,13 @@ test('仪表盘展示队列后端、健康状态和关键队列指标', async ({
   await expect(page.getByText('死信')).toBeVisible()
 })
 
+test('管理员统计概览展示接口返回的实际汇总值', async ({ page }) => {
+  await page.goto('/admin?tab=stats')
+  await expect(page.getByRole('tab', { name: '统计概览' })).toHaveAttribute('aria-selected', 'true')
+  const statistics = page.getByRole('region', { name: '系统统计' })
+  await expect(statistics.locator('.dashboard-stat-metric')).toHaveText([/1\s*人/, /2\s*个/, /6,800\s*朵/, /1\s*项/])
+})
+
 
 test('/logs 页面刷新后仍保持 SPA 路由并展示日志', async ({ page }) => {
   await page.goto('/logs')
@@ -110,6 +117,7 @@ test('/logs 页面刷新后仍保持 SPA 路由并展示日志', async ({ page }
   await expect(page.getByText('运行日志')).toBeVisible()
   await expect(page.getByText('139****0001')).toBeVisible()
 
+  await page.getByRole('row', { name: /139\*\*\*\*0001/ }).getByRole('button', { name: '查看明细' }).click()
   await page.getByRole('row', { name: /139\*\*\*\*0001/ }).getByRole('button', { name: '详情' }).click()
   await expect(page.getByRole('dialog', { name: '日志详情' })).toBeVisible()
 })
@@ -123,7 +131,7 @@ test('首页云朵趋势展示当前范围、最新值和切换天数', async ({
   await expect(summary).toContainText('最新云朵 12,345')
   await expect(summary).toContainText('较前日余额 +120')
 
-  await page.getByText('14天').click()
+  await page.getByRole('group', { name: '趋势时间范围' }).getByRole('button', { name: '14 天', exact: true }).click()
   await expect(summary).toContainText('当前展示 14 天')
   await expect(summary).toContainText('最新云朵 12,345')
 })

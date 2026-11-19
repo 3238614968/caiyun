@@ -8,7 +8,7 @@ test.beforeEach(async ({ page }) => {
   await authenticateAsAdmin(page)
 })
 
-test('导航高亮跟随页面，搜索可用 Enter，保留蓝色主题', async ({ page }) => {
+test('导航高亮跟随页面，搜索可用 Enter，保留原有浅蓝渐变主题', async ({ page }) => {
   const errors: string[] = []
   page.on('pageerror', error => errors.push(error.message))
   await page.goto('/dashboard')
@@ -24,7 +24,8 @@ test('导航高亮跟随页面，搜索可用 Enter，保留蓝色主题', async
   const searched = page.waitForRequest(request => request.url().includes('/accounts') && request.url().includes('13900000002'))
   await page.getByPlaceholder('请输入手机号', { exact: true }).press('Enter')
   await searched
-  expect(await page.locator('.layout-container').evaluate(el => getComputedStyle(el).getPropertyValue('--el-color-primary').trim())).toBe('#2563eb')
+  expect(await page.locator('.layout-container').evaluate(el => getComputedStyle(el).getPropertyValue('--el-color-primary').trim())).toBe('#409eff')
+  await expect(page.locator('.main-content')).toHaveCSS('background-image', 'linear-gradient(135deg, rgb(240, 249, 255) 0%, rgb(224, 242, 254) 100%)')
   expect(errors).toEqual([])
 })
 
@@ -39,6 +40,9 @@ test('页面进入动画结束后保留用户已聚焦的输入框', async ({ pa
   const searched = page.waitForRequest(request => request.url().includes('/accounts') && request.url().includes('13900000002'))
   await input.press('Enter')
   await searched
+  const artifacts = path.resolve(process.cwd(), '../.local/review/blue-ui-restored')
+  fs.mkdirSync(artifacts, { recursive: true })
+  await page.screenshot({ path: path.join(artifacts, 'focused-input.png'), fullPage: true })
 })
 
 test('慢请求显示骨架，空筛选可恢复，移动导航不会继承桌面折叠', async ({ page }) => {
@@ -118,8 +122,31 @@ test('系统减少动态效果在小屏弹窗中生效，底部操作仍可见',
 })
 
 test('桌面、手机与弹窗视觉检查', async ({ page }) => {
-  const artifacts = path.resolve(process.cwd(), '../.local/review/interaction-20261007')
+  const artifacts = path.resolve(process.cwd(), '../.local/review/blue-ui-restored')
   fs.mkdirSync(artifacts, { recursive: true })
+  await page.goto('/dashboard')
+  await expect(page.locator('.dashboard-stat-number').first()).toHaveText('12,345')
+  await expect(page.locator('.dashboard-stat-metric')).toHaveText([/12,345\s*朵/, /3\s*个/, /120\s*朵/, /98\.5\s*%/])
+  await page.locator('.dashboard-stat-grid').screenshot({ path: path.join(artifacts, 'dashboard-stats-desktop.png') })
+  await page.setViewportSize({ width: 1100, height: 900 })
+  await page.locator('.dashboard-stat-grid').screenshot({ path: path.join(artifacts, 'dashboard-stats-tablet.png') })
+  await page.setViewportSize({ width: 390, height: 844 })
+  await page.locator('.dashboard-stat-grid').screenshot({ path: path.join(artifacts, 'dashboard-stats-mobile.png') })
+  await page.setViewportSize({ width: 1100, height: 900 })
+  await page.goto('/admin?tab=stats')
+  const statistics = page.getByRole('region', { name: '系统统计' })
+  await expect(statistics.locator('.dashboard-stat-number').nth(2)).toHaveText('6,800')
+  await statistics.screenshot({ path: path.join(artifacts, 'admin-stats-tablet.png') })
+  await page.setViewportSize({ width: 390, height: 844 })
+  await statistics.screenshot({ path: path.join(artifacts, 'admin-stats-mobile.png') })
+  await page.setViewportSize({ width: 1100, height: 900 })
+  await page.goto('/logs')
+  await page.getByRole('button', { name: '任务明细', exact: true }).click()
+  await expect(page.getByRole('group', { name: '日志状态' })).toBeVisible()
+  await page.locator('.logs-filter-form').screenshot({ path: path.join(artifacts, 'logs-filter-desktop.png') })
+  await page.setViewportSize({ width: 390, height: 844 })
+  await page.locator('.logs-filter-form').screenshot({ path: path.join(artifacts, 'logs-filter-mobile.png') })
+  await page.setViewportSize({ width: 1440, height: 900 })
   await page.goto('/exchange')
   await expect(page.locator('.product-card')).toHaveCount(2)
   await page.screenshot({ path: path.join(artifacts, 'exchange-desktop.png'), fullPage: true, animations: 'disabled' })

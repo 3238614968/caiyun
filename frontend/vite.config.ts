@@ -4,6 +4,7 @@ import Components from 'unplugin-vue-components/vite'
 import { ElementPlusResolver } from 'unplugin-vue-components/resolvers'
 import * as ElementPlusIcons from '@element-plus/icons-vue'
 import { resolve } from 'path'
+import { uiPreviewPlugin } from './scripts/ui-preview'
 
 const elementPlusIconResolver = (name: string) => {
   // Resolve only exports actually provided by Element Plus. This removes the
@@ -16,8 +17,14 @@ const elementPlusIconResolver = (name: string) => {
   }
 }
 
-export default defineConfig({
+export default defineConfig(({ command, mode }) => ({
+  define: {
+    'import.meta.env.VITE_UI_PREVIEW': JSON.stringify(String(
+      process.env.CAIYUN_UI_PREVIEW === '1' && (command === 'serve' || mode === 'ui-preview')
+    ))
+  },
   plugins: [
+    ...(command === 'serve' && process.env.CAIYUN_UI_PREVIEW === '1' ? [uiPreviewPlugin()] : []),
     vue(),
     Components({
       dts: 'src/components.d.ts',
@@ -27,15 +34,18 @@ export default defineConfig({
       ]
     })
   ],
+  optimizeDeps: { include: ['element-plus/es', '@element-plus/icons-vue', 'vue-router', 'pinia', 'axios'] },
   test: {
     environment: 'jsdom',
     globals: true,
-    include: ['src/**/*.test.ts']
+    include: ['src/**/*.test.ts'],
+    server: { deps: { inline: ['element-plus'] } }
   },
   build: {
     chunkSizeWarningLimit: 1200,
     rollupOptions: {
       output: {
+        chunkFileNames: chunk => chunk.isDynamicEntry ? 'assets/[name]-[hash].js' : 'assets/[hash].js',
         manualChunks(id) {
           if (!id.includes('node_modules')) return undefined
           if (id.includes('/vue') || id.includes('\\vue') || id.includes('vue-router') || id.includes('pinia')) {
@@ -68,4 +78,4 @@ export default defineConfig({
       }
     }
   }
-})
+}))

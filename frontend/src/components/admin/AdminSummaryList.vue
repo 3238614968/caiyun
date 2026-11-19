@@ -26,7 +26,7 @@
           width="100"
         >
           <template #default="{ row }">
-            <span style="font-weight: 600; color: #3b82f6">{{ row.cloud_count }}</span>
+            <span style="font-weight: 600; color: #409eff">{{ row.cloud_count }}</span>
           </template>
         </el-table-column>
         <el-table-column
@@ -220,7 +220,7 @@ defineEmits<{
 <style scoped>
 .responsive-data-shell { min-height: 120px; }
 .mobile-admin-list { display: grid; gap: 12px; }
-.mobile-admin-card { border-radius: 18px; border: 1px solid rgba(226, 232, 240, 0.9); background: rgba(255, 255, 255, 0.94); box-shadow: 0 14px 28px rgba(37, 99, 235, 0.08); }
+.mobile-admin-card { border-radius: 18px; border: 1px solid rgba(226, 232, 240, 0.9); background: rgba(255, 255, 255, 0.94); box-shadow: 0 14px 28px rgba(15, 23, 42, 0.08); }
 .mobile-admin-card :deep(.el-card__body) { padding: 16px; }
 .mobile-admin-card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
 .mobile-admin-card-title { font-size: 15px; font-weight: 700; color: #0f172a; line-height: 1.4; word-break: break-word; }
@@ -229,7 +229,7 @@ defineEmits<{
 .mobile-admin-card-row { display: grid; grid-template-columns: 84px minmax(0, 1fr); gap: 10px; align-items: start; }
 .mobile-admin-card-label { font-size: 12px; color: #64748b; font-weight: 600; }
 .mobile-admin-card-value { font-size: 13px; color: #334155; word-break: break-word; }
-.mobile-admin-card-value.strong { font-weight: 700; color: #2563eb; }
+.mobile-admin-card-value.strong { font-weight: 700; color: #409eff; }
 .mobile-admin-card-value.success { color: #059669; font-weight: 600; }
 .mobile-admin-inline-tags { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
 @media (max-width: 768px) { .mobile-admin-card-row { grid-template-columns: 78px minmax(0, 1fr); } }

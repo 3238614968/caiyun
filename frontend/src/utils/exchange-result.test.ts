@@ -41,6 +41,12 @@ describe('formatExchangeResult', () => {
     })
   })
 
+  it('prioritizes structured outcomes over legacy message classification', () => {
+    expect(formatExchangeResult('请求失败：timeout', 'failed', 'unknown')).toEqual({ label: '结果待核对', type: 'warning' })
+    expect(formatExchangeResult('失败', 'failed', 'accepted')).toEqual({ label: '兑换成功', type: 'success' })
+    expect(formatExchangeResult('请求失败', 'failed')).toEqual({ label: '网络异常', type: 'danger' })
+  })
+
   it('detects monthly duplicate exchange messages', () => {
     expect(formatExchangeResult('重复兑奖', 'failed')).toEqual({
       label: '已兑换过',

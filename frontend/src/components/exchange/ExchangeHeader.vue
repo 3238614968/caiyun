@@ -4,7 +4,7 @@
       <div class="header-title-section">
         <el-icon
           :size="24"
-          color="#2563eb"
+          color="#409eff"
         >
           <Present />
         </el-icon>
@@ -88,7 +88,7 @@ defineEmits<{
   border-radius: 28px;
   padding: 24px;
   margin-bottom: 20px;
-  box-shadow: 0 18px 40px rgba(37, 99, 235, .08);
+  box-shadow: 0 18px 40px rgba(15, 23, 42, .08);
   border: 1px solid rgba(255, 255, 255, .78);
   backdrop-filter: blur(14px);
 }
@@ -117,7 +117,7 @@ defineEmits<{
 .title {
   font-size: 28px;
   font-weight: 800;
-  color: #1e3a8a;
+  color: #303133;
   line-height: 1;
 }
 
@@ -160,7 +160,9 @@ defineEmits<{
 }
 
 .stat-icon-bg.blue {
-  background: linear-gradient(135deg, #3b82f6, #2563eb);
+  background: #ecf5ff;
+  color: #409eff;
+  border: 1px solid #d9ecff;
 }
 
 .stat-icon-bg.indigo {

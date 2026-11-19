@@ -92,7 +92,7 @@ const maskPhone = (phone: string) => {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  color: #1e40af;
+  color: #337ecc;
   font-weight: 600;
 }
 

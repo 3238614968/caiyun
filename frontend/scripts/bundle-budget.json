@@ -1,15 +1,15 @@
 {
   "totals": {
-    "bytes": 2100000,
+    "bytes": 2130000,
     "gzipBytes": 1200000
   },
   "byType": {
     "js": {
-      "bytes": 950000,
-      "gzipBytes": 330000
+      "bytes": 965000,
+      "gzipBytes": 336000
     },
     "css": {
-      "bytes": 360000,
+      "bytes": 370000,
       "gzipBytes": 65000
     },
     "image": {

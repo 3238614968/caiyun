@@ -248,6 +248,9 @@ function installMockWebSocket(page: Page) {
         super()
         this.url = url
         this.withCredentials = Boolean(init?.withCredentials)
+        ;(window as unknown as { __e2eRealtime: (payload: unknown) => void }).__e2eRealtime = payload => {
+          this.onmessage?.(new MessageEvent('message', { data: JSON.stringify(payload) }))
+        }
         window.setTimeout(() => {
           this.readyState = MockEventSource.OPEN
           const event = new Event('open')
@@ -469,6 +472,11 @@ export async function mockBackend(page: Page) {
 
     if (method === 'POST' && path === '/api/v1/tasks/trigger-all') {
       return fulfill(route, ok(queueOperation('all_account_tasks')), 202)
+    }
+
+    if (method === 'GET' && path === '/api/v1/tasks/daily-summary') {
+      const date = url.searchParams.get('date') || '2026-11-12'
+      return fulfill(route, ok({ date, accounts: [{ account_id: baseAccount.id, phone: baseAccount.phone, remark: baseAccount.remark, cloud_gained: 5, migu_notes_gained: 40, success_count: 1, failed_count: 0, pending_count: 0, skipped_count: 0, last_executed_at: `${date}T08:00:00+08:00` }], total: 1, page: 1, page_size: 20 }))
     }
 
     if (method === 'GET' && path === '/api/v1/tasks/logs') {

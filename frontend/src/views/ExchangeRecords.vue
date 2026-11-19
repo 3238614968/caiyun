@@ -191,8 +191,8 @@
             width="100"
           >
             <template #default="{ row }">
-              <el-tag :type="row.status === 'success' ? 'success' : 'danger'">
-                {{ row.status === 'success' ? '成功' : '失败' }}
+              <el-tag :type="row.outcome === 'unknown' ? 'warning' : row.status === 'success' ? 'success' : 'danger'">
+                {{ row.outcome === 'unknown' ? '结果待核对' : row.status === 'success' ? '成功' : '失败' }}
               </el-tag>
             </template>
           </el-table-column>
@@ -202,10 +202,10 @@
           >
             <template #default="{ row }">
               <el-tag
-                :type="formatExchangeResult(row.message, row.status).type"
+                :type="formatExchangeResult(row.message, row.status, row.outcome).type"
                 size="small"
               >
-                {{ formatExchangeResult(row.message, row.status).label }}
+                {{ formatExchangeResult(row.message, row.status, row.outcome).label }}
               </el-tag>
             </template>
           </el-table-column>
@@ -227,14 +227,14 @@
             <template #default="{ row }">
               <el-button
                 size="small"
-                type="text"
+                text
                 @click="showDetail(row)"
               >
                 详情
               </el-button>
               <el-button
                 size="small"
-                type="text"
+                text
                 @click="exportRecord(row)"
               >
                 导出
@@ -284,8 +284,8 @@
           {{ selectedRecord.product?.p_order }}云朵
         </el-descriptions-item>
         <el-descriptions-item label="状态">
-          <el-tag :type="selectedRecord.status === 'success' ? 'success' : 'danger'">
-            {{ selectedRecord.status === 'success' ? '成功' : '失败' }}
+          <el-tag :type="selectedRecord.outcome === 'unknown' ? 'warning' : selectedRecord.status === 'success' ? 'success' : 'danger'">
+            {{ selectedRecord.outcome === 'unknown' ? '结果待核对' : selectedRecord.status === 'success' ? '成功' : '失败' }}
           </el-tag>
         </el-descriptions-item>
         <el-descriptions-item
@@ -298,8 +298,8 @@
           label="结果消息"
           :span="2"
         >
-          <el-tag :type="formatExchangeResult(selectedRecord.message, selectedRecord.status).type">
-            {{ formatExchangeResult(selectedRecord.message, selectedRecord.status).label }}
+          <el-tag :type="formatExchangeResult(selectedRecord.message, selectedRecord.status, selectedRecord.outcome).type">
+            {{ formatExchangeResult(selectedRecord.message, selectedRecord.status, selectedRecord.outcome).label }}
           </el-tag>
         </el-descriptions-item>
       </el-descriptions>

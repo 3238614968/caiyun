@@ -101,7 +101,7 @@ test('管理员首页不会混入个人趋势并保持缺失日期的断点', as
   ] } }) }))
   await page.goto('/dashboard')
   await expect(page.getByTestId('cloud-trend-summary')).toContainText('12,345')
-  await expect(page.locator('.trend-note')).toContainText('保留断点')
+  await expect(page.locator('.trend-note')).toContainText('部分日期缺少完整记录，图中留空显示')
   await expect(page.locator('.point-hit')).toHaveCount(2)
   expect(personalLoads).toBe(0)
 })

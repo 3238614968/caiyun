@@ -517,7 +517,7 @@ onUnmounted(() => {
 .mobile-announcement-title {
   font-size: 15px;
   font-weight: 600;
-  color: #1e40af;
+  color: #337ecc;
   line-height: 1.4;
 }
 
