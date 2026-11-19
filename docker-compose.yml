@@ -22,7 +22,8 @@ x-backend-environment: &backend-environment
   DATA_ENCRYPTION_KEYS: ${DATA_ENCRYPTION_KEYS:?DATA_ENCRYPTION_KEYS is required}
   DATA_ENCRYPTION_CURRENT_VERSION: ${DATA_ENCRYPTION_CURRENT_VERSION:?DATA_ENCRYPTION_CURRENT_VERSION is required}
   FIELD_CRYPTO_ALLOW_LEGACY_NO_AAD: ${FIELD_CRYPTO_ALLOW_LEGACY_NO_AAD:-false}
-  TRUSTED_PROXIES: ${TRUSTED_PROXIES:-none}
+  TRUSTED_PROXIES: ${TRUSTED_PROXIES:-${CAIYUN_FRONTEND_IP:-172.30.139.10}}
+  REVERSE_PROXY_REQUIRED: "true"
   RATE_LIMIT_BACKEND: ${RATE_LIMIT_BACKEND:-redis}
   RATE_LIMIT_REDIS_WINDOW: ${RATE_LIMIT_REDIS_WINDOW:-1s}
   LOG_FILE_PATH: ""
@@ -35,6 +36,9 @@ x-backend-environment: &backend-environment
   CLOCK_SKEW_MAX: ${CLOCK_SKEW_MAX:-30s}
   CAIYUN_EXCHANGE_SLIDE_MIN_CONFIDENCE: ${CAIYUN_EXCHANGE_SLIDE_MIN_CONFIDENCE:-0.75}
   CAIYUN_EXCHANGE_SLIDE_SOLVER: ${CAIYUN_EXCHANGE_SLIDE_SOLVER:-builtin}
+  CAIYUN_AUTH_REFRESH_LEAD_HOURS: ${CAIYUN_AUTH_REFRESH_LEAD_HOURS:-72}
+  CAIYUN_MIGU_ACTIVITY_ID: ${CAIYUN_MIGU_ACTIVITY_ID:-MAC_KF_CBH_JBZX}
+  CAIYUN_MIGU_SONG_MINUTES: ${CAIYUN_MIGU_SONG_MINUTES:-30}
   OTEL_ENABLED: ${OTEL_ENABLED:-false}
   OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
   OTEL_EXPORTER_OTLP_INSECURE: ${OTEL_EXPORTER_OTLP_INSECURE:-false}
@@ -217,7 +221,11 @@ services:
         condition: service_healthy
       backend-admin-init:
         condition: service_completed_successfully
-    networks: [caiyun-network]
+    environment:
+      NGINX_TRUSTED_PROXIES: ${TRUSTED_INGRESS_PROXIES:-${CAIYUN_DOCKER_GATEWAY:-172.30.139.1}}
+    networks:
+      caiyun-network:
+        ipv4_address: ${CAIYUN_FRONTEND_IP:-172.30.139.10}
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/ >/dev/null || exit 1"]
       interval: 10s
@@ -258,3 +266,8 @@ volumes:
 networks:
   caiyun-network:
     driver: bridge
+    ipam:
+      config:
+        - subnet: ${CAIYUN_DOCKER_SUBNET:-172.30.139.0/24}
+          gateway: ${CAIYUN_DOCKER_GATEWAY:-172.30.139.1}
+          ip_range: ${CAIYUN_DOCKER_DYNAMIC_RANGE:-172.30.139.128/25}

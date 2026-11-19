@@ -57,9 +57,33 @@ func TestParseTrustedProxiesDefaultsToTrustNone(t *testing.T) {
 }
 
 func TestParseTrustedProxiesRejectsTrustAllAndInvalidValues(t *testing.T) {
-	for _, raw := range []string{"*", "0.0.0.0/0", "::/0", "reverse-proxy.local"} {
+	for _, raw := range []string{"*", "0.0.0.0/0", "::/0", "0:0:0:0:0:0:0:0/0", "::ffff:0.0.0.0/96", "reverse-proxy.local"} {
 		if _, err := parseTrustedProxies(raw); err == nil {
 			t.Fatalf("parseTrustedProxies(%q) expected error", raw)
+		}
+	}
+}
+
+func TestTrustedProxyChainSeparatesUsersAndIgnoresUntrustedHeaders(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	if err := configureTrustedProxies(router, "10.42.0.0/16"); err != nil {
+		t.Fatal(err)
+	}
+	router.GET("/ip", func(c *gin.Context) { c.String(http.StatusOK, c.ClientIP()) })
+	for _, tc := range []struct{ remote, forwarded, want string }{
+		{"10.42.1.9:1234", "192.0.2.66, 198.51.100.1, 10.42.2.20", "198.51.100.1"},
+		{"10.42.1.9:1234", "192.0.2.66, 203.0.113.2, 10.42.2.20", "203.0.113.2"},
+		{"203.0.113.9:1234", "198.51.100.1", "203.0.113.9"},
+	} {
+		req := httptest.NewRequest(http.MethodGet, "/ip", nil)
+		req.RemoteAddr = tc.remote
+		req.Header.Set("X-Forwarded-For", tc.forwarded)
+		req.Header.Set("X-Real-IP", "192.0.2.66")
+		recorder := httptest.NewRecorder()
+		router.ServeHTTP(recorder, req)
+		if got := recorder.Body.String(); got != tc.want {
+			t.Fatalf("remote=%s XFF=%s ClientIP=%s, want %s", tc.remote, tc.forwarded, got, tc.want)
 		}
 	}
 }

@@ -46,6 +46,8 @@ logs/
 # Temporary files
 tmp/
 temp/
+.local/
+**/.local/
 *.tmp
 
 # Node modules (frontend)

@@ -76,10 +76,15 @@ BOOTSTRAP_ADMIN_USERNAME=admin
 BOOTSTRAP_ADMIN_PASSWORD=<strong-admin-password>
 BOOTSTRAP_ADMIN_EMAIL=admin@example.com
 ALLOWED_ORIGINS=https://caiyun.example.com
-TRUSTED_PROXIES=none
+# 留空时后端只信任 Compose 的 frontend 固定地址。
+TRUSTED_PROXIES=
 ```
 
 设置权限并校验 Compose 语法：
+
+默认 bridge 网段为 `172.30.139.0/24`，frontend 地址为 `172.30.139.10`，网关为 `172.30.139.1`，动态容器地址使用 `172.30.139.128/25`，避免抢占 frontend 地址。已有环境如使用 `TRUSTED_PROXIES=none`，升级时删除该设置或留空。若网段冲突，请同时设置 `CAIYUN_DOCKER_SUBNET`、`CAIYUN_DOCKER_GATEWAY`、`CAIYUN_DOCKER_DYNAMIC_RANGE`、`CAIYUN_FRONTEND_IP`，确保固定地址在子网内且在动态范围之外；启动时发现仍未配置可信代理会失败关闭。外层反向代理到 frontend 的来源默认只信任本机 bridge 网关，可通过 `TRUSTED_INGRESS_PROXIES` 明确扩展；不要信任全部来源。
+
+保留 frontend 的宿主机端口绑定 `127.0.0.1`，并让宿主机代理覆盖或正确追加来源头。若改为公网直接访问 frontend，应设置 `TRUSTED_INGRESS_PROXIES=none`，防止 Docker NAT 将公网请求映射到可信网关后接受伪造的 XFF；如果 NAT 本身丢失来源 IP，应使用可保留来源的入口代理。
 
 ```bash
 chmod 600 .env

@@ -67,13 +67,12 @@ write_initial_env() {
     }
     app_env=production
     cookie_secure=true
-    trusted_proxies="${TRUSTED_PROXIES:-none}"
   else
     origin="${PUBLIC_ORIGIN:-http://localhost,http://127.0.0.1}"
     app_env=development
     cookie_secure=false
-    trusted_proxies=none
   fi
+  trusted_proxies="${TRUSTED_PROXIES:-${CAIYUN_FRONTEND_IP:-172.30.139.10}}"
 
   local admin_password
   # Include one letter and one digit deterministically for the backend policy.

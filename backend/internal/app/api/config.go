@@ -22,21 +22,22 @@ type Config struct {
 }
 
 type ServerConfig struct {
-	Port             string
-	TrustedProxies   string
-	RequestTimeout   time.Duration
-	MaxMultipartSize int64
+	Port                 string
+	TrustedProxies       string
+	ReverseProxyRequired bool
+	RequestTimeout       time.Duration
+	MaxMultipartSize     int64
 }
 
 type JWTConfig struct {
-	Algorithm      string
-	AccessTTL      time.Duration
-	RefreshTTL     time.Duration
-	Secret         string
-	PrivateKey     string
-	PublicKey      string
-	Issuer         string
-	Audience       string
+	Algorithm  string
+	AccessTTL  time.Duration
+	RefreshTTL time.Duration
+	Secret     string
+	PrivateKey string
+	PublicKey  string
+	Issuer     string
+	Audience   string
 }
 
 type RealtimeConfig struct {
@@ -50,10 +51,11 @@ type RealtimeConfig struct {
 func LoadConfig() (Config, error) {
 	config := Config{
 		Server: ServerConfig{
-			Port:             strings.TrimSpace(bootstrap.GetEnv("PORT", "8080")),
-			TrustedProxies:   bootstrap.GetEnv("TRUSTED_PROXIES", ""),
-			RequestTimeout:   bootstrap.GetDurationEnv("REQUEST_TIMEOUT", 30*time.Second),
-			MaxMultipartSize: 8 << 20,
+			Port:                 strings.TrimSpace(bootstrap.GetEnv("PORT", "8080")),
+			TrustedProxies:       bootstrap.GetEnv("TRUSTED_PROXIES", ""),
+			ReverseProxyRequired: bootstrap.GetBoolEnv("REVERSE_PROXY_REQUIRED", false),
+			RequestTimeout:       bootstrap.GetDurationEnv("REQUEST_TIMEOUT", 30*time.Second),
+			MaxMultipartSize:     8 << 20,
 		},
 		JWT: JWTConfig{
 			Algorithm:  strings.ToUpper(strings.TrimSpace(bootstrap.GetEnv("JWT_ALGORITHM", "HS256"))),
@@ -79,6 +81,13 @@ func LoadConfig() (Config, error) {
 
 	if config.Server.Port == "" {
 		return Config{}, fmt.Errorf("PORT 不能为空")
+	}
+	proxies, err := parseTrustedProxies(config.Server.TrustedProxies)
+	if err != nil {
+		return Config{}, err
+	}
+	if config.Server.ReverseProxyRequired && len(proxies) == 0 {
+		return Config{}, fmt.Errorf("反向代理部署必须配置实际代理 IP/CIDR：TRUSTED_PROXIES 不能为 none 或空")
 	}
 	if config.Server.RequestTimeout <= 0 {
 		return Config{}, fmt.Errorf("REQUEST_TIMEOUT 必须为正数")

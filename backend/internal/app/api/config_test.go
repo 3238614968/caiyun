@@ -1,6 +1,7 @@
 package api
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -29,6 +30,35 @@ func TestLoadConfigBuildsStructuredAPIConfig(t *testing.T) {
 	}
 	if config.Realtime.EventChannel != "test:events" || config.Realtime.InstanceID != "api-test" {
 		t.Fatalf("realtime config = %#v", config.Realtime)
+	}
+}
+
+func TestReverseProxyDeploymentRequiresExplicitTrustedSources(t *testing.T) {
+	t.Setenv("OTEL_ENABLED", "false")
+	t.Setenv("JWT_ALGORITHM", "HS256")
+	t.Setenv("JWT_SECRET", "01234567890123456789012345678901")
+	for _, tc := range []struct {
+		name, proxies, required string
+		wantError               bool
+	}{
+		{"missing behind proxy", "", "true", true},
+		{"trust none behind proxy", "none", "true", true},
+		{"trust all rejected", "0.0.0.0/0", "true", true},
+		{"invalid source rejected", "not-a-network", "true", true},
+		{"explicit sources", "10.42.0.0/16,10.43.0.0/16", "true", false},
+		{"direct backend", "none", "false", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("TRUSTED_PROXIES", tc.proxies)
+			t.Setenv("REVERSE_PROXY_REQUIRED", tc.required)
+			_, err := LoadConfig()
+			if (err != nil) != tc.wantError {
+				t.Fatalf("LoadConfig error=%v, want error=%t", err, tc.wantError)
+			}
+			if tc.required == "true" && (tc.proxies == "" || tc.proxies == "none") && !strings.Contains(err.Error(), "TRUSTED_PROXIES") {
+				t.Fatalf("missing actionable proxy configuration error: %v", err)
+			}
+		})
 	}
 }
 

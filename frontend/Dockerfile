@@ -26,6 +26,7 @@ RUN npm run build --ignore-scripts && npm run bundle:budget
 FROM nginxinc/nginx-unprivileged:1.27-alpine
 
 COPY frontend/nginx.conf /etc/nginx/conf.d/default.conf
+COPY --chmod=755 frontend/docker-entrypoint-trust.sh /docker-entrypoint.d/15-caiyun-trusted-proxies.sh
 COPY --from=builder /app/dist /usr/share/nginx/html
 
 EXPOSE 8080

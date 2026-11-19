@@ -80,10 +80,14 @@ kubectl -n caiyun create secret generic caiyun-secrets \
 部署前检查 `k8s/caiyun.yaml` 中的 ConfigMap：
 
 - `ALLOWED_ORIGINS`：填写实际 HTTPS 域名。
-- `TRUSTED_PROXIES`：仅信任 Ingress 或内部代理网段。
+- `TRUSTED_PROXIES`：填写 API 实际观察到的 frontend Pod 来源与 Ingress 来源 IP/CIDR。不能填写 Service ClusterIP 或 `none`。部署脚本也接受环境变量 `TRUSTED_PROXIES` 并在任何集群写入前完成校验。基础清单留空且设置 `REVERSE_PROXY_REQUIRED=true`，缺少此配置时 API 拒绝启动；不要猜测或信任全网段。
 - `DB_HOST`、`REDIS_HOST`：使用外部托管服务时替换地址。
 - SMTP、并发数、日志级别：按环境调整。
 - CPU、内存 requests/limits：依据压测结果设置。
+
+frontend 会使用同一配置恢复可信 Ingress 转发的客户端地址，使 Nginx 限流及 API 登录锁均区分真实用户。`backend-api-ingress` NetworkPolicy 仅允许同命名空间 frontend 和 monitoring 命名空间中带 `app.kubernetes.io/name=prometheus` 标签的监控 Pod 访问 API；其他监控部署需按实际标签调整规则，并确保集群 CNI 支持 NetworkPolicy。外部入口应继续指向 frontend Service。
+
+升级前先依据集群 CNI/Ingress 配置确定实际来源网段，再在 ConfigMap 或部署环境中设置 `TRUSTED_PROXIES`。不要将示例网段直接复制到生产。手动 `kubectl apply` 也必须先填好 ConfigMap。
 
 检查 PVC 状态：
 

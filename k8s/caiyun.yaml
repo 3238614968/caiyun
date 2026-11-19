@@ -32,8 +32,9 @@ data:
   # Legacy no-AAD ciphertext is accepted only by the reencrypt command; keep
   # serving Pods strict after the one-time cutover.
   FIELD_CRYPTO_ALLOW_LEGACY_NO_AAD: "false"
-  # 仅信任实际 Ingress/网关的 IP 或 CIDR；直连默认 none，禁止 trust-all。
-  TRUSTED_PROXIES: "none"
+  # 部署脚本填写实际 frontend/Ingress Pod 来源网段；未填写时 API 拒绝启动。
+  TRUSTED_PROXIES: ""
+  REVERSE_PROXY_REQUIRED: "true"
   REDIS_HOST: redis
   REDIS_PORT: "6379"
   # KEDA reads this exact endpoint from the Worker environment.
@@ -67,6 +68,8 @@ data:
   TASK_SCHEDULE: "0 8 * * *"
   CAIYUN_TASK_SHAKE_TIMES: "3"
   CAIYUN_TASK_SHAKE_DELAY_MS: "1500"
+  CAIYUN_MIGU_ACTIVITY_ID: "MAC_KF_CBH_JBZX"
+  CAIYUN_MIGU_SONG_MINUTES: "30"
   CAIYUN_EXCHANGE_SLIDE_MIN_CONFIDENCE: "0.75"
   CAIYUN_EXCHANGE_SLIDE_SOLVER: "builtin"
   WORKER_MONITOR_HOST: "0.0.0.0"
@@ -718,6 +721,12 @@ spec:
                 command: ["/bin/sh", "-c", "sleep 5"]
           image: caiyun-frontend:2.1.0
           imagePullPolicy: IfNotPresent
+          env:
+            - name: NGINX_TRUSTED_PROXIES
+              valueFrom:
+                configMapKeyRef:
+                  name: caiyun-config
+                  key: TRUSTED_PROXIES
           ports:
             - containerPort: 8080
           securityContext:
@@ -962,3 +971,33 @@ spec:
                   - backend-api
                   - backend-worker
                   - caiyun-migrate
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: backend-api-ingress
+  namespace: caiyun
+spec:
+  podSelector:
+    matchLabels:
+      app: backend-api
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: frontend
+      ports:
+        - protocol: TCP
+          port: 8080
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: prometheus
+      ports:
+        - protocol: TCP
+          port: 8080

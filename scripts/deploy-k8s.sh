@@ -86,6 +86,16 @@ fi
 RENDERED_MANIFEST="$IMAGE_MANIFEST"
 MANIFEST="$RENDERED_MANIFEST"
 
+# Pod/Ingress source networks are cluster-specific. Validate them before any
+# namespace, migration Job or workload is mutated; never deploy trust-none
+# behind frontend, or guess an all-cluster/public trust range.
+PROXY_PYTHON="$(command -v python3 || command -v python || true)"
+[[ -n "$PROXY_PYTHON" ]] || { echo "python3 is required to validate proxy trust" >&2; exit 1; }
+proxy_args=()
+[[ -z "${TRUSTED_PROXIES:-}" ]] || proxy_args=(--trusted-proxies "$TRUSTED_PROXIES")
+"$PROXY_PYTHON" "$ROOT/scripts/configure_proxy_trust.py" \
+  --manifest "$MANIFEST" --out "$MANIFEST" "${proxy_args[@]}"
+
 # Initial installation may not have created the namespace yet.
 if ! kubectl get namespace "$NAMESPACE" >/dev/null 2>&1; then
   kubectl create namespace "$NAMESPACE"

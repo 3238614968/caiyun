@@ -47,8 +47,13 @@ func parseTrustedProxies(raw string) ([]string, error) {
 			return nil, fmt.Errorf("TRUSTED_PROXIES 不允许信任所有来源: %s", proxy)
 		}
 		if ip := net.ParseIP(proxy); ip == nil {
-			if _, _, err := net.ParseCIDR(proxy); err != nil {
+			_, network, err := net.ParseCIDR(proxy)
+			if err != nil {
 				return nil, fmt.Errorf("TRUSTED_PROXIES 包含无效 IP/CIDR: %s", proxy)
+			}
+			ones, _ := network.Mask.Size()
+			if ones == 0 || network.String() == "0.0.0.0/0" {
+				return nil, fmt.Errorf("TRUSTED_PROXIES 不允许信任所有来源: %s", proxy)
 			}
 		}
 		if _, exists := seen[proxy]; exists {

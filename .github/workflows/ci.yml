@@ -51,7 +51,9 @@ jobs:
       - name: Validate deployment script syntax
         working-directory: .
         run: |
-          bash -n scripts/deploy-linux.sh scripts/rollback-linux.sh scripts/health-check.sh scripts/deploy-smoke-test.sh scripts/deploy-compose.sh scripts/package-release.sh scripts/migration-smoke-test.sh scripts/generate-sbom.sh scripts/sign-release.sh scripts/import-calendar.sh scripts/rotate-encryption.sh scripts/check-no-local-docs.sh scripts/check-no-release-binaries.sh scripts/deploy-k8s.sh scripts/verify-k8s-runtime.sh scripts/verify-otel-runtime.sh scripts/verify-compose-runtime.sh scripts/verify-legacy-list-drain.sh scripts/chaos-drill.sh scripts/capacity-drill.sh scripts/collect-slo-snapshot.sh
+          for script in scripts/*.sh; do
+            bash -n "$script" || exit 1
+          done
 
       - name: Validate repository policy
         working-directory: .
@@ -90,6 +92,7 @@ jobs:
           run_check alert_metric_contract "python" "scripts/validate-alert-metric-contract.py"
           run_check dto_boundaries "python" "scripts/validate-dto-boundaries.py"
           run_check streams_cutover "python" "scripts/validate-streams-cutover.py"
+          run_check proxy_configuration "python" -m unittest discover -s scripts/regression_tests -p "test_*.py"
           if out=$(python -m unittest discover -s scripts/tests -p "test_*.py" 2>&1); then
             echo "::notice::INVARIANT_OK scripts/tests"
           else
@@ -120,6 +123,7 @@ jobs:
       - name: Unit tests
         env:
           GOTOOLCHAIN: local
+          CGO_ENABLED: '1'
         run: go test ./...
 
       - name: Race detector

@@ -33,6 +33,14 @@ def main() -> int:
     require(compose, 'TASK_CONFIG_SYNC_ON_STARTUP: "false"', "Compose release write gate")
     require(compose, 'TASK_QUEUE_BACKEND: ${TASK_QUEUE_BACKEND:-streams}', "Compose Streams queue default")
     require(compose, 'FIELD_CRYPTO_ALLOW_LEGACY_NO_AAD: ${FIELD_CRYPTO_ALLOW_LEGACY_NO_AAD:-false}', "Compose AAD cutover default")
+    require(compose, 'REVERSE_PROXY_REQUIRED: "true"', "Compose proxy trust startup gate")
+    require(compose, 'TRUSTED_PROXIES: ${TRUSTED_PROXIES:-${CAIYUN_FRONTEND_IP:-172.30.139.10}}', "Compose frontend proxy identity")
+    require(compose, 'ipv4_address: ${CAIYUN_FRONTEND_IP:-172.30.139.10}', "Compose stable frontend address")
+    k8s = read("k8s/caiyun.yaml")
+    for token in ('REVERSE_PROXY_REQUIRED: "true"', 'TRUSTED_PROXIES: ""', 'name: backend-api-ingress', 'key: TRUSTED_PROXIES'):
+        require(k8s, token, "Kubernetes proxy trust")
+    require(read("scripts/deploy-k8s.sh"), "configure_proxy_trust.py", "Kubernetes proxy trust render gate")
+    require(read("frontend/nginx.conf"), "real_ip_recursive on", "Nginx proxy chain")
 
     for path, token in (
         ("deploy/systemd/caiyun-api.service", "TimeoutStopSec=60s"),
