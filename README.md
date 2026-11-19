@@ -58,6 +58,8 @@
 | 扩展活动 | `fun_ai_mail`、`family_circle`、`meitu_backup`、`red_invite`、`unloading_1t`、`rafflecode`、`ai_store` |
 | 新增与恢复活动 | `lantern`：猜灯谜得红包；`liveflower`：直播首次赠花；`cloudphone`：云手机红包派对；`shake`：新版全网抽抽乐 |
 | 设备状态 | `notice_switch`、`album_backup_report`：按账号配置真实通知与备份状态 |
+| 中国移动 CoC 活动 | `coc3` 权益市场、`coc_web6` 7 日打卡与网龄成长、`coc3_scan` 活动目录只读扫描（默认关闭） |
+| 咪咕音乐 | 登录即送、每日签到、新人礼、社区/移动APP任务、饭点/晚安打卡、听歌档位领奖和金币/音符统计 |
 
 - 邮件互发和活动互助仅在**同一网站用户名下的活跃云盘账号**之间执行，至少需要两个账号。
 - 邮件按有向账号对去重：A 发给 B 与 B 发给 A 分别计算，每对每自然月最多一次。单次执行最多发信 `CAIYUN_MAIL_MUTUAL_MAX_SENDS_PER_RUN` 封，默认 20；账号较多时由后续批次继续处理。
@@ -68,6 +70,8 @@
 - 升级后使用新版后端执行 `migrate` 同步任务定义，再重启 API、Worker；原有任务的启用状态会保留。旧版默认关闭的 `cloudphone`、`shake` 需在管理页面主动启用，新增 `lantern`、`liveflower` 默认加入批次。
 
 领奖专区位于「兑换中心 → 领奖专区」。普通用户查询自己的账号，管理员可选择托管账号；查询接口为 `GET /api/v1/exchange/prizes?account_id=账号ID`，附加 `refresh=1` 可强制刷新。
+
+咪咕音乐复用账号已有云盘凭据自动换票，新增 9 个任务项，保留原有任务配置、日志与通知格式。饭点、晚安分别有独立定时，从北京时间 12:00、22:00 开始，窗口内每 20 分钟补查派发并按当天账号去重，兼容 Worker 中途重启；听歌默认按参考项目协议补报至 30 分钟后领取已达标奖励，可设为仅领奖。金币和 AI 音符不计入云朵收益。升级后运行 `caiyun migrate` 同步任务定义；配置、接口边界和验证说明见 [咪咕音乐任务接入](./backend/docs/MIGU_MUSIC.md)。
 
 云朵奖励按 `infoV3.receiveList` 的实际 `recordId` 逐项通过 `receiveV3` 领取，并复查记录与余额；日志统计实际到账。抢兑使用 `exchangeV3` 的 POST/JSON 请求及设备标识。抓包对照、验证与边界见 [V3 领取和兑换报告](./backend/docs/2026-09-30_protocol-云盘领取与抢兑-report.md)。
 
