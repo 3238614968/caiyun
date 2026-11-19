@@ -5,12 +5,12 @@
   },
   "byType": {
     "js": {
-      "bytes": 965000,
-      "gzipBytes": 336000
+      "bytes": 967000,
+      "gzipBytes": 337000
     },
     "css": {
       "bytes": 370000,
-      "gzipBytes": 65000
+      "gzipBytes": 66000
     },
     "image": {
       "bytes": 850000
