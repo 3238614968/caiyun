@@ -45,6 +45,8 @@ type TaskListTask struct {
 	message          string
 	wait             func(time.Duration)
 	gp               bool
+	gpCloudMessage   string
+	gpCloudProbed    bool
 }
 
 func NewGPTaskListTask(client *http.Client, log *logger.Logger) *TaskListTask {
@@ -64,7 +66,7 @@ type taskListItem struct {
 	Task       api.Task
 }
 
-var taskListV2Groups = []string{"cloudEmail", "time", "day", "month"}
+var taskListV2Groups = []string{"beiyong1", "cloudEmail", "time", "day", "month"}
 
 // NewTaskListTask 创建任务列表任务
 func NewTaskListTask(client *http.Client, logger *logger.Logger) *TaskListTask {
@@ -98,13 +100,18 @@ func (t *TaskListTask) Run() error {
 	t.claimedCloud = 0
 	t.pending = false
 	t.message = ""
+	t.gpCloudMessage = ""
+	t.gpCloudProbed = false
 	if t.gp {
 		resp, err := t.api.SignIn()
 		if err != nil {
 			return err
 		}
 		if resp == nil || resp.Code == nil || *resp.Code != 0 {
-			return fmt.Errorf("GP 渠道签到失败")
+			if resp == nil {
+				return fmt.Errorf("GP 渠道签到返回空响应")
+			}
+			return fmt.Errorf("GP 渠道签到失败: code=%s %s", resp.CodeText(), resp.MessageText())
 		}
 		runErr := t.runAutomaticTasks()
 		checkErr := t.checkIncompleteTasks()
@@ -132,6 +139,9 @@ func (t *TaskListTask) Run() error {
 
 	// 完成状态必须在回收上传/分享素材之前确认。
 	checkErr := t.checkIncompleteTasks()
+	if t.gpCloudMessage != "" {
+		t.message += "；" + t.gpCloudMessage
+	}
 
 	// 5. 先撤销分享链接，再删除临时文件，避免在任务上报前破坏分享行为。
 	if t.cleanupTemporaryShareLinks() {
@@ -153,7 +163,7 @@ func (t *TaskListTask) registerTaskDevice() {
 }
 
 // receiveTaskExpansion 领取翻倍奖励（参考原版 taskExpansionTask，支持一次自动备份重试）
-func (t *TaskListTask) receiveTaskExpansion() {
+func (t *TaskListTask) receiveTaskExpansion() error {
 	t.expansionPending = false
 	retryCount := t.getEnvInt("CAIYUN_TASK_BACKUP_RETRY_COUNT", taskListDefaultBackupRetryCount)
 	if retryCount < 0 {
@@ -168,19 +178,22 @@ func (t *TaskListTask) receiveTaskExpansion() {
 		resp, err := t.api.GetTaskExpansion()
 		if err != nil {
 			t.logger.Error("获取备份额外奖励失败", err)
-			return
+			return fmt.Errorf("获取翻倍奖励状态失败: %w", err)
 		}
-
-		if parseCaiyunCode(resp.Code) != 0 {
-			return
+		if resp == nil || parseCaiyunCode(resp.Code) != 0 {
+			var code interface{}
+			if resp != nil {
+				code = resp.Code
+			}
+			return fmt.Errorf("获取翻倍奖励状态失败: code=%v", code)
 		}
 		if resp.Result == nil {
-			return
+			return fmt.Errorf("获取翻倍奖励状态失败: result 为空")
 		}
 
 		resultMap, ok := resp.Result.(map[string]interface{})
 		if !ok {
-			return
+			return fmt.Errorf("获取翻倍奖励状态失败: result 类型不正确")
 		}
 
 		curMonthBackup := toBool(resultMap["curMonthBackup"])
@@ -190,7 +203,7 @@ func (t *TaskListTask) receiveTaskExpansion() {
 				if err := t.tryBackupForTaskExpansion(); err != nil {
 					t.logger.Error("备份翻倍前的相册备份失败", err)
 					t.expansionPending = true
-					return
+					return fmt.Errorf("翻倍奖励前置备份失败: %w", err)
 				}
 				t.logger.Debug(fmt.Sprintf("等待 %d 秒后重试翻倍奖励检查", waitSecond))
 				time.Sleep(time.Duration(waitSecond) * time.Second)
@@ -199,7 +212,7 @@ func (t *TaskListTask) receiveTaskExpansion() {
 
 			t.logger.Warn("本月未开启备份，将无法获取翻倍奖励，需要手动开启")
 			t.expansionPending = true
-			return
+			return nil
 		}
 
 		curMonthTaskRecordCount := toInt(resultMap["curMonthTaskRecordCount"])
@@ -208,7 +221,13 @@ func (t *TaskListTask) receiveTaskExpansion() {
 			receiveResp, err := t.api.ReceiveTaskExpansion(acceptDate)
 			if err != nil {
 				t.logger.Error("领取翻倍奖励失败", err)
-				return
+				return fmt.Errorf("领取翻倍奖励失败: %w", err)
+			}
+			if receiveResp == nil {
+				return fmt.Errorf("领取翻倍奖励失败: 响应为空")
+			}
+			if !receiveResp.IsSuccess() {
+				return fmt.Errorf("领取翻倍奖励失败: %s", receiveResp.MessageText())
 			}
 
 			if receiveResp.Result != nil {
@@ -224,8 +243,9 @@ func (t *TaskListTask) receiveTaskExpansion() {
 		if nextMonthTaskRecordCount > 0 {
 			t.logger.Debug(fmt.Sprintf("下月可领取%d个云朵", nextMonthTaskRecordCount))
 		}
-		return
+		return nil
 	}
+	return nil
 }
 
 // tryBackupForTaskExpansion 尝试触发一次备份（用于满足翻倍奖励条件）
@@ -313,8 +333,24 @@ func (t *TaskListTask) receiveCompletedTaskRewards() error {
 	var claimErrors []error
 	for _, item := range items {
 		task := item.Task
+		// ★ 第 77 轮：V3 的 1003/1021 领奖位走 receiveTask（bundle 原文：
+		// canReceive==1 时 GET /signin/page/receiveTask?taskId=），不走 receiveList。
+		if (task.ID == 1003 || task.ID == 1021) && taskHasClaimableReward(task) {
+			if err := t.api.ReceiveTaskRewardForMarket(item.MarketName, strconv.Itoa(task.ID)); err != nil {
+				t.logger.Debug(fmt.Sprintf("任务领奖位领取失败：%s(%d)：%v", task.Name, task.ID, err))
+				claimErrors = append(claimErrors, fmt.Errorf("%s/%d: %w", item.MarketName, task.ID, err))
+			} else {
+				t.logger.Success(fmt.Sprintf("任务领奖位领取成功：%s(%d)", task.Name, task.ID))
+			}
+			continue
+		}
 		// V3 task IDs are not cloud reward IDs. Completed V3 tasks use the
 		// receiveList bubbles below, including those without canReceive flags.
+		// Temporary activity IDs also require modern completion records; a
+		// legacy status=1 cannot authorize receiveTask or confirm completion.
+		if item.MarketName == "sign_in_3" && (task.ID == 587 || task.ID == 588) {
+			continue
+		}
 		if task.State != "" || task.Status != 1 {
 			continue
 		}
@@ -338,7 +374,26 @@ func (t *TaskListTask) receiveCompletedTaskRewards() error {
 	if claimErr != nil {
 		claimErrors = append(claimErrors, claimErr)
 	}
+	t.receiveGPCloudRewards()
 	return errors.Join(claimErrors...)
+}
+
+// receiveGPCloudRewards 镜像 gp 域待领云朵探测（实测 receiveV3 回 615，需 App
+// 领取视为正常）。gp 票缺失时降级跳过，不阻塞 m 域主流程；每次 Run 只探测一次，
+// 结果并入 Message。gp 云朵与 m 域余额分域统计，不计入 claimedCloud。
+func (t *TaskListTask) receiveGPCloudRewards() {
+	if t.gpCloudProbed || strings.TrimSpace(t.client.GetJWTTokenGP()) == "" {
+		return
+	}
+	t.gpCloudProbed = true
+	response, err := t.api.ReceivePendingCloudRewardsGP()
+	if err != nil {
+		t.gpCloudMessage = fmt.Sprintf("gp待领云朵探测失败：%v", err)
+		t.logger.Debug(t.gpCloudMessage)
+		return
+	}
+	t.gpCloudMessage = response.MessageText()
+	t.logger.Info(t.gpCloudMessage)
 }
 
 func taskHasClaimableReward(task api.Task) bool {
@@ -364,7 +419,7 @@ func (t *TaskListTask) checkIncompleteTasks() error {
 	}
 
 	skipIDs := t.loadSkipTaskIDs()
-	var unfinished, today []string
+	var unfinished, today, unclaimed []string
 	finished, skipped := 0, 0
 	for _, item := range items {
 		task := item.Task
@@ -374,6 +429,9 @@ func (t *TaskListTask) checkIncompleteTasks() error {
 		if skipIDs[task.ID] || isTaskDisabledByServer(task) {
 			skipped++
 			continue
+		}
+		if (task.ID == 1003 || task.ID == 1021) && taskHasClaimableReward(task) {
+			unclaimed = append(unclaimed, taskListLabel(item))
 		}
 		if isTaskCompleted(task) {
 			finished++
@@ -393,13 +451,16 @@ func (t *TaskListTask) checkIncompleteTasks() error {
 		t.logger.Warn(fmt.Sprintf("服务端仍显示待完成：%s：%s(%d)，可能需要继续等待、账号资格或 App 内操作", groupName, taskName, task.ID))
 		unfinished = append(unfinished, fmt.Sprintf("%s（步骤%d，进度%d）", taskListLabel(item), task.CurrStep, task.Process))
 	}
-	t.pending = len(unfinished) > 0
+	t.pending = len(unfinished) > 0 || len(unclaimed) > 0
 	t.message = fmt.Sprintf("服务端已完成%d项", finished)
 	if len(today) > 0 {
 		t.message += "；今日已完成，继续按日累计：" + strings.Join(today, "、")
 	}
 	if len(unfinished) > 0 {
 		t.message += fmt.Sprintf("；待完成%d项：%s", len(unfinished), strings.Join(unfinished, "、"))
+	}
+	if len(unclaimed) > 0 {
+		t.message += fmt.Sprintf("；待领奖%d项：%s", len(unclaimed), strings.Join(unclaimed, "、"))
 	}
 	if skipped > 0 {
 		t.message += fmt.Sprintf("；按配置或服务端禁用跳过%d项", skipped)
@@ -426,6 +487,20 @@ func (t *TaskListTask) handleSpecialTask(item taskListItem) (bool, error) {
 		action = t.handlePhotoUploadTask
 	case 585, 616, 618, 1082, 1084:
 		action = t.api.CompleteAICameraTask
+	case 587, 588:
+		if t.gp || item.MarketName != "sign_in_3" {
+			return false, nil
+		}
+		if task.ID == 587 {
+			action = func() error { return t.handleMemoryPhotoTask(item) }
+		} else {
+			action = t.api.GenerateTravelGuide
+		}
+	case 589:
+		if t.gp || item.MarketName != "sign_in_3" {
+			return false, nil
+		}
+		action = func() error { _, err := t.api.CompleteNineGridTask(); return err }
 	case 617, 1083:
 		action = func() error { return t.api.CompleteFunAIImageTask("006") }
 	case 609, 1075:
@@ -482,6 +557,8 @@ func (t *TaskListTask) reportTaskAction(item taskListItem) error {
 
 func taskActionRegistrationKeys(task api.Task) []string {
 	switch task.ID {
+	case 587, 588:
+		return []string{"task"}
 	case 1003:
 		return []string{"openAppPush"}
 	case 1005:
@@ -492,7 +569,10 @@ func taskActionRegistrationKeys(task api.Task) []string {
 		}
 		return []string{"task", "task2"}
 	default:
-		return []string{"task"}
+		// 上传类任务的步骤名（如 106 的 [sendcloud, nda, click]）也要逐个登记，
+		// 只发 key=task 时 nda/click 步不认（参考实现对全表发 9 个 key，
+		// 发错的服务端只是忽略）。
+		return []string{"task", "sendcloud", "nda", "click"}
 	}
 }
 
@@ -523,6 +603,11 @@ func (t *TaskListTask) handleUploadTask(times int, channelSrc, opType string) er
 			OpType:       opType,
 			Ext:          ".txt",
 		})
+		if resp != nil && resp.FileID != "" {
+			if registerErr := AppendStringList(t.storage, KeyTempFiles, resp.FileID); registerErr != nil {
+				return errors.Join(err, fmt.Errorf("登记上传回收失败: %w", registerErr))
+			}
+		}
 		if err != nil {
 			return err
 		}
@@ -554,6 +639,11 @@ func (t *TaskListTask) handlePhotoUploadTask() error {
 		ChannelSrc:   "10000023",
 		Ext:          ".jpg",
 	})
+	if resp != nil && resp.FileID != "" {
+		if registerErr := AppendStringList(t.storage, KeyTempFiles, resp.FileID); registerErr != nil {
+			return errors.Join(err, fmt.Errorf("登记照片回收失败: %w", registerErr))
+		}
+	}
 	if err != nil {
 		return err
 	}
@@ -576,6 +666,11 @@ func (t *TaskListTask) handleShareFileTask() error {
 		ChannelSrc:   "10000023",
 		Ext:          ".txt",
 	})
+	if uploadResp != nil && uploadResp.FileID != "" {
+		if registerErr := AppendStringList(t.storage, KeyTempFiles, uploadResp.FileID); registerErr != nil {
+			return errors.Join(err, fmt.Errorf("登记分享文件回收失败: %w", registerErr))
+		}
+	}
 	if err != nil {
 		return err
 	}
@@ -673,12 +768,20 @@ func (t *TaskListTask) handleMonthlyUploadTask(item taskListItem) error {
 }
 
 func (t *TaskListTask) queryTaskByMarket(marketName, group string, taskID int) (*api.Task, error) {
+	// Temporary activities can be absent from a successful V3 response. Read
+	// their authoritative V2 group for both execution and final confirmation.
+	if !t.gp && marketName == "sign_in_3" && group == "beiyong1" {
+		return t.queryTaskV2ByGroup(group, taskID)
+	}
 	current, err := t.api.GetTaskListV3(marketName)
 	if err == nil {
 		for _, task := range current {
 			if task.ID == taskID {
 				return &task, nil
 			}
+		}
+		if !t.gp && marketName == "sign_in_3" && group != "" {
+			return t.queryTaskV2ByGroup(group, taskID)
 		}
 		return nil, nil
 	}
@@ -750,19 +853,47 @@ func (t *TaskListTask) selectShareTargetFile() (string, string, error) {
 func (t *TaskListTask) fetchAllTaskItems() ([]taskListItem, error) {
 	marketNames := []string{"sign_in_3", "newsign_139mail"}
 	items := make([]taskListItem, 0, 64)
+	seen := make(map[string]int)
+	addTask := func(marketName, group string, task api.Task) {
+		if group == "" {
+			group = task.GroupID
+			if group == "" {
+				group = task.Group
+			}
+		}
+		if task.GroupID == "" {
+			task.GroupID = group
+		}
+		task.MarketName = marketName
+		item := taskListItem{MarketName: marketName, GroupKey: group, Task: task}
+		key := fmt.Sprintf("%s/%d", marketName, task.ID)
+		if index, exists := seen[key]; exists {
+			// Use the temporary group's state consistently in subsequent reads.
+			if group == "beiyong1" {
+				items[index] = item
+			}
+			return
+		}
+		seen[key] = len(items)
+		items = append(items, item)
+	}
 
 	for _, marketName := range marketNames {
 		if currentTasks, err := t.api.GetTaskListV3(marketName); err == nil {
 			for _, task := range currentTasks {
-				if task.GroupID == "" {
-					task.GroupID = task.Group
+				addTask(marketName, "", task)
+			}
+			if !t.gp && marketName == "sign_in_3" {
+				temporary, err := t.api.GetTaskListV2("beiyong1")
+				if err != nil {
+					return nil, fmt.Errorf("获取临时任务列表失败: %w", err)
 				}
-				task.MarketName = marketName
-				items = append(items, taskListItem{
-					MarketName: marketName,
-					GroupKey:   task.GroupID,
-					Task:       task,
-				})
+				if temporary == nil || temporary.Code != 0 {
+					return nil, fmt.Errorf("获取临时任务列表返回异常")
+				}
+				for _, task := range temporary.Result["beiyong1"] {
+					addTask(marketName, "beiyong1", task)
+				}
 			}
 			continue
 		} else {
@@ -785,15 +916,7 @@ func (t *TaskListTask) fetchAllTaskItems() ([]taskListItem, error) {
 				}
 
 				for _, task := range taskList.Result[group] {
-					if task.GroupID == "" {
-						task.GroupID = group
-					}
-					task.MarketName = marketName
-					items = append(items, taskListItem{
-						MarketName: marketName,
-						GroupKey:   group,
-						Task:       task,
-					})
+					addTask(marketName, group, task)
 				}
 			}
 			continue
@@ -884,6 +1007,11 @@ func (t *TaskListTask) getEnvInt(key string, defaultVal int) int {
 
 // isTaskCompleted 判断任务是否已完成（含已领取）
 func isTaskCompleted(task api.Task) bool {
+	if task.ID == 587 || task.ID == 588 {
+		// Neither an upload counter nor a legacy status/ack proves these
+		// multi-step activity tasks are complete.
+		return strings.EqualFold(strings.TrimSpace(task.State), "FINISH")
+	}
 	if strings.TrimSpace(task.State) != "" {
 		return strings.EqualFold(task.State, "FINISH")
 	}
@@ -1083,7 +1211,11 @@ func (t *TaskListTask) cleanupTemporaryFiles() {
 		return
 	}
 
-	fileIDs, _ := LoadStringList(t.storage, KeyTempFiles)
+	fileIDs, err := LoadStringList(t.storage, KeyTempFiles)
+	if err != nil {
+		t.logger.Error("读取临时文件清理清单失败", err)
+		return
+	}
 	if len(fileIDs) == 0 {
 		return
 	}
@@ -1107,7 +1239,10 @@ func (t *TaskListTask) cleanupTemporaryFiles() {
 		return
 	}
 	if delResp != nil && delResp.Success {
-		_ = SaveStringList(t.storage, KeyTempFiles, nil)
+		if err := SaveStringList(t.storage, KeyTempFiles, nil); err != nil {
+			t.logger.Error("临时文件已删除但清理清单保存失败", err)
+			return
+		}
 		t.logger.Debug(fmt.Sprintf("已清理临时上传/分享文件 %d 个", len(finalIDs)))
 	}
 }
@@ -1129,6 +1264,9 @@ func (t *TaskListTask) cleanupTemporaryShareLinks() bool {
 		t.logger.Debug("清理临时分享链接失败，保留给收尾任务重试", err)
 		return false
 	}
-	_ = SaveStringList(t.storage, KeyTempLinks, nil)
+	if err := SaveStringList(t.storage, KeyTempLinks, nil); err != nil {
+		t.logger.Debug("临时分享链接已删除但清单保存失败，保留给收尾任务重试", err)
+		return false
+	}
 	return true
 }

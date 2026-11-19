@@ -118,7 +118,7 @@ func TestTaskActionRegistrationKeysFollowChannelRules(t *testing.T) {
 		{id: 1005, want: []string{"task2"}},
 		{id: 409, want: []string{"task", "task2"}},
 		{id: 409, currStep: 1, want: []string{"task2"}},
-		{id: 615, want: []string{"task"}},
+		{id: 615, want: []string{"task", "sendcloud", "nda", "click"}},
 	} {
 		got := taskActionRegistrationKeys(api.Task{ID: test.id, CurrStep: test.currStep})
 		if !reflect.DeepEqual(got, test.want) {

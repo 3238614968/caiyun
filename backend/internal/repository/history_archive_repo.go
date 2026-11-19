@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 const (
@@ -23,20 +24,20 @@ type archiveTableSpec struct {
 // archive operation depend on two independently evolving table definitions;
 // adding exchange_rule_id to live exchange_records after the archive table had
 // been created with CREATE TABLE LIKE caused positional copies to fail.  Keep
-// this list synchronized with migration 021's archive-parity DDL.
+// this list synchronized with migration 023's archive-parity DDL.
 var archiveTableSpecs = map[string]archiveTableSpec{
 	"task_logs": {
 		archiveTable: "task_logs_archive",
 		columns: []string{
 			"id", "user_id", "account_id", "task_type", "status", "message",
-			"cloud_gained", "execution_time", "created_at", "deleted_at",
+			"cloud_gained", "migu_notes_gained", "execution_time", "created_at", "deleted_at",
 		},
 	},
 	"exchange_records": {
 		archiveTable: "exchange_records_archive",
 		columns: []string{
 			"id", "user_id", "exchange_account_id", "exchange_rule_id", "exchange_task_id",
-			"product_id", "prize_id", "prize_name", "status", "message", "execution_time_ms", "created_at",
+			"product_id", "prize_id", "prize_name", "status", "outcome", "message", "execution_time_ms", "created_at",
 		},
 	},
 }
@@ -80,6 +81,9 @@ func (r *HistoryArchiveRepository) archiveBatch(sourceTable, archiveTable string
 	err = r.db.Transaction(func(tx *gorm.DB) error {
 		var ids []uint
 		if err := tx.Table(sourceTable).
+			// Lock the live rows before copying, including at READ COMMITTED.
+			// User erasure deletes live rows before archives using the same order.
+			Clauses(clause.Locking{Strength: "UPDATE"}).
 			Select("id").
 			Where("created_at < ?", cutoff).
 			Order("id ASC").
@@ -109,6 +113,9 @@ func (r *HistoryArchiveRepository) archiveBatch(sourceTable, archiveTable string
 		result := tx.Exec(deleteSQL, args...)
 		if result.Error != nil {
 			return result.Error
+		}
+		if result.RowsAffected != int64(len(ids)) {
+			return fmt.Errorf("archive %s -> %s deleted %d rows, expected %d", sourceTable, archiveTable, result.RowsAffected, len(ids))
 		}
 		moved = result.RowsAffected
 		return nil

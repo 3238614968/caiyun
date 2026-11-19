@@ -91,7 +91,7 @@ func registerWorkerJob(jobScheduler *scheduler.Scheduler, name, schedule string,
 }
 
 // registerMonthlyExchangeJob 注册自动兑换月卡定时任务
-func registerMonthlyExchangeJob(scheduler *scheduler.Scheduler, exchangeService *services.ExchangeService, configRepo *repository.SystemConfigRepository) {
+func registerMonthlyExchangeJob(scheduler *scheduler.Scheduler, operationService *services.OperationService, configRepo *repository.SystemConfigRepository) {
 	// 获取兑换时间配置，默认10:00
 	exchangeTime := "10:00"
 	if config, err := configRepo.GetByKey("exchange_monthly_time"); err == nil && config.KeyValue != "" {
@@ -117,17 +117,23 @@ func registerMonthlyExchangeJob(scheduler *scheduler.Scheduler, exchangeService 
 		JobNonCritical,
 		"自动兑换月卡任务",
 		func() error {
-			// 检查是否启用自动兑换
-			if config, err := configRepo.GetByKey("exchange_monthly_enabled"); err == nil {
-				enabled := config.KeyValue == "true" || config.KeyValue == "1" || config.KeyValue == "yes"
-				if !enabled {
-					log.Println("【月卡兑换】自动兑换已禁用，跳过执行")
-					return nil
-				}
+			enabled, err := configRepo.MonthlyExchangeEnabled()
+			if err != nil {
+				return fmt.Errorf("读取月卡兑换开关失败，跳过本轮: %w", err)
+			}
+			if !enabled {
+				log.Println("【月卡兑换】自动兑换已禁用，跳过执行")
+				return nil
 			}
 
 			log.Println("【月卡兑换】开始执行自动兑换月卡任务...")
-			exchangeService.ExecuteMonthlyExchange()
+			operation, _, dispatchErr, err := operationService.SubmitScheduledMonthlyExchange(context.Background(), time.Now())
+			if err != nil {
+				return err
+			}
+			if dispatchErr != nil {
+				log.Printf("【月卡兑换】操作 %s 已持久化，等待队列恢复投递: %v", operation.ID, dispatchErr)
+			}
 			return nil
 		},
 	)

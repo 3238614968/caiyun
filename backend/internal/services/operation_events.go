@@ -35,8 +35,5 @@ func operationUpdate(operation *models.Operation) models.OperationUpdate {
 }
 
 func operationPublicError(operation *models.Operation) string {
-	if operation == nil || operation.Status != models.OperationFailed {
-		return ""
-	}
-	return "操作执行失败，请稍后重试"
+	return PublicOperationError(operation)
 }

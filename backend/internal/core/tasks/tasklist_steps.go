@@ -23,15 +23,37 @@ func (t *TaskListTask) executeTaskSteps(item taskListItem, action func() error) 
 		}
 		item.Task = *current
 	}
+	if isTaskDisabledByServer(item.Task) {
+		return nil
+	}
+	temporaryAction := item.MarketName == "sign_in_3" && (item.Task.ID == 587 || item.Task.ID == 588 || item.Task.ID == 589)
+	// These campaigns register entry before the real upload/chat callback.
+	// A click acknowledgement alone is never a completion confirmation.
+	if temporaryAction && !isTaskCompleted(item.Task) && item.Task.CurrStep == 0 && hasTaskStep(item.Task, "click") {
+		if err := t.api.DoTaskWithMarket(item.MarketName, "task", fmt.Sprint(item.Task.ID)); err != nil {
+			return fmt.Errorf("临时任务入口登记失败: %w", err)
+		}
+		current, err := t.queryTaskByMarket(item.MarketName, item.GroupKey, item.Task.ID)
+		if err != nil {
+			return fmt.Errorf("入口登记后查询任务失败: %w", err)
+		}
+		if current == nil {
+			return fmt.Errorf("入口登记后任务从列表消失，不能确认完成")
+		}
+		item.Task = *current
+	}
 	stalled, actions := 0, 0
 	for round := 0; round < 8; round++ {
+		if isTaskDisabledByServer(item.Task) {
+			return nil
+		}
 		if isTaskCompleted(item.Task) || taskCompletedToday(item.Task) {
 			return nil
 		}
 		// Preserve action -> doTaskPost -> click ordering from the reference.
 		// Retry the real action at most once after delayed checks, not on every
 		// reward-registration step (especially expensive AI and sharing calls).
-		if action != nil && (actions == 0 || (stalled == 2 && actions == 1 && item.Task.ID != 522)) {
+		if action != nil && (actions == 0 || (stalled == 2 && actions == 1 && item.Task.ID != 522 && !temporaryAction)) {
 			if err := action(); err != nil {
 				return fmt.Errorf("真实行为失败: %w", err)
 			}

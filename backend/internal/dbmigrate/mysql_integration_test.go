@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"caiyun/internal/models"
 	"caiyun/internal/repository"
 
 	"gorm.io/driver/mysql"
@@ -61,6 +62,25 @@ func TestRunEmbeddedMySQLIntegrationAppliesAndTracksVersions(t *testing.T) {
 	}
 	if err := schemaRepo.WithContext(context.Background()).ValidateCriticalSchema(); err != nil {
 		t.Fatalf("ValidateCriticalSchema with context error: %v", err)
+	}
+	// Exercise migration 024 itself: an AutoMigrate-only fixture previously
+	// omitted this FK and missed scheduled monthly receipts using fake IDs.
+	receipts := repository.NewExchangeReceiptRepository(db)
+	receipt := &repository.ExchangeExecutionReceipt{OperationID: "cron:2026-11-15", ResourceID: 1, ResourceKind: "exchange_account", UserID: 7}
+	if err := receipts.StartSubmission(receipt); err == nil {
+		t.Fatal("migration allowed a receipt without its parent operation")
+	}
+	operation := &models.Operation{ID: "00000000-0000-4000-8000-0000000000aa", UserID: 0, OperationType: models.OperationTypeExchangeMonthly,
+		Status: models.OperationRunning, Payload: "{}", IdempotencyKey: "cron:exchange.monthly:2026-11-15", QueuedAt: time.Now()}
+	if err := db.Create(operation).Error; err != nil {
+		t.Fatal(err)
+	}
+	receipt.OperationID = operation.ID
+	if err := receipts.StartSubmission(receipt); err != nil {
+		t.Fatalf("persisted monthly operation parent rejected: %v", err)
+	}
+	if err := receipts.StartSubmission(receipt); err == nil {
+		t.Fatal("same monthly command was submitted twice")
 	}
 
 	var descriptions []string

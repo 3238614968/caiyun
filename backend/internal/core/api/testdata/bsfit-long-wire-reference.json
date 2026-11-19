@@ -1,0 +1,391 @@
+{
+  "fields": [
+    {
+      "key": "adBlock",
+      "value": "fixture-adBlock"
+    },
+    {
+      "key": "addBehavior",
+      "value": "fixture-addBehavior"
+    },
+    {
+      "key": "audio",
+      "value": "fixture-audio"
+    },
+    {
+      "key": "availableScreenResolution",
+      "value": "fixture-availableScreenResolution"
+    },
+    {
+      "key": "browserEngine",
+      "value": "fixture-browserEngine"
+    },
+    {
+      "key": "browserName",
+      "value": "fixture-browserName"
+    },
+    {
+      "key": "browserVersion",
+      "value": "fixture-browserVersion"
+    },
+    {
+      "key": "canvasHash",
+      "value": "fixture-canvasHash"
+    },
+    {
+      "key": "colorDepth",
+      "value": "fixture-colorDepth"
+    },
+    {
+      "key": "cookieEnabled",
+      "value": "fixture-cookieEnabled"
+    },
+    {
+      "key": "cpuClass",
+      "value": "fixture-cpuClass"
+    },
+    {
+      "key": "custID",
+      "value": "fixture-custID"
+    },
+    {
+      "key": "deviceMemory",
+      "value": "fixture-deviceMemory"
+    },
+    {
+      "key": "devicePixelRatio",
+      "value": "fixture-devicePixelRatio"
+    },
+    {
+      "key": "doNotTrack",
+      "value": "fixture-doNotTrack"
+    },
+    {
+      "key": "flashVersion",
+      "value": "fixture-flashVersion"
+    },
+    {
+      "key": "fontsHash",
+      "value": "fixture-fontsHash"
+    },
+    {
+      "key": "hardwareConcurrency",
+      "value": "fixture-hardwareConcurrency"
+    },
+    {
+      "key": "hasLiedBrowser",
+      "value": "fixture-hasLiedBrowser"
+    },
+    {
+      "key": "hasLiedLanguages",
+      "value": "fixture-hasLiedLanguages"
+    },
+    {
+      "key": "hasLiedOs",
+      "value": "fixture-hasLiedOs"
+    },
+    {
+      "key": "hasLiedResolution",
+      "value": "fixture-hasLiedResolution"
+    },
+    {
+      "key": "indexedDb",
+      "value": "fixture-indexedDb"
+    },
+    {
+      "key": "isIncognito",
+      "value": "fixture-isIncognito"
+    },
+    {
+      "key": "isRiskBrowser",
+      "value": "fixture-isRiskBrowser"
+    },
+    {
+      "key": "isSelenium",
+      "value": "fixture-isSelenium"
+    },
+    {
+      "key": "javaEnabled",
+      "value": "fixture-javaEnabled"
+    },
+    {
+      "key": "language",
+      "value": "fixture-language"
+    },
+    {
+      "key": "localStorage",
+      "value": "fixture-localStorage"
+    },
+    {
+      "key": "mimeTypesHash",
+      "value": "fixture-mimeTypesHash"
+    },
+    {
+      "key": "navigatorPlatform",
+      "value": "fixture-navigatorPlatform"
+    },
+    {
+      "key": "openDatabase",
+      "value": "fixture-openDatabase"
+    },
+    {
+      "key": "os",
+      "value": "fixture-os"
+    },
+    {
+      "key": "osVersion",
+      "value": "fixture-osVersion"
+    },
+    {
+      "key": "platform",
+      "value": "fixture-platform"
+    },
+    {
+      "key": "pluginsHash",
+      "value": "fixture-pluginsHash"
+    },
+    {
+      "key": "screenResolution",
+      "value": "fixture-screenResolution"
+    },
+    {
+      "key": "sessionStorage",
+      "value": "fixture-sessionStorage"
+    },
+    {
+      "key": "timezone",
+      "value": "fixture-timezone"
+    },
+    {
+      "key": "timezoneOffset",
+      "value": "fixture-timezoneOffset"
+    },
+    {
+      "key": "touchSupport",
+      "value": "fixture-touchSupport"
+    },
+    {
+      "key": "userAgent",
+      "value": "fixture-userAgent"
+    },
+    {
+      "key": "webSmartID",
+      "value": "fixture-webSmartID"
+    },
+    {
+      "key": "webdriver",
+      "value": "fixture-webdriver"
+    },
+    {
+      "key": "webglHash",
+      "value": "fixture-webglHash"
+    },
+    {
+      "key": "webglVendorAndRenderer",
+      "value": "fixture-webglVendorAndRenderer"
+    }
+  ],
+  "packetFields": [
+    {
+      "key": "adBlock",
+      "value": "fixture-adBlock"
+    },
+    {
+      "key": "addBehavior",
+      "value": "fixture-addBehavior"
+    },
+    {
+      "key": "audio",
+      "value": "fixture-audio"
+    },
+    {
+      "key": "availableScreenResolution",
+      "value": "fixture-availableScreenResolution"
+    },
+    {
+      "key": "browserEngine",
+      "value": "fixture-browserEngine"
+    },
+    {
+      "key": "browserName",
+      "value": "fixture-browserName"
+    },
+    {
+      "key": "browserVersion",
+      "value": "fixture-browserVersion"
+    },
+    {
+      "key": "canvasHash",
+      "value": "fixture-canvasHash"
+    },
+    {
+      "key": "colorDepth",
+      "value": "fixture-colorDepth"
+    },
+    {
+      "key": "cookieEnabled",
+      "value": "fixture-cookieEnabled"
+    },
+    {
+      "key": "cpuClass",
+      "value": "fixture-cpuClass"
+    },
+    {
+      "key": "custID",
+      "value": "fixture-custID"
+    },
+    {
+      "key": "deviceMemory",
+      "value": "fixture-deviceMemory"
+    },
+    {
+      "key": "devicePixelRatio",
+      "value": "fixture-devicePixelRatio"
+    },
+    {
+      "key": "doNotTrack",
+      "value": "fixture-doNotTrack"
+    },
+    {
+      "key": "flashVersion",
+      "value": "fixture-flashVersion"
+    },
+    {
+      "key": "fontsHash",
+      "value": "fixture-fontsHash"
+    },
+    {
+      "key": "hardwareConcurrency",
+      "value": "fixture-hardwareConcurrency"
+    },
+    {
+      "key": "hasLiedBrowser",
+      "value": "fixture-hasLiedBrowser"
+    },
+    {
+      "key": "hasLiedLanguages",
+      "value": "fixture-hasLiedLanguages"
+    },
+    {
+      "key": "hasLiedOs",
+      "value": "fixture-hasLiedOs"
+    },
+    {
+      "key": "hasLiedResolution",
+      "value": "fixture-hasLiedResolution"
+    },
+    {
+      "key": "indexedDb",
+      "value": "fixture-indexedDb"
+    },
+    {
+      "key": "isIncognito",
+      "value": "fixture-isIncognito"
+    },
+    {
+      "key": "isRiskBrowser",
+      "value": "fixture-isRiskBrowser"
+    },
+    {
+      "key": "isSelenium",
+      "value": "fixture-isSelenium"
+    },
+    {
+      "key": "javaEnabled",
+      "value": "fixture-javaEnabled"
+    },
+    {
+      "key": "language",
+      "value": "fixture-language"
+    },
+    {
+      "key": "localStorage",
+      "value": "fixture-localStorage"
+    },
+    {
+      "key": "mimeTypesHash",
+      "value": "fixture-mimeTypesHash"
+    },
+    {
+      "key": "navigatorPlatform",
+      "value": "fixture-navigatorPlatform"
+    },
+    {
+      "key": "openDatabase",
+      "value": "fixture-openDatabase"
+    },
+    {
+      "key": "os",
+      "value": "fixture-os"
+    },
+    {
+      "key": "osVersion",
+      "value": "fixture-osVersion"
+    },
+    {
+      "key": "platform",
+      "value": "fixture-platform"
+    },
+    {
+      "key": "pluginsHash",
+      "value": "fixture-pluginsHash"
+    },
+    {
+      "key": "screenResolution",
+      "value": "fixture-screenResolution"
+    },
+    {
+      "key": "sessionStorage",
+      "value": "fixture-sessionStorage"
+    },
+    {
+      "key": "timezone",
+      "value": "fixture-timezone"
+    },
+    {
+      "key": "timezoneOffset",
+      "value": "fixture-timezoneOffset"
+    },
+    {
+      "key": "touchSupport",
+      "value": "fixture-touchSupport"
+    },
+    {
+      "key": "userAgent",
+      "value": "fixture-userAgent"
+    },
+    {
+      "key": "webSmartID",
+      "value": "fixture-webSmartID"
+    },
+    {
+      "key": "webdriver",
+      "value": "fixture-webdriver"
+    },
+    {
+      "key": "webglHash",
+      "value": "fixture-webglHash"
+    },
+    {
+      "key": "webglVendorAndRenderer",
+      "value": "fixture-webglVendorAndRenderer"
+    },
+    {
+      "key": "hashCode",
+      "value": "H6l3d1rUkxBMz6BC8jMkkwfiv1241w7KMOKkMxao6sE"
+    },
+    {
+      "key": "algID",
+      "value": "l4ehhNODhH"
+    },
+    {
+      "key": "timestamp",
+      "value": "1794438000123"
+    }
+  ],
+  "plaintext": "{\"adBlock\":\"fixture-adBlock\",\"addBehavior\":\"fixture-addBehavior\",\"audio\":\"fixture-audio\",\"availableScreenResolution\":\"fixture-availableScreenResolution\",\"browserEngine\":\"fixture-browserEngine\",\"browserName\":\"fixture-browserName\",\"browserVersion\":\"fixture-browserVersion\",\"canvasHash\":\"fixture-canvasHash\",\"colorDepth\":\"fixture-colorDepth\",\"cookieEnabled\":\"fixture-cookieEnabled\",\"cpuClass\":\"fixture-cpuClass\",\"custID\":\"fixture-custID\",\"deviceMemory\":\"fixture-deviceMemory\",\"devicePixelRatio\":\"fixture-devicePixelRatio\",\"doNotTrack\":\"fixture-doNotTrack\",\"flashVersion\":\"fixture-flashVersion\",\"fontsHash\":\"fixture-fontsHash\",\"hardwareConcurrency\":\"fixture-hardwareConcurrency\",\"hasLiedBrowser\":\"fixture-hasLiedBrowser\",\"hasLiedLanguages\":\"fixture-hasLiedLanguages\",\"hasLiedOs\":\"fixture-hasLiedOs\",\"hasLiedResolution\":\"fixture-hasLiedResolution\",\"indexedDb\":\"fixture-indexedDb\",\"isIncognito\":\"fixture-isIncognito\",\"isRiskBrowser\":\"fixture-isRiskBrowser\",\"isSelenium\":\"fixture-isSelenium\",\"javaEnabled\":\"fixture-javaEnabled\",\"language\":\"fixture-language\",\"localStorage\":\"fixture-localStorage\",\"mimeTypesHash\":\"fixture-mimeTypesHash\",\"navigatorPlatform\":\"fixture-navigatorPlatform\",\"openDatabase\":\"fixture-openDatabase\",\"os\":\"fixture-os\",\"osVersion\":\"fixture-osVersion\",\"platform\":\"fixture-platform\",\"pluginsHash\":\"fixture-pluginsHash\",\"screenResolution\":\"fixture-screenResolution\",\"sessionStorage\":\"fixture-sessionStorage\",\"timezone\":\"fixture-timezone\",\"timezoneOffset\":\"fixture-timezoneOffset\",\"touchSupport\":\"fixture-touchSupport\",\"userAgent\":\"fixture-userAgent\",\"webSmartID\":\"fixture-webSmartID\",\"webdriver\":\"fixture-webdriver\",\"webglHash\":\"fixture-webglHash\",\"webglVendorAndRenderer\":\"fixture-webglVendorAndRenderer\",\"hashCode\":\"H6l3d1rUkxBMz6BC8jMkkwfiv1241w7KMOKkMxao6sE\",\"algID\":\"l4ehhNODhH\",\"timestamp\":\"1794438000123\"}",
+  "hash": "H6l3d1rUkxBMz6BC8jMkkwfiv1241w7KMOKkMxao6sE",
+  "bsk": "44444444444444444444444444444444",
+  "ciphertext": "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",
+  "murmur": []
+}

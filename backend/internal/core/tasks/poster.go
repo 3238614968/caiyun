@@ -37,6 +37,13 @@ const posterMaxLotteries = 5
 
 func (t *PosterTask) Run() error {
 	t.pending = false
+	// ★ 到期守卫：National_PlayAISpecial/PosterMaking 2026-10-31 到期
+	//（任务表仍回 WAIT 但奖励已不发，11-03 活动配置普查实证）。
+	if activityNow().After(time.Date(2026, 10, 31, 16, 0, 0, 0, time.UTC)) {
+		t.lastMessage = "校园海报活动已于 2026-10-31 到期，跳过"
+		t.logger.Info(t.lastMessage)
+		return nil
+	}
 	t.logger.Start("------【校园海报活动】------")
 	t.api.PrepareActivitySession(api.PosterMarketName)
 

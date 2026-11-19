@@ -17,6 +17,7 @@ type FunAITask struct {
 	*activityActions
 	lastMessage string
 	pending     bool
+	wait        func(time.Duration)
 }
 
 func NewFunAITask(client *http.Client, log *logger.Logger) *FunAITask {
@@ -48,27 +49,60 @@ func (t *FunAITask) Run() error {
 	t.pending = false
 	var issues []error
 	attempted := make(map[string]bool)
-	knowledgeUsed := false
+	knowledgeAttempted := false
+	var knowledgeErr error
+	nineGridAttempted := false
+	var nineGridErr error
 	t.logger.Start("------【趣玩AI抽奖】------")
 	t.api.PrepareActivitySession(api.FunAIMarketName)
 
 	pageModule, err := t.api.FunaiPageModule()
+	modules := []api.FunaiModule{}
 	if err != nil {
 		t.logger.Error("获取趣玩AI模块失败", err)
-		return err
+		issues = append(issues, fmt.Errorf("获取趣玩 AI 主模块: %w", err))
+	} else {
+		modules = append(modules, *pageModule)
 	}
-
-	modules := []api.FunaiModule{*pageModule}
 	if timed, timedErr := t.api.FunaiTimedModules(); timedErr == nil {
 		modules = append(modules, timed...)
 	} else {
 		t.logger.Debug(fmt.Sprintf("获取趣玩AI限时模块失败: %v", timedErr))
 		issues = append(issues, fmt.Errorf("获取趣玩 AI 限时模块: %w", timedErr))
 	}
+	// The official activity registers each entry before opening the feature.
+	// Register both modules before a shared knowledge/ninegrid action, otherwise the
+	// second module is not participating when that action takes place.
+	knowledgeEntries := make(map[string]error)
+	nineGridEntries := make(map[string]error)
+	var knowledgeModuleIDs []string
+	for _, module := range modules {
+		for _, task := range module.TaskIDs {
+			if task.ID == "aijiugongge" && task.IsComplete != 1 {
+				if _, seen := nineGridEntries[module.ModuleID]; !seen {
+					nineGridEntries[module.ModuleID] = t.api.FunaiRegister(module.ModuleID, task.ID)
+				}
+			}
+			if task.ID == "zhishiku" && task.IsComplete != 1 {
+				if _, seen := knowledgeEntries[module.ModuleID]; !seen {
+					knowledgeEntries[module.ModuleID] = t.api.FunaiRegister(module.ModuleID, task.ID)
+					if knowledgeEntries[module.ModuleID] == nil {
+						knowledgeModuleIDs = append(knowledgeModuleIDs, module.ModuleID)
+					}
+				}
+			}
+		}
+	}
 
 	pendingManual := 0
+	var manualDetails []string
 	executed := 0
 	failedActions := 0
+	imageResults := map[string]error{}
+	imageFailures := map[string]struct {
+		id  string
+		err error
+	}{}
 	for _, module := range modules {
 		for _, task := range module.TaskIDs {
 			if task.IsComplete == 1 {
@@ -77,21 +111,40 @@ func (t *FunAITask) Run() error {
 			previousExecuted, previousFailures := executed, failedActions
 			switch {
 			case task.ID == "zhishiku":
-				if !knowledgeUsed {
-					fileID, actionErr := t.api.CompleteFunAIKnowledgeUse()
-					if fileID != "" {
-						_ = AppendStringList(t.storage, KeyTempFiles, fileID)
-					}
+				if entryErr := knowledgeEntries[module.ModuleID]; entryErr != nil {
+					failedActions++
+					issues = append(issues, fmt.Errorf("知识库入口登记/%s: %w", module.ModuleID, entryErr))
+					break
+				}
+				if !knowledgeAttempted {
+					knowledgeAttempted = true
+					// The App creation flow includes the official attributed click
+					// and a real private library, then asynchronous activity readback.
+					actionErr := t.api.CreateFunAIKnowledgeBase(knowledgeModuleIDs...)
+					knowledgeErr = actionErr
 					if actionErr != nil {
 						failedActions++
-						issues = append(issues, fmt.Errorf("知识库使用: %w", actionErr))
+						issues = append(issues, fmt.Errorf("知识库创建: %w", actionErr))
 						break
 					}
-					knowledgeUsed = true
 				}
-				if err := t.api.FunaiRegister(module.ModuleID, task.ID); err != nil {
+				if knowledgeErr != nil {
+					break
+				}
+				executed++
+			case task.ID == "aijiugongge":
+				if entryErr := nineGridEntries[module.ModuleID]; entryErr != nil {
 					failedActions++
-					issues = append(issues, fmt.Errorf("知识库登记: %w", err))
+					issues = append(issues, fmt.Errorf("九宫格入口登记/%s: %w", module.ModuleID, entryErr))
+					break
+				}
+				if !nineGridAttempted {
+					nineGridAttempted = true
+					_, nineGridErr = t.api.CompleteNineGridTask()
+				}
+				if nineGridErr != nil {
+					failedActions++
+					issues = append(issues, fmt.Errorf("九宫格作品: %w", nineGridErr))
 				} else {
 					executed++
 				}
@@ -150,15 +203,27 @@ func (t *FunAITask) Run() error {
 					t.logger.Debug(fmt.Sprintf("趣玩AI笔记任务失败(%s): %v", task.TaskName, err))
 				}
 			case funaiImageTasks[task.ID]:
-				if err := t.api.CompleteFunAIImageTask(task.ID); err == nil {
-					executed++
+				actionErr, tried := imageResults[task.ID]
+				if !tried {
+					actionErr = t.api.CompleteFunAIImageTask(task.ID)
+					imageResults[task.ID] = actionErr
+					if actionErr == nil {
+						executed++
+					}
+				}
+				key := module.ModuleID + "/" + task.ID
+				if actionErr == nil {
+					attempted[key] = true
 				} else {
-					failedActions++
-					issues = append(issues, fmt.Errorf("趣玩 AI 图像/%s: %w", task.ID, err))
-					t.logger.Debug(fmt.Sprintf("趣玩 AI 图像任务失败(%s): %v", task.TaskName, err))
+					imageFailures[key] = struct {
+						id  string
+						err error
+					}{task.ID, actionErr}
+					t.logger.Debug(fmt.Sprintf("趣玩 AI 图像提交异常(%s)，先复查任务完成位: %v", task.TaskName, actionErr))
 				}
 			default:
 				pendingManual++
+				manualDetails = append(manualDetails, module.ModuleID+"/"+task.ID+" "+task.TaskName)
 			}
 			if executed > previousExecuted && failedActions == previousFailures {
 				attempted[module.ModuleID+"/"+task.ID] = true
@@ -166,42 +231,82 @@ func (t *FunAITask) Run() error {
 		}
 	}
 
-	time.Sleep(2 * time.Second)
+	wait := t.wait
+	if wait == nil {
+		wait = time.Sleep
+	}
+	wait(2 * time.Second)
 	confirmed := -1
-	if latestPage, refreshErr := t.api.FunaiPageModule(); refreshErr == nil {
-		latestModules := []api.FunaiModule{*latestPage}
-		if latestTimed, timedErr := t.api.FunaiTimedModules(); timedErr == nil {
-			latestModules = append(latestModules, latestTimed...)
+	refresh := func() ([]api.FunaiModule, error) {
+		var latest []api.FunaiModule
+		var refreshIssues []error
+		if page, err := t.api.FunaiPageModule(); err == nil {
+			latest = append(latest, *page)
 		} else {
-			issues = append(issues, fmt.Errorf("复查趣玩 AI 限时模块: %w", timedErr))
+			refreshIssues = append(refreshIssues, fmt.Errorf("复查趣玩 AI 主模块: %w", err))
 		}
+		if timed, err := t.api.FunaiTimedModules(); err == nil {
+			latest = append(latest, timed...)
+		} else {
+			refreshIssues = append(refreshIssues, fmt.Errorf("复查趣玩 AI 限时模块: %w", err))
+		}
+		return latest, errors.Join(refreshIssues...)
+	}
+	latestModules, refreshErr := refresh()
+	// The real create event is credited asynchronously (about seven seconds in
+	// the authorized live check). Poll records only, never repeat the action.
+	for retry := 0; ((knowledgeAttempted && knowledgeErr == nil) || (nineGridAttempted && nineGridErr == nil)) && refreshErr == nil && retry < 5 && pendingFunAIRecordedActions(attempted, latestModules); retry++ {
+		wait(3 * time.Second)
+		latestModules, refreshErr = refresh()
+	}
+	if refreshErr != nil {
+		issues = append(issues, refreshErr)
+	}
+	if len(latestModules) > 0 {
 		confirmed = countNewFunAICompletions(modules, latestModules)
 		for _, module := range latestModules {
 			for _, task := range module.TaskIDs {
 				if task.IsComplete == 1 {
 					delete(attempted, module.ModuleID+"/"+task.ID)
+					delete(imageFailures, module.ModuleID+"/"+task.ID)
 				}
 			}
 		}
-	} else {
-		t.logger.Debug(fmt.Sprintf("复查趣玩 AI 任务状态失败: %v", refreshErr))
-		issues = append(issues, fmt.Errorf("复查趣玩 AI 主模块: %w", refreshErr))
+	}
+	// The same image action can be credited to multiple modules. Submit it once;
+	// a rendering error only fails the task if its server completion bit remains
+	// unset. Unknown confirmations and unrelated failures are never discarded.
+	reportedImages := map[string]bool{}
+	for _, failure := range imageFailures {
+		if !reportedImages[failure.id] {
+			reportedImages[failure.id] = true
+			failedActions++
+			issues = append(issues, fmt.Errorf("趣玩 AI 图像/%s: %w", failure.id, failure.err))
+		}
 	}
 	t.pending = len(attempted) > 0 || pendingManual > 0
-	prizes, lotteryErr := t.runLotteries(pageModule.ModuleID)
+	var prizes []string
+	var lotteryErr error
+	if pageModule != nil {
+		prizes, lotteryErr = t.runLotteries(pageModule.ModuleID)
+	}
+	zhangtingMessage := t.runZhangtingLottery()
 
-	parts := make([]string, 0, 4)
+	parts := make([]string, 0, 5)
 	if executed > 0 {
 		parts = append(parts, fmt.Sprintf("执行任务动作%d项", executed))
-		if confirmed >= 0 {
-			parts = append(parts, fmt.Sprintf("服务端确认新完成%d项", confirmed))
-		}
+	}
+	if confirmed >= 0 {
+		parts = append(parts, fmt.Sprintf("服务端确认新完成%d项", confirmed))
 	}
 	if len(prizes) > 0 {
 		parts = append(parts, fmt.Sprintf("抽奖%d次: %s", len(prizes), strings.Join(prizes, "、")))
 	}
+	if zhangtingMessage != "" {
+		parts = append(parts, zhangtingMessage)
+	}
 	if pendingManual > 0 {
-		parts = append(parts, fmt.Sprintf("%d项任务需 App 内交互、活动资格或服务端支持", pendingManual))
+		parts = append(parts, fmt.Sprintf("%d项任务待处理：%s（需 App 内交互、活动资格或尚未适配，未记为完成）", pendingManual, strings.Join(manualDetails, "、")))
 	}
 	if failedActions > 0 {
 		parts = append(parts, fmt.Sprintf("%d项自动任务执行失败", failedActions))
@@ -269,11 +374,46 @@ func (t *FunAITask) runLotteries(moduleID string) ([]string, error) {
 	return prizes, lastErr
 }
 
+// runZhangtingLottery 掌厅每日抽奖一次（不消耗模块抽奖次数）。
+// 属于附加每日机会：今日已抽或接口异常只记入消息，不影响主任务结果。
+func (t *FunAITask) runZhangtingLottery() string {
+	prize, err := t.api.FunaiZhangtingLottery()
+	if err != nil {
+		t.logger.Debug(fmt.Sprintf("趣玩AI掌厅抽奖不可用: %v", err))
+		return "掌厅抽奖未执行（今日已抽或接口异常）"
+	}
+	if prize.IsWin == 1 {
+		name := strings.TrimSpace(prize.PrizeName)
+		if name == "" {
+			name = "未知奖品"
+		}
+		return "掌厅抽奖中奖: " + name
+	}
+	return "掌厅抽奖未中奖"
+}
+
 func (t *FunAITask) Message() string {
 	return strings.TrimSpace(t.lastMessage)
 }
 
 func (t *FunAITask) Pending() bool { return t.pending }
+
+func pendingFunAIRecordedActions(attempted map[string]bool, modules []api.FunaiModule) bool {
+	pending := make(map[string]bool)
+	for key := range attempted {
+		if strings.HasSuffix(key, "/zhishiku") || strings.HasSuffix(key, "/aijiugongge") {
+			pending[key] = true
+		}
+	}
+	for _, module := range modules {
+		for _, task := range module.TaskIDs {
+			if (task.ID == "zhishiku" || task.ID == "aijiugongge") && task.IsComplete == 1 {
+				delete(pending, module.ModuleID+"/"+task.ID)
+			}
+		}
+	}
+	return len(pending) > 0
+}
 
 // isNoLotteryChanceError 判断抽奖接口返回是否为“次数已用完”这类正常终止提示，
 // 而非真正的服务异常。
@@ -282,7 +422,7 @@ func isNoLotteryChanceError(err error) bool {
 		return false
 	}
 	message := err.Error()
-	for _, marker := range []string{"次数用完", "次数已用完", "没有可用次数", "无可用次数", "次数不足", "没有抽奖次数"} {
+	for _, marker := range []string{"次数用完", "次数已用完", "没有可用次数", "无可用次数", "次数不足", "没有抽奖次数", "暂无刮奖机会", "暂无抽奖机会"} {
 		if strings.Contains(message, marker) {
 			return true
 		}

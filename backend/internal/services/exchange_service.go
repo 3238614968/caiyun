@@ -16,6 +16,7 @@ type ExchangeService struct {
 	accountRepo         *repository.AccountRepository
 	configRepo          *repository.SystemConfigRepository
 	exchangeRecordRepo  *repository.ExchangeRecordRepository
+	exchangeReceiptRepo *repository.ExchangeReceiptRepository
 	taskLogRepo         *repository.TaskLogRepository
 	authMgr             *auth.Auth
 	tokenMgr            *TokenManager
@@ -71,6 +72,10 @@ func (s *ExchangeService) SetEventHub(eventHub *ws.Hub) {
 
 func (s *ExchangeService) SetLockStore(lockStore exchangeLockStore) {
 	s.lockStore = lockStore
+}
+
+func (s *ExchangeService) SetReceiptRepository(repo *repository.ExchangeReceiptRepository) {
+	s.exchangeReceiptRepo = repo
 }
 
 // SetUnitOfWork overrides the default repository-derived Unit of Work. This is

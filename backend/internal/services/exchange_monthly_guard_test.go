@@ -72,6 +72,23 @@ func TestCoordinationFailuresDoNotLockAnEntireMonth(t *testing.T) {
 	}
 }
 
+func TestSubmittedOutcomesPreserveMonthlyProtection(t *testing.T) {
+	for _, tc := range []struct {
+		outcome models.ExchangeOutcome
+		keep    bool
+	}{
+		{models.ExchangeOutcomeAccepted, true},
+		{models.ExchangeOutcomeUnknown, true},
+		{models.ExchangeOutcomeRejected, false},
+		{models.ExchangeOutcomeNotSubmitted, false},
+	} {
+		result := newExchangeAttemptResult(tc.outcome == models.ExchangeOutcomeAccepted, "result", 0, tc.outcome)
+		if got := exchangeResultPreservesMonthlySeries(result); got != tc.keep {
+			t.Fatalf("outcome=%s keep=%t", tc.outcome, got)
+		}
+	}
+}
+
 func TestExchangeMonthlyWindowStartsAtMonthBoundary(t *testing.T) {
 	now := time.Date(2026, 6, 11, 16, 0, 1, 0, time.Local)
 	start, end := exchangeMonthlyWindow(now)

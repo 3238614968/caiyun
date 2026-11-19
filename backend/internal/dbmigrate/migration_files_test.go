@@ -33,18 +33,21 @@ var expectedMigrationFiles = []string{
 	"020_cloud_stats_account_date_unique.sql",
 	"021_archive_schema_parity_and_exchange_rule_unique.sql",
 	"022_audit_log_anonymous_actor.sql",
+	"023_exchange_submission_outcome.sql",
+	"024_exchange_execution_receipts.sql",
+	"025_migu_note_rewards.sql",
 }
 
 func TestMigrationSQLDoesNotWriteSchemaVersionAndCopiesMatch(t *testing.T) {
 	embeddedNames := embeddedMigrationFileNames(t)
 	if !reflect.DeepEqual(embeddedNames, expectedMigrationFiles) {
-		t.Fatalf("embedded migration files = %#v, want contiguous 001-022 %#v", embeddedNames, expectedMigrationFiles)
+		t.Fatalf("embedded migration files = %#v, want contiguous 001-025 %#v", embeddedNames, expectedMigrationFiles)
 	}
 
 	externalDir := filepath.Join("..", "..", "migrations")
 	externalNames := externalMigrationFileNames(t, externalDir)
 	if !reflect.DeepEqual(externalNames, expectedMigrationFiles) {
-		t.Fatalf("external migration files = %#v, want contiguous 001-022 %#v", externalNames, expectedMigrationFiles)
+		t.Fatalf("external migration files = %#v, want contiguous 001-025 %#v", externalNames, expectedMigrationFiles)
 	}
 
 	for _, name := range expectedMigrationFiles {
@@ -165,6 +168,12 @@ func TestCriticalMigrationColumnsPresent(t *testing.T) {
 		},
 		"022_audit_log_anonymous_actor.sql": {
 			"audit_logs", "DropAuditLogUserForeignKey", "MakeAuditLogUserIDNullable", "MODIFY COLUMN `user_id` BIGINT UNSIGNED NULL",
+		},
+		"023_exchange_submission_outcome.sql": {
+			"exchange_tasks", "exchange_records", "exchange_records_archive", "`outcome`", "AddExchangeOutcomeColumn",
+		},
+		"025_migu_note_rewards.sql": {
+			"task_logs", "task_logs_archive", "`migu_notes_gained`", "AddMiguNoteRewardColumn",
 		},
 	}
 

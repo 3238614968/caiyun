@@ -107,18 +107,17 @@ func TestSMSLeaseAlsoBlocksManualAndWorkerCredentialRefresh(t *testing.T) {
 	}
 }
 
-func TestCloudPhoneDisabledEvenForPreviouslyEnabledBatchConfig(t *testing.T) {
+func TestCloudPhoneAvailableForEnabledBatchConfig(t *testing.T) {
 	catalog := NewTaskCatalog()
 	def, ok := catalog.Get("cloudphone")
-	if !ok || def.DefaultEnabled || def.RunInBatch {
-		t.Fatal("cloudphone must default to disabled")
+	if !ok || !def.DefaultEnabled || !def.RunInBatch {
+		t.Fatal("cloudphone protocol implementation must be reachable")
 	}
 	codes := catalog.ResolveBatchCodes([]*models.TaskConfig{{TaskType: "cloud_phone_redpack", IsEnabled: true, RunInBatch: true}})
-	if len(codes) != 0 {
+	if len(codes) != 1 || codes[0] != "cloudphone" {
 		t.Fatalf("batch=%v", codes)
 	}
-	result := def.execute(&TaskRunner{})
-	if result.Status != "skipped" {
-		t.Fatalf("result=%+v", result)
+	if codes := catalog.ResolveBatchCodes([]*models.TaskConfig{{TaskType: "cloudphone", IsEnabled: false, RunInBatch: true}}); len(codes) != 0 {
+		t.Fatalf("administrator disable must be preserved: %v", codes)
 	}
 }

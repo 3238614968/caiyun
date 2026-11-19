@@ -57,6 +57,7 @@ type handlerSessionRepo struct {
 	byHash     map[string]*models.RefreshSession
 	byID       map[string]*models.RefreshSession
 	revokedAll bool
+	revokeErr  error
 }
 
 func newHandlerSessionRepo() *handlerSessionRepo {
@@ -111,6 +112,9 @@ func (r *handlerSessionRepo) IsActive(_ context.Context, sessionID string, userI
 }
 
 func (r *handlerSessionRepo) Revoke(_ context.Context, sessionID string, userID uint, now time.Time) error {
+	if r.revokeErr != nil {
+		return r.revokeErr
+	}
 	if session := r.byID[sessionID]; session != nil && session.UserID == userID && session.RevokedAt == nil {
 		revokedAt := now
 		session.RevokedAt = &revokedAt
@@ -119,6 +123,9 @@ func (r *handlerSessionRepo) Revoke(_ context.Context, sessionID string, userID 
 }
 
 func (r *handlerSessionRepo) RevokeAll(_ context.Context, userID uint, now time.Time) error {
+	if r.revokeErr != nil {
+		return r.revokeErr
+	}
 	r.revokedAll = true
 	for _, session := range r.byID {
 		if session.UserID == userID && session.RevokedAt == nil {
@@ -370,6 +377,40 @@ func TestLogoutRevokesOnlyCurrentSession(t *testing.T) {
 		t.Fatalf("wrong logout scope: current=%v other=%v", currentActive, otherActive)
 	}
 	requireClearedCookies(t, recorder)
+}
+
+func TestLogoutKeepsCookiesUntilRevocationCommits(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	for _, method := range []string{"current", "all"} {
+		t.Run(method, func(t *testing.T) {
+			fixture := newHandlerAuthFixture(t)
+			claims, err := fixture.manager.ValidateToken(fixture.login(t).Token)
+			if err != nil {
+				t.Fatal(err)
+			}
+			handler := fixture.handler.Logout
+			if method == "all" {
+				handler = fixture.handler.LogoutAll
+			}
+			setup := func(c *gin.Context) {
+				c.Set("user_id", claims.UserID)
+				c.Set("session_id", claims.SessionID)
+			}
+			fixture.sessions.revokeErr = errors.New("store unavailable")
+			failed := invokeAuthHandler(t, handler, "", nil, nil, setup)
+			active, _ := fixture.sessions.IsActive(t.Context(), claims.SessionID, claims.UserID, time.Now())
+			if failed.Code != http.StatusInternalServerError || len(failed.Header().Values("Set-Cookie")) != 0 || !active {
+				t.Fatalf("failed revocation lost the retry credential: status=%d active=%v", failed.Code, active)
+			}
+			fixture.sessions.revokeErr = nil
+			retry := invokeAuthHandler(t, handler, "", nil, nil, setup)
+			active, _ = fixture.sessions.IsActive(t.Context(), claims.SessionID, claims.UserID, time.Now())
+			if retry.Code != http.StatusOK || active {
+				t.Fatalf("retry status=%d active=%v", retry.Code, active)
+			}
+			requireClearedCookies(t, retry)
+		})
+	}
 }
 
 func TestLogoutAllRevokesEverySession(t *testing.T) {

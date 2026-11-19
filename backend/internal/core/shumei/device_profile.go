@@ -79,36 +79,30 @@ func GenerateDeviceProfile() (string, error) {
 }
 
 func generateDeviceProfile(ua string) (string, error) {
-	return generateDeviceProfileForPage(ua, defaultDevicePageURL)
-}
-
-const defaultDevicePageURL = "https://m.mcloud.139.com/portal/mobilecloud/index.html?path=newsignin"
-
-func generateDeviceProfileForPage(ua, pageURL string) (string, error) {
-	payload, _, err := prepareDeviceProfileForPage(ua, pageURL)
+	payload, _, err := prepareDeviceProfile(ua)
 	return payload, err
 }
 
-func prepareDeviceProfileForPage(ua, pageURL string) (string, string, error) {
+const registrationPageURL = "https://m.mcloud.139.com/portal/mobilecloud/index.html?path=newsignin"
+
+func deviceProfileFields(ua, smid string, elapsed time.Duration) map[string]interface{} {
+	return map[string]interface{}{
+		"protocol": officialSDKConfig.Protocol, "organization": organization,
+		"appId": appID, "os": "web", "version": "3.0.0", "sdkver": "3.0.0",
+		"box": "", "rtype": "all", "smid": smid, "subVersion": "1.0.0",
+		"time": elapsed.Milliseconds(), "ua": ua, "url": registrationPageURL,
+	}
+}
+
+func prepareDeviceProfile(ua string) (string, string, error) {
 	started := time.Now()
 	uid := uuid.NewString()
 	ep, err := rsaEncrypt(uid)
 	if err != nil {
 		return "", "", err
 	}
-	if pageURL == "" {
-		pageURL = defaultDevicePageURL
-	}
-	// Supply the context this HTTP client actually has. Do not fabricate canvas,
-	// audio, browser plugins, battery levels, screen dimensions or browsing age.
 	smid := getSMID(uid)
-	profile := map[string]interface{}{
-		"protocol": officialSDKConfig.Protocol, "organization": organization,
-		"appId": appID, "os": "web", "version": "3.0.0", "sdkver": "3.0.0",
-		"box": "", "rtype": "all", "smid": smid, "subVersion": "1.0.0",
-		"time": time.Since(started).Milliseconds(), "ua": ua, "url": pageURL,
-	}
-	encoded, err := sdkData(profile, uid)
+	encoded, err := sdkData(deviceProfileFields(ua, smid, time.Since(started)), uid)
 	if err != nil {
 		return "", "", fmt.Errorf("encode device SDK profile: %w", err)
 	}
@@ -130,12 +124,6 @@ func FetchDeviceID(ctx context.Context, client *stdhttp.Client, endpoint string)
 // FetchDeviceIDWithUserAgent keeps the device registration and subsequent
 // activity requests in the same WebView identity.
 func FetchDeviceIDWithUserAgent(ctx context.Context, client *stdhttp.Client, endpoint, userAgent string) (string, error) {
-	return FetchDeviceIDForPage(ctx, client, endpoint, userAgent, defaultDevicePageURL)
-}
-
-// FetchDeviceIDForPage binds the encrypted URL and HTTP Referer to the same
-// current activity page. No captured device or account credentials are reused.
-func FetchDeviceIDForPage(ctx context.Context, client *stdhttp.Client, endpoint, userAgent, pageURL string) (string, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -157,10 +145,7 @@ func FetchDeviceIDForPage(ctx context.Context, client *stdhttp.Client, endpoint,
 	if userAgent == "" {
 		userAgent = RandomMarketUserAgent()
 	}
-	if strings.TrimSpace(pageURL) == "" {
-		pageURL = defaultDevicePageURL
-	}
-	payload, smid, err := prepareDeviceProfileForPage(userAgent, pageURL)
+	payload, smid, err := prepareDeviceProfile(userAgent)
 	if err != nil {
 		return "", fmt.Errorf("generate shumei device profile failed: %w", err)
 	}
@@ -172,7 +157,7 @@ func FetchDeviceIDForPage(ctx context.Context, client *stdhttp.Client, endpoint,
 	req.Header.Set("User-Agent", userAgent)
 	req.Header.Set("Content-Type", "application/json;charset=UTF-8")
 	req.Header.Set("Origin", "https://m.mcloud.139.com")
-	req.Header.Set("Referer", pageURL)
+	req.Header.Set("Referer", registrationPageURL)
 	req.Header.Set("X-Requested-With", "com.chinamobile.mcloud")
 	req.Header.Set("Accept-Language", "zh,zh-CN;q=0.9,en-US;q=0.8,en;q=0.7")
 
@@ -205,7 +190,7 @@ func FetchDeviceIDForPage(ctx context.Context, client *stdhttp.Client, endpoint,
 	// SMSdk.getDeviceId returns "B" + the raw server value unconditionally.
 	// A raw identifier that itself starts with B still needs the protocol prefix.
 	deviceID := "B" + strings.TrimSpace(result.Detail.DeviceID)
-	SeedDeviceCookies(client.Jar, pageURL, deviceID, smid)
+	SeedDeviceCookies(client.Jar, registrationPageURL, deviceID, smid)
 	return deviceID, nil
 }
 

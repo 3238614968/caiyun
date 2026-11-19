@@ -6,10 +6,16 @@ import (
 	"caiyun/internal/models"
 )
 
-// DeleteByUserID permanently removes exchange records because they have no
-// soft-delete marker and may contain upstream response text.
+// DeleteByUserID permanently removes live and archived exchange records. It
+// participates in the enclosing user-erasure Unit of Work, so an archive
+// failure rolls back the rest of the user's deletion as well.
 func (r *ExchangeRecordRepository) DeleteByUserID(userID uint) error {
-	return r.db.Where("user_id = ?", userID).Delete(&models.ExchangeRecord{}).Error
+	// Lock/remove live rows first, matching the archiver's source FOR UPDATE
+	// lock order. Deleting archives first leaves a concurrent copy window.
+	if err := r.db.Where("user_id = ?", userID).Delete(&models.ExchangeRecord{}).Error; err != nil {
+		return err
+	}
+	return r.db.Table("exchange_records_archive").Where("user_id = ?", userID).Delete(&models.ExchangeRecord{}).Error
 }
 
 // DeleteByUserID permanently removes exchange tasks during user erasure. The
@@ -37,7 +43,10 @@ func (r *ExchangeAccountRepository) DeleteByUserID(userID uint) error {
 }
 
 func (r *TaskLogRepository) DeleteByUserID(userID uint) error {
-	return r.db.Unscoped().Where("user_id = ?", userID).Delete(&models.TaskLog{}).Error
+	if err := r.db.Unscoped().Where("user_id = ?", userID).Delete(&models.TaskLog{}).Error; err != nil {
+		return err
+	}
+	return r.db.Table("task_logs_archive").Unscoped().Where("user_id = ?", userID).Delete(&models.TaskLog{}).Error
 }
 
 func (r *CloudStatsRepository) DeleteByUserID(userID uint) error {
@@ -91,6 +100,9 @@ func (r *AuditLogRepository) AnonymizeByUserID(userID uint) error {
 // deleted user. Payloads can contain account identifiers and must not outlive
 // the user-erasure transaction.
 func (r *OperationRepository) DeleteByUserID(userID uint) error {
+	if err := r.db.Where("user_id = ?", userID).Delete(&ExchangeExecutionReceipt{}).Error; err != nil {
+		return err
+	}
 	return r.db.Where("user_id = ?", userID).Delete(&models.Operation{}).Error
 }
 

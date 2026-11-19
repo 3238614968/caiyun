@@ -25,7 +25,15 @@ func (r *TaskRunner) runGardenTask() *TaskResult {
 
 // runCloudPhoneTask 执行云手机红包派对任务
 func (r *TaskRunner) runCloudPhoneTask() *TaskResult {
-	return &TaskResult{TaskType: "cloudphone", Status: "skipped", Message: "云手机登录协议已迁移，任务暂时停用"}
+	started := time.Now()
+	task := tasks.NewCloudPhonePartyTask(r.httpClient, r.logger, r.storage)
+	task.SetAccountPhone(r.account.Phone)
+	err := task.Run()
+	result := activityTaskResult("cloudphone", started, err, task.Message(), "云手机协议任务已检查")
+	if err == nil && task.Pending() {
+		result.Status = "pending"
+	}
+	return result
 }
 
 func (r *TaskRunner) runLanternTask() *TaskResult {
@@ -123,7 +131,11 @@ func (r *TaskRunner) runHiddenRewardsTask() *TaskResult {
 	startTime := time.Now()
 	task := tasks.NewHiddenRewardsTask(r.httpClient, r.logger)
 	err := task.Run()
-	return activityTaskResult("hidden_rewards", startTime, err, task.Message(), "隐藏活动奖励盘点完成")
+	result := activityTaskResult("hidden_rewards", startTime, err, task.Message(), "隐藏活动奖励盘点完成")
+	if err == nil && task.Pending() {
+		result.Status = "pending"
+	}
+	return result
 }
 
 // runRevivalRewardTask 执行复活卡奖励任务

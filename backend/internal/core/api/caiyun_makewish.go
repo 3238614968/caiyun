@@ -13,9 +13,10 @@ import (
 
 // MakeWishPrize 可许愿奖品。
 type MakeWishPrize struct {
-	MakeWishPrizeID int    `json:"makewishPrizeId"`
-	PrizeID         int    `json:"prizeId"`
-	PrizeName       string `json:"prizeName"`
+	MakeWishPrizeID int     `json:"makewishPrizeId"`
+	PrizeID         int     `json:"prizeId"`
+	PrizeName       string  `json:"prizeName"`
+	MarketPrice     float64 `json:"marketPrice"`
 }
 
 // MakeWishTask 许愿活动任务。
@@ -299,7 +300,8 @@ func (api *CaiyunAPI) MakeWishCloudExchangeInfo() (cost int, remaining int, err 
 	return costValue, result.Remaining, nil
 }
 
-// SelectMakeWishPrize 按关键字挑选愿望奖品；未匹配时返回第一个奖品。
+// SelectMakeWishPrize 按关键字挑选愿望奖品；未匹配时选市场价最高的奖品
+// （第 77 轮与 Python 侧对齐：许愿决定中奖拿哪个奖品，默认选价值最高的）。
 func SelectMakeWishPrize(prizes []MakeWishPrize, keyword string) *MakeWishPrize {
 	keyword = strings.TrimSpace(keyword)
 	if keyword != "" {
@@ -309,8 +311,14 @@ func SelectMakeWishPrize(prizes []MakeWishPrize, keyword string) *MakeWishPrize 
 			}
 		}
 	}
-	if len(prizes) > 0 {
-		return &prizes[0]
+	if len(prizes) == 0 {
+		return nil
 	}
-	return nil
+	best := 0
+	for i := range prizes {
+		if prizes[i].MarketPrice > prizes[best].MarketPrice {
+			best = i
+		}
+	}
+	return &prizes[best]
 }

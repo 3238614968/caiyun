@@ -44,3 +44,24 @@ func TestStopWaitsForRunningCronJob(t *testing.T) {
 		t.Fatal("Stop did not return after the running cron job completed")
 	}
 }
+
+func TestSchedulerAcceptsPerJobTimezoneWithoutChangingOtherJobs(t *testing.T) {
+	s := NewScheduler(Config{Logger: log.New(io.Discard, "", 0)})
+	defer s.Stop()
+	for _, spec := range []string{"0 8 * * *", "CRON_TZ=Asia/Shanghai */20 12 * * *", "TZ=Asia/Shanghai */20 22 * * *"} {
+		if _, err := s.AddJobWithName(spec, spec, func() error { return nil }, "test"); err != nil {
+			t.Fatalf("schedule %q rejected: %v", spec, err)
+		}
+	}
+	if len(s.GetJobs()) != 3 {
+		t.Fatal("timezones replaced an existing job")
+	}
+	for _, spec := range []string{"CRON_TZ=Invalid/Zone 0 12 * * *", "CRON_TZ=Asia/Shanghai 0 25 * * *", "TZ=Asia/Shanghai"} {
+		if _, err := s.AddJobWithName(spec, spec, func() error { return nil }, "test"); err == nil {
+			t.Fatalf("invalid timezone/schedule %q accepted", spec)
+		}
+	}
+	if len(s.GetJobs()) != 3 {
+		t.Fatal("invalid schedules were retained")
+	}
+}

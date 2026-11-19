@@ -1,6 +1,7 @@
 package api
 
 import (
+	corehttp "caiyun/internal/core/http"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -9,12 +10,12 @@ import (
 
 // marketJSONRequest 发送活动层请求并把响应解析为通用的 {code,msg,result} 信封。
 // headers 为 nil 时使用活动层默认鉴权头（jwttoken/jwtToken + Referer）。
-func (api *CaiyunAPI) marketJSONRequest(method, endpoint string, payload interface{}, headers map[string]string) (*CaiyunResponse, error) {
-	return api.marketJSONRequestContext(context.Background(), method, endpoint, payload, headers)
+func (api *CaiyunAPI) marketJSONRequest(method, endpoint string, payload interface{}, headers map[string]string, options ...corehttp.RequestOption) (*CaiyunResponse, error) {
+	return api.marketJSONRequestContext(context.Background(), method, endpoint, payload, headers, options...)
 }
 
-func (api *CaiyunAPI) marketJSONRequestContext(ctx context.Context, method, endpoint string, payload interface{}, headers map[string]string) (*CaiyunResponse, error) {
-	body, err := api.marketRawRequestContext(ctx, method, endpoint, payload, headers)
+func (api *CaiyunAPI) marketJSONRequestContext(ctx context.Context, method, endpoint string, payload interface{}, headers map[string]string, options ...corehttp.RequestOption) (*CaiyunResponse, error) {
+	body, err := api.marketRawRequestContext(ctx, method, endpoint, payload, headers, options...)
 	if err != nil {
 		return nil, err
 	}
@@ -44,11 +45,11 @@ func (api *CaiyunAPI) marketRawRequest(method, endpoint string, payload interfac
 	return api.marketRawRequestContext(context.Background(), method, endpoint, payload, headers)
 }
 
-func (api *CaiyunAPI) marketRawRequestContext(ctx context.Context, method, endpoint string, payload interface{}, headers map[string]string) (string, error) {
+func (api *CaiyunAPI) marketRawRequestContext(ctx context.Context, method, endpoint string, payload interface{}, headers map[string]string, options ...corehttp.RequestOption) (string, error) {
 	if headers == nil {
 		headers = api.buildMarketHeaders(nil, "")
 	}
-	resp, err := api.client.RequestWithContext(ctx, method, endpoint, headers, payload)
+	resp, err := api.client.RequestWithContextOptions(ctx, method, endpoint, headers, payload, options...)
 	if err != nil {
 		return "", err
 	}

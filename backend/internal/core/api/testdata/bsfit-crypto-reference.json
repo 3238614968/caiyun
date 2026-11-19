@@ -1,0 +1,34 @@
+{
+  "fields": [
+    {
+      "key": "custID",
+      "value": "JYZX"
+    },
+    {
+      "key": "platform",
+      "value": "WEB"
+    },
+    {
+      "key": "webSmartID",
+      "value": "fixture"
+    }
+  ],
+  "plaintext": "{\"custID\":\"JYZX\",\"platform\":\"WEB\",\"webSmartID\":\"fixture\"}",
+  "hash": "OwxK_nTIfkgS7MaK3nvAeX2QIUQ4EfVtmGpYNjJ_rbw",
+  "bsk": "44444444444444444444444444444444",
+  "ciphertext": "d/viubl+IBd5LcUNJ63mOYlokH+BbiCrou1JsA6lqBGJz7qPc9SWmOMBV0x/wfmvkb2UPoO51rEDeAX1Mqrhew==",
+  "murmur": [
+    {
+      "input": "",
+      "hash": "24700f9f1986800ab4fcc880530dd0ed"
+    },
+    {
+      "input": "hello",
+      "hash": "e4c67dbb6870107c1129fe575d609dfb"
+    },
+    {
+      "input": "fixture-profile",
+      "hash": "d5172fc62d2f55a990689920332bef29"
+    }
+  ]
+}

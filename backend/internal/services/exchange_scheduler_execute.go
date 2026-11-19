@@ -117,7 +117,6 @@ func (s *ExchangeScheduler) executeProductGroup(ctx context.Context, prizeID str
 		go func() {
 			defer wg.Done()
 			limiterAcquired := false
-			executionToken := ""
 			defer func() {
 				if limiterAcquired {
 					<-limiter
@@ -126,7 +125,7 @@ func (s *ExchangeScheduler) executeProductGroup(ctx context.Context, prizeID str
 					message := fmt.Sprintf("任务执行异常，已自动标记失败: %v", r)
 					log.Printf("【抢兑调度器】任务 %d 执行 panic: %v\n%s", task.ID, r, debug.Stack())
 					recordFailureReason(message)
-					s.finalizeTaskResult(task, executionToken, false, message, 0)
+					s.finalizeTaskResult(task, exchangeTaskExecutionResult{exchangeAttemptResult: preflightExchangeResult(message, true)})
 				}
 			}()
 
@@ -142,7 +141,7 @@ func (s *ExchangeScheduler) executeProductGroup(ctx context.Context, prizeID str
 				}
 				log.Printf("【抢兑调度器】任务 %d 跳过执行，商品 %s 已停止抢兑，原因: %s", task.ID, prizeID, reason)
 				recordFailureReason(reason)
-				s.finalizeTaskResult(task, executionToken, false, reason, 0)
+				s.finalizeTaskResult(task, exchangeTaskExecutionResult{exchangeAttemptResult: preflightExchangeResult(reason, true)})
 				return
 			}
 
@@ -194,61 +193,43 @@ func (s *ExchangeScheduler) executeProductGroup(ctx context.Context, prizeID str
 				}
 				log.Printf("【抢兑调度器】任务 %d 获取执行槽后跳过，商品 %s 已停止抢兑，原因: %s", task.ID, prizeID, reason)
 				recordFailureReason(reason)
-				s.finalizeTaskResult(task, executionToken, false, reason, 0)
+				s.finalizeTaskResult(task, exchangeTaskExecutionResult{exchangeAttemptResult: preflightExchangeResult(reason, true)})
 				return
 			}
 
-			success, message, execTime, executionToken := s.executeTask(ctx, task)
+			execution := s.executeTask(ctx, task)
 			<-limiter
 			limiterAcquired = false
-			if execTime < 0 {
-				log.Printf("【抢兑调度器】任务 %d 跳过执行: %s", task.ID, message)
+			if execution.skipped {
+				log.Printf("【抢兑调度器】任务 %d 跳过执行: %s", task.ID, execution.message)
+				s.finalizeTaskResult(task, execution)
 				return
 			}
 
-			if success {
+			if execution.persistenceErr != nil {
+				log.Printf("【抢兑调度器】任务 %d 结算失败: %v", task.ID, execution.persistenceErr)
+				recordFailureReason(execution.persistenceErr.Error())
+				return
+			}
+			if execution.success {
 				successMutex.Lock()
 				successMap[task.ID] = true
 				successMutex.Unlock()
-
-				log.Printf(
-					"【抢兑调度器】任务 %d 抢兑成功: 账号=%s, exchange_account=%d, account=%d, 商品=%s(%s), 耗时=%dms, 结果=%s",
-					task.ID,
-					maskedAccountName,
-					task.ExchangeAccountID,
-					task.ExchangeAccount.AccountID,
-					task.PrizeName,
-					task.PrizeID,
-					execTime,
-					message,
-				)
+				log.Printf("【抢兑调度器】任务 %d 抢兑成功: account=%d, 商品=%s(%s), 耗时=%dms",
+					task.ID, task.ExchangeAccount.AccountID, task.PrizeName, task.PrizeID, execution.execTime)
 			} else {
-				reason := message
+				reason := execution.message
 				if reason == "" {
 					reason = "未知错误"
 				}
-
 				recordFailureReason(reason)
-
-				log.Printf(
-					"【抢兑调度器】任务 %d 抢兑失败: 账号=%s, exchange_account=%d, account=%d, 商品=%s(%s), 原因=%s, 耗时=%dms",
-					task.ID,
-					maskedAccountName,
-					task.ExchangeAccountID,
-					task.ExchangeAccount.AccountID,
-					task.PrizeName,
-					task.PrizeID,
-					reason,
-					execTime,
-				)
-
+				log.Printf("【抢兑调度器】任务 %d 执行结束: account=%d, 商品=%s(%s), 结果=%s",
+					task.ID, task.ExchangeAccount.AccountID, task.PrizeName, task.PrizeID, reason)
 				if s.shouldStopExchange(reason) {
-					log.Printf("【抢兑调度器】商品 %s 抢兑停止，原因: %s", prizeID, reason)
 					setStopReason(reason)
 				}
 			}
-
-			s.finalizeTaskResult(task, executionToken, success, message, execTime)
+			s.finalizeTaskResult(task, execution)
 		}()
 	}
 

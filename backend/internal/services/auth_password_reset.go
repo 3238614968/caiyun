@@ -216,58 +216,24 @@ func buildEmailMessage(from, fromName, to, subject, body string) string {
 }
 
 func sendSMTPMail(config SMTPConfig, from string, to []string, msg []byte) error {
-	addr := net.JoinHostPort(config.Host, config.Port)
-	var auth smtp.Auth
-	if config.Username != "" {
-		auth = smtp.PlainAuth("", config.Username, config.Password, config.Host)
-	}
+	return sendSMTPMailWithTLSConfig(config, from, to, msg, &tls.Config{
+		ServerName: config.Host,
+		MinVersion: tls.VersionTLS12,
+	})
+}
 
+func sendSMTPMailWithTLSConfig(config SMTPConfig, from string, to []string, msg []byte, tlsConfig *tls.Config) error {
+	addr := net.JoinHostPort(config.Host, config.Port)
 	const smtpTimeout = 10 * time.Second
 	deadline := time.Now().Add(smtpTimeout)
-
-	if config.UseTLS {
-		dialer := &net.Dialer{Timeout: smtpTimeout}
-		conn, err := tls.DialWithDialer(dialer, "tcp", addr, &tls.Config{
-			ServerName: config.Host,
-			MinVersion: tls.VersionTLS12,
-		})
-		if err != nil {
-			return err
-		}
-		_ = conn.SetDeadline(deadline)
-		defer conn.Close()
-
-		client, err := smtp.NewClient(conn, config.Host)
-		if err != nil {
-			return err
-		}
-		defer client.Quit()
-		if auth != nil {
-			if err := client.Auth(auth); err != nil {
-				return err
-			}
-		}
-		if err := client.Mail(from); err != nil {
-			return err
-		}
-		for _, recipient := range to {
-			if err := client.Rcpt(recipient); err != nil {
-				return err
-			}
-		}
-		writer, err := client.Data()
-		if err != nil {
-			return err
-		}
-		if _, err := writer.Write(msg); err != nil {
-			_ = writer.Close()
-			return err
-		}
-		return writer.Close()
-	}
-
 	dialer := &net.Dialer{Timeout: smtpTimeout}
-	conn, err := dialer.Dial("tcp", addr)
+	var conn net.Conn
+	var err error
+	if config.UseTLS {
+		conn, err = tls.DialWithDialer(dialer, "tcp", addr, tlsConfig)
+	} else {
+		conn, err = dialer.Dial("tcp", addr)
+	}
 	if err != nil {
 		return err
 	}
@@ -278,21 +244,23 @@ func sendSMTPMail(config SMTPConfig, from string, to []string, msg []byte) error
 	if err != nil {
 		return err
 	}
-	defer client.Quit()
-
-	if ok, _ := client.Extension("STARTTLS"); ok {
-		if err := client.StartTLS(&tls.Config{
-			ServerName: config.Host,
-			MinVersion: tls.VersionTLS12,
-		}); err != nil {
+	defer client.Close()
+	// Both authenticated and unauthenticated relays carry reset codes. Require
+	// verified encryption before AUTH, MAIL, RCPT or DATA, including localhost.
+	if !config.UseTLS {
+		if ok, _ := client.Extension("STARTTLS"); !ok {
+			return fmt.Errorf("SMTP 服务不支持必需的 STARTTLS")
+		}
+		if err := client.StartTLS(tlsConfig); err != nil {
 			return err
 		}
 	}
-	if auth != nil {
-		if ok, _ := client.Extension("AUTH"); ok {
-			if err := client.Auth(auth); err != nil {
-				return err
-			}
+	if config.Username != "" {
+		if ok, _ := client.Extension("AUTH"); !ok {
+			return fmt.Errorf("SMTP 服务不支持已配置的身份认证")
+		}
+		if err := client.Auth(smtp.PlainAuth("", config.Username, config.Password, config.Host)); err != nil {
+			return err
 		}
 	}
 	if err := client.Mail(from); err != nil {
@@ -311,5 +279,8 @@ func sendSMTPMail(config SMTPConfig, from string, to []string, msg []byte) error
 		_ = writer.Close()
 		return err
 	}
-	return writer.Close()
+	if err := writer.Close(); err != nil {
+		return err
+	}
+	return client.Quit()
 }

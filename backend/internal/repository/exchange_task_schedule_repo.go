@@ -20,7 +20,7 @@ func (r *ExchangeTaskRepository) GetTasksByTimeAtWithSkips(hour, minute int, now
 
 	err := r.db.Joins("JOIN exchange_rules ON exchange_rules.id = exchange_tasks.exchange_rule_id").
 		Joins("JOIN accounts ON accounts.id = exchange_rules.account_id").
-		Where("exchange_tasks.status = ?", string(models.ExchangeTaskPending)).
+		Where("exchange_tasks.status = ? AND exchange_tasks.outcome <> ?", string(models.ExchangeTaskPending), string(models.ExchangeOutcomeUnknown)).
 		Where(`(
 			(exchange_tasks.restock_times IS NOT NULL AND exchange_tasks.restock_times LIKE ?)
 			OR (exchange_tasks.scheduled_exchange_time IS NOT NULL AND exchange_tasks.scheduled_exchange_time <> '' AND exchange_tasks.scheduled_exchange_time IN ?)

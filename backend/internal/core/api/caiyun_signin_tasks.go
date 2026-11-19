@@ -5,14 +5,16 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
+
+	http "caiyun/internal/core/http"
 )
 
 func (api *CaiyunAPI) SignIn() (*SignInResponse, error) {
 	api.prepareSignInCenterSession(false)
 
-	resp, err := api.client.Get(
-		fmt.Sprintf("%s/signin/page/startSignIn?client=app", api.signInURL()),
-		api.buildReceiveHeaders(""),
+	resp, err := api.client.RequestWithOptions(
+		"GET", fmt.Sprintf("%s/signin/page/startSignIn?client=app", api.signInURL()),
+		api.buildReceiveHeaders(""), nil, http.WithoutRetries(),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("request sign in failed: %w", err)
@@ -149,11 +151,26 @@ func (api *CaiyunAPI) GetTaskListV2(group string) (*TaskListResponse, error) {
 		return nil, err
 	}
 
-	var result TaskListResponse
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("V2 任务列表 HTTP %d", resp.StatusCode)
+	}
+	var result struct {
+		Code    *int              `json:"code"`
+		Message string            `json:"message"`
+		Msg     string            `json:"msg"`
+		Success bool              `json:"success"`
+		Result  map[string][]Task `json:"result"`
+	}
 	if err := json.Unmarshal([]byte(body), &result); err != nil {
 		return nil, err
 	}
-	return &result, nil
+	if result.Code == nil {
+		return nil, fmt.Errorf("V2 任务列表缺少 code")
+	}
+	if *result.Code == 0 && result.Result == nil {
+		return nil, fmt.Errorf("V2 任务列表缺少 result 对象")
+	}
+	return &TaskListResponse{Code: *result.Code, Message: result.Message, Msg: result.Msg, Success: result.Success, Result: result.Result}, nil
 }
 
 // GetTaskListV3 reads the current task table for either sign-in center channel.
@@ -279,7 +296,7 @@ func (api *CaiyunAPI) DoTaskWithMarket(marketName, key, taskID string) error {
 	urlStr := fmt.Sprintf("%s/signin/task/click?key=%s&id=%s",
 		baseURL, url.QueryEscape(key), url.QueryEscape(taskID))
 
-	resp, err := api.client.Get(urlStr, headers)
+	resp, err := api.client.RequestWithOptions("GET", urlStr, headers, nil, http.WithoutRetries())
 	if err != nil {
 		return err
 	}
@@ -317,7 +334,7 @@ func (api *CaiyunAPI) ReceiveTaskRewardForMarket(marketName, taskID string) erro
 	urlStr := fmt.Sprintf("%s/signin/page/receiveTask?taskId=%s",
 		baseURL, url.QueryEscape(taskID))
 
-	resp, err := api.client.Get(urlStr, headers)
+	resp, err := api.client.RequestWithOptions("GET", urlStr, headers, nil, http.WithoutRetries())
 	if err != nil {
 		return err
 	}

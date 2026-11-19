@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"strings"
 )
 
 type OutLinkResponse struct {
@@ -22,7 +23,7 @@ type OutLinkResponse struct {
 }
 
 func (api *CaiyunAPI) buildShareHeaders() map[string]string {
-	return map[string]string{
+	headers := map[string]string{
 		"x-yun-api-version":    "v1",
 		"x-yun-app-channel":    "10000023",
 		"x-yun-client-info":    "||9|12.5.4|Chrome|143.0.7499.146|codextestshare||Windows 10||zh-CN|||Q2hyb21l||",
@@ -37,6 +38,16 @@ func (api *CaiyunAPI) buildShareHeaders() map[string]string {
 		"Origin":               "https://yun.139.com",
 		"Content-Type":         "application/json;charset=UTF-8",
 	}
+	// 分享接口要一整套专用头，少一个就回 1010010015 鉴权失效（参考实现实测）。
+	// yun.139.com 不在 client 的 jwttoken 注入白名单里，必须在此显式补齐。
+	if jwt := strings.TrimSpace(api.client.GetJWTToken()); jwt != "" {
+		headers["jwttoken"] = jwt
+		headers["jwtToken"] = jwt
+	}
+	if userID := strings.TrimSpace(api.client.GetUserDomainID()); userID != "" {
+		headers["x-yun-uni"] = userID
+	}
+	return headers
 }
 
 // GetOutLink 创建分享链接

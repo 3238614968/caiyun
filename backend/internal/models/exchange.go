@@ -85,6 +85,7 @@ type ExchangeTask struct {
 	ExecutionToken        string     `gorm:"size:36;not null;default:''" json:"-"`                                              // 当前执行租约令牌，防止陈旧 Worker 回写
 	LastAttemptAt         *time.Time `json:"last_attempt_at,omitempty"`                                                         // 最后抢兑时间
 	LastResult            string     `gorm:"type:text" json:"last_result"`                                                      // 最后抢兑结果
+	Outcome               string     `gorm:"size:16;not null;default:''" json:"outcome,omitempty"`                              // 当前提交保护或最近结果
 	NextRunAt             *time.Time `gorm:"-" json:"next_run_at,omitempty"`                                                    // 下一次预计触发时间（只读预览）
 	// 新增字段：优先级、分组、超时控制
 	Priority        int              `gorm:"default:0" json:"priority"`            // 优先级：0-普通，1-重要，2-紧急
@@ -114,6 +115,7 @@ type ExchangeRecord struct {
 	PrizeID           string    `gorm:"size:100;not null" json:"prize_id"`                                 // 商品 ID(来自 API)
 	PrizeName         string    `gorm:"size:255;not null" json:"prize_name"`                               // 商品名称
 	Status            string    `gorm:"size:20;not null" json:"status"`                                    // 抢兑结果
+	Outcome           string    `gorm:"size:16;not null;default:''" json:"outcome,omitempty"`              // 结构化提交结果
 	Message           string    `gorm:"type:text" json:"message"`                                          // 抢兑结果消息
 	ExecutionTimeMs   int       `gorm:"default:0" json:"execution_time_ms"`                                // 执行时长 (毫秒)
 	CreatedAt         time.Time `gorm:"index" json:"created_at"`
@@ -137,6 +139,17 @@ type CalendarDate struct {
 func (CalendarDate) TableName() string {
 	return "calendar_dates"
 }
+
+// ExchangeOutcome 将提交保护状态与历史 Task/Record 状态分开。
+// 空值表示历史数据，不能据此推断过去是否发送过兑换请求。
+type ExchangeOutcome string
+
+const (
+	ExchangeOutcomeNotSubmitted ExchangeOutcome = "not_submitted"
+	ExchangeOutcomeAccepted     ExchangeOutcome = "accepted"
+	ExchangeOutcomeRejected     ExchangeOutcome = "rejected"
+	ExchangeOutcomeUnknown      ExchangeOutcome = "unknown"
+)
 
 // ExchangeTaskStatus 抢兑任务状态枚举
 type ExchangeTaskStatus string

@@ -48,6 +48,7 @@ func newAdminCleanupFixture(t *testing.T) *adminCleanupFixture {
 		&models.WebSocketMessage{},
 		&models.AuditLog{},
 		&models.Operation{},
+		&repository.ExchangeExecutionReceipt{},
 		&models.RefreshSession{},
 	); err != nil {
 		t.Fatalf("auto migrate cleanup schema: %v", err)
@@ -59,6 +60,14 @@ func newAdminCleanupFixture(t *testing.T) *adminCleanupFixture {
 	for _, candidate := range []*models.User{admin, user} {
 		if err := userRepo.Create(candidate); err != nil {
 			t.Fatalf("create user %q: %v", candidate.Username, err)
+		}
+	}
+	for _, table := range []string{"task_logs", "exchange_records"} {
+		if err := db.Exec("CREATE TABLE " + table + "_archive AS SELECT * FROM " + table + " WHERE 1 = 0").Error; err != nil {
+			t.Fatalf("create %s archive: %v", table, err)
+		}
+		if err := db.Exec("INSERT INTO "+table+"_archive (id, user_id, message) VALUES (1, ?, ?), (2, ?, ?)", user.ID, "private-archive", admin.ID, "other-user-archive").Error; err != nil {
+			t.Fatalf("seed %s archive: %v", table, err)
 		}
 	}
 	account := &models.Account{UserID: user.ID, Phone: "13800138000", Auth: "secret-auth", Token: "secret-token", JWTToken: "secret-jwt", Remark: "private", IsActive: true}
@@ -94,6 +103,16 @@ func newAdminCleanupFixture(t *testing.T) *adminCleanupFixture {
 	if err := db.Create(operation).Error; err != nil {
 		t.Fatalf("create operation: %v", err)
 	}
+	monthly := &models.Operation{ID: "00000000-0000-0000-0000-000000000003", UserID: 0, OperationType: models.OperationTypeExchangeMonthly, IdempotencyKey: "system-monthly"}
+	if err := db.Create(monthly).Error; err != nil {
+		t.Fatal(err)
+	}
+	for _, businessUser := range []*models.User{user, admin} {
+		receipt := &repository.ExchangeExecutionReceipt{OperationID: monthly.ID, UserID: businessUser.ID, ResourceID: businessUser.ID, ResourceKind: exchangeAccountReceiptKind}
+		if err := repository.NewExchangeReceiptRepository(db).StartSubmission(receipt); err != nil {
+			t.Fatal(err)
+		}
+	}
 	session := &models.RefreshSession{ID: "00000000-0000-0000-0000-000000000002", UserID: user.ID, RefreshTokenHash: strings.Repeat("a", 64), ExpiresAt: now.Add(time.Hour)}
 	if err := db.Create(session).Error; err != nil {
 		t.Fatalf("create refresh session: %v", err)
@@ -126,11 +145,29 @@ func assertRowCount(t *testing.T, db *gorm.DB, model interface{}, query string, 
 	}
 }
 
+func assertAdminArchiveRows(t *testing.T, f *adminCleanupFixture, wantTarget int64) {
+	t.Helper()
+	for _, table := range []string{"task_logs_archive", "exchange_records_archive"} {
+		for userID, want := range map[uint]int64{f.user.ID: wantTarget, f.admin.ID: 1} {
+			var got int64
+			if err := f.db.Table(table).Where("user_id = ?", userID).Count(&got).Error; err != nil {
+				t.Fatal(err)
+			}
+			if got != want {
+				t.Fatalf("%s rows for user %d = %d, want %d", table, userID, got, want)
+			}
+		}
+	}
+}
+
 func TestAdminDeleteUserContextCleansOperationAndSessionAtomically(t *testing.T) {
 	f := newAdminCleanupFixture(t)
 	if err := f.service.DeleteUserContext(context.Background(), f.user.ID, f.admin.ID); err != nil {
 		t.Fatalf("delete user: %v", err)
 	}
+	assertAdminArchiveRows(t, f, 0)
+	assertRowCount(t, f.db, &repository.ExchangeExecutionReceipt{}, "user_id = ?", []interface{}{f.admin.ID}, 1)
+	assertRowCount(t, f.db, &models.Operation{}, "idempotency_key = ?", []interface{}{"system-monthly"}, 1)
 
 	for _, check := range []struct {
 		model interface{}
@@ -138,6 +175,7 @@ func TestAdminDeleteUserContextCleansOperationAndSessionAtomically(t *testing.T)
 		args  []interface{}
 	}{
 		{&models.Operation{}, "user_id = ?", []interface{}{f.user.ID}},
+		{&repository.ExchangeExecutionReceipt{}, "user_id = ?", []interface{}{f.user.ID}},
 		{&models.RefreshSession{}, "user_id = ?", []interface{}{f.user.ID}},
 		{&models.ExchangeRecord{}, "user_id = ?", []interface{}{f.user.ID}},
 		{&models.ExchangeTask{}, "user_id = ?", []interface{}{f.user.ID}},
@@ -175,6 +213,8 @@ func TestAdminDeleteUserContextRollsBackAllCleanup(t *testing.T) {
 	if err := f.service.DeleteUserContext(context.Background(), f.user.ID, f.admin.ID); err == nil {
 		t.Fatal("expected forced cleanup failure")
 	}
+	assertAdminArchiveRows(t, f, 1)
+	assertRowCount(t, f.db, &repository.ExchangeExecutionReceipt{}, "user_id = ?", []interface{}{f.user.ID}, 1)
 
 	for _, check := range []struct {
 		model interface{}
@@ -199,6 +239,24 @@ func TestAdminDeleteUserContextRollsBackAllCleanup(t *testing.T) {
 	}
 	if account.Auth != "secret-auth" || account.Token != "secret-token" || account.JWTToken != "secret-jwt" || account.DeletedAt.Valid {
 		t.Fatalf("account cleanup escaped rollback: %#v", account)
+	}
+}
+
+func TestAdminDeleteUserContextRollsBackWhenArchiveDeletionFails(t *testing.T) {
+	f := newAdminCleanupFixture(t)
+	trigger := fmt.Sprintf(`CREATE TRIGGER fail_archive_cleanup BEFORE DELETE ON task_logs_archive WHEN OLD.user_id = %d BEGIN SELECT RAISE(ABORT, 'forced archive failure'); END;`, f.user.ID)
+	if err := f.db.Exec(trigger).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := f.service.DeleteUserContext(t.Context(), f.user.ID, f.admin.ID); err == nil {
+		t.Fatal("user deletion must fail when private archive data cannot be erased")
+	}
+	assertAdminArchiveRows(t, f, 1)
+	assertRowCount(t, f.db, &models.ExchangeRecord{}, "user_id = ?", []interface{}{f.user.ID}, 1)
+	assertRowCount(t, f.db, &models.Operation{}, "user_id = ?", []interface{}{f.user.ID}, 1)
+	var user models.User
+	if err := f.db.First(&user, f.user.ID).Error; err != nil || user.DeletedAt.Valid {
+		t.Fatalf("archive failure deleted user identity: user=%+v error=%v", user, err)
 	}
 }
 

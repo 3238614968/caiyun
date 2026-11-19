@@ -7,11 +7,14 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
 	"strings"
 	"time"
+
+	corehttp "caiyun/internal/core/http"
 )
 
 const (
@@ -161,6 +164,17 @@ func (a *Auth) querySpecTokenWithRetry(authorization, phone string) (string, err
 }
 
 func (a *Auth) querySpecTokenWithRetryContext(ctx context.Context, authorization, phone string) (string, error) {
+	return a.querySpecTokenForSourceContext(ctx, authorization, phone, authTargetSourceID)
+}
+
+// QuerySpecTokenForSourceContext 按指定 toSourceId 出统一认证票。
+// 不同集团系统消费不同的票（如 056002=中国移动 coc3 权益市场），票据按
+// toSourceId 颁发、消费方校验 sourceid 匹配，一次性消费。
+func (a *Auth) QuerySpecTokenForSourceContext(ctx context.Context, authorization, phone, sourceID string) (string, error) {
+	return a.querySpecTokenForSourceContext(ctx, authorization, phone, sourceID)
+}
+
+func (a *Auth) querySpecTokenForSourceContext(ctx context.Context, authorization, phone, sourceID string) (string, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -168,10 +182,14 @@ func (a *Auth) querySpecTokenWithRetryContext(ctx context.Context, authorization
 	if phone == "" {
 		return "", fmt.Errorf("手机号为空")
 	}
+	sourceID = strings.TrimSpace(sourceID)
+	if sourceID == "" {
+		sourceID = authTargetSourceID
+	}
 
 	reqBody := map[string]interface{}{
 		"account":    phone,
-		"toSourceId": authTargetSourceID,
+		"toSourceId": sourceID,
 	}
 
 	headers := map[string]string{
@@ -189,30 +207,28 @@ func (a *Auth) querySpecTokenWithRetryContext(ctx context.Context, authorization
 		if err := ctx.Err(); err != nil {
 			return "", err
 		}
-		resp, err := a.client.PostWithContext(ctx, authQuerySpecTokenURL, headers, reqBody)
+		resp, err := a.client.RequestWithContextOptions(ctx, "POST", authQuerySpecTokenURL, headers, reqBody, corehttp.WithoutRedirects())
 		if err != nil {
 			lastErr = err
 		} else {
 			body, readErr := a.client.ReadResponseBody(resp)
 			if readErr != nil {
 				lastErr = readErr
+			} else if resp.StatusCode >= 300 && resp.StatusCode < 400 {
+				return "", fmt.Errorf("出票服务返回重定向 HTTP %d", resp.StatusCode)
 			} else if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 				lastErr = fmt.Errorf("HTTP %d", resp.StatusCode)
 			} else {
 				var result SpecTokenResp
 				if err := json.Unmarshal([]byte(body), &result); err != nil {
 					lastErr = fmt.Errorf("解析响应失败: %w", err)
-				} else if result.Success && result.Data.Token != "" {
-					return result.Data.Token, nil
 				} else {
-					if result.Code == "05050006" {
-						return "", ErrCredentialExpired
+					ticket, issueErr := result.issuedTicket(sourceID)
+					var issuer *SpecTokenError
+					if issueErr == nil || errors.Is(issueErr, ErrCredentialExpired) || (errors.As(issueErr, &issuer) && issuer.TargetUnavailable()) {
+						return ticket, issueErr
 					}
-					if result.Message != "" || result.Code != "" {
-						lastErr = fmt.Errorf("code=%s, message=%s", result.Code, result.Message)
-					} else {
-						lastErr = fmt.Errorf("ssoToken 为空")
-					}
+					lastErr = issueErr
 				}
 			}
 		}
@@ -242,76 +258,93 @@ func (a *Auth) tyrzLoginWithCandidatesContext(ctx context.Context, ssoToken stri
 		return "", fmt.Errorf("ssoToken 为空")
 	}
 
-	candidates := []struct {
-		endpoint string
-		body     map[string]interface{}
-	}{
-		{"https://m.mcloud.139.com/ycloud/auth-service/auth/tyrzLogin", map[string]interface{}{
-			"token": ssoToken, "openAccount": 0, "marketName": "sign_in_3", "sourceId": "1097",
-		}},
-		{"https://gp.mcloud.139.com/ycloud/auth-service/auth/tyrzLogin", map[string]interface{}{
-			"token": ssoToken, "openAccount": 0, "marketName": "sign_in_3", "sourceId": "1097",
-		}},
+	// Main credentials are scoped to the m gateway. Never replay a single-use
+	// SSO ticket to gp or to another login round; retries belong to the complete
+	// JWT flow, which obtains a fresh ticket for each attempt.
+	return a.tyrzLoginAttempt(ctx, "https://m.mcloud.139.com/ycloud/auth-service/auth/tyrzLogin", ssoToken)
+}
+
+// tyrzLoginAttempt 单次签名 tyrzLogin 调用（m / gp 网关共用同一协议与盐）。
+type GatewayLoginError struct {
+	Gateway string
+	Code    int
+	Message string
+}
+
+func (e *GatewayLoginError) Error() string {
+	return fmt.Sprintf("%s 登录失败: code=%d %s", e.Gateway, e.Code, e.Message)
+}
+
+func GPAccountRequiresActivation(err error) bool {
+	var business *GatewayLoginError
+	return errors.As(err, &business) && business.Gateway == "gp.mcloud.139.com" && business.Code == 9430
+}
+
+func (a *Auth) tyrzLoginAttempt(ctx context.Context, endpoint, ssoToken string) (string, error) {
+	u, _ := url.Parse(endpoint)
+	headers := map[string]string{
+		"User-Agent": authWebViewUA,
+		"Accept":     "*/*",
+		"Host":       u.Host,
+		"Origin":     "https://m.mcloud.139.com",
+		"Referer":    "https://m.mcloud.139.com/portal/mobilecloud/index.html?path=newsignin&sourceid=1097&enableShare=1&token=" + url.QueryEscape(ssoToken) + "&targetSourceId=001005",
+		"activityid": "sign_in_3", "appversion": "13.2.5.0",
 	}
-
-	var lastErr error
-	for round := 1; round <= 3; round++ {
-		for _, candidate := range candidates {
-			if err := ctx.Err(); err != nil {
-				return "", err
-			}
-			u, _ := url.Parse(candidate.endpoint)
-			headers := map[string]string{
-				"User-Agent": authWebViewUA,
-				"Accept":     "*/*",
-				"Host":       u.Host,
-				"Origin":     "https://m.mcloud.139.com",
-				"Referer":    "https://m.mcloud.139.com/portal/mobilecloud/index.html?path=newsignin&sourceid=1097&enableShare=1&token=" + url.QueryEscape(ssoToken) + "&targetSourceId=001005",
-				"activityid": "sign_in_3", "appversion": "13.2.5.0",
-			}
-			if u.Path == "/ycloud/auth-service/auth/tyrzLogin" {
-				for key, value := range a.h5LoginHeaders(ctx, ssoToken) {
-					headers[key] = value
-				}
-			}
-
-			resp, err := a.client.PostWithContext(ctx, candidate.endpoint, headers, candidate.body)
-			if err != nil {
-				lastErr = err
-				continue
-			}
-
-			body, readErr := a.client.ReadResponseBody(resp)
-			if readErr != nil {
-				lastErr = readErr
-				continue
-			}
-			if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-				lastErr = fmt.Errorf("HTTP %d", resp.StatusCode)
-				continue
-			}
-
-			var result TyrzLoginResp
-			if err := json.Unmarshal([]byte(body), &result); err != nil {
-				lastErr = fmt.Errorf("解析响应失败: %w", err)
-				continue
-			}
-			if result.Code != nil && *result.Code == 0 && result.Result.Token != "" {
-				return result.Result.Token, nil
-			}
-			lastErr = fmt.Errorf("JWT token 为空")
-		}
-		if round < 3 {
-			if err := sleepAuthContext(ctx, time.Duration(600*round)*time.Millisecond); err != nil {
-				return "", err
-			}
+	if u.Path == "/ycloud/auth-service/auth/tyrzLogin" {
+		for key, value := range a.h5LoginHeaders(ctx, ssoToken) {
+			headers[key] = value
 		}
 	}
-
-	if lastErr == nil {
-		lastErr = fmt.Errorf("多候选重试后仍失败")
+	body := map[string]interface{}{
+		"token": ssoToken, "openAccount": 0, "marketName": "sign_in_3", "sourceId": "1097",
 	}
-	return "", lastErr
+
+	resp, err := a.client.PostWithContext(ctx, endpoint, headers, body)
+	if err != nil {
+		return "", err
+	}
+	respBody, readErr := a.client.ReadResponseBody(resp)
+	if readErr != nil {
+		return "", readErr
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", fmt.Errorf("HTTP %d", resp.StatusCode)
+	}
+	var result TyrzLoginResp
+	if err := json.Unmarshal([]byte(respBody), &result); err != nil {
+		return "", fmt.Errorf("解析响应失败: %w", err)
+	}
+	if result.Code != nil && *result.Code == 0 && result.Result.Token != "" {
+		return result.Result.Token, nil
+	}
+	if result.Code != nil && *result.Code != 0 {
+		message := strings.TrimSpace(result.Msg)
+		if message == "" {
+			message = strings.TrimSpace(result.Message)
+		}
+		return "", &GatewayLoginError{Gateway: u.Hostname(), Code: *result.Code, Message: message}
+	}
+	return "", fmt.Errorf("JWT token 为空")
+}
+
+// TyrzLoginGP 用独立 ssoToken 换取 gp 域 JWT（gp.mcloud.139.com auth-service）。
+// 2026-11-03 起 JWT 按网关分域：gp 宿主（signin/shake/bill/luckybag）只认 gp 票。
+// ★ ssoToken 单次消费 —— 必须用新取的 sso，不能复用 m 流程已消费的那枚。
+func (a *Auth) TyrzLoginGP(ssoToken string) (string, error) {
+	return a.TyrzLoginGPContext(context.Background(), ssoToken)
+}
+
+func (a *Auth) TyrzLoginGPContext(ctx context.Context, ssoToken string) (string, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	ssoToken = strings.TrimSpace(ssoToken)
+	if ssoToken == "" {
+		return "", fmt.Errorf("ssoToken 为空")
+	}
+	// A ticket is single-use. Any retry must obtain a new ticket through
+	// GetGPJWTTokenContext instead of replaying this login with a consumed one.
+	return a.tyrzLoginAttempt(ctx, "https://gp.mcloud.139.com/ycloud/auth-service/auth/tyrzLogin", ssoToken)
 }
 
 func sleepAuthContext(ctx context.Context, delay time.Duration) error {

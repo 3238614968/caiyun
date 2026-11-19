@@ -2,6 +2,7 @@ package tasks
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"caiyun/internal/core/api"
@@ -26,6 +27,18 @@ func NewCloudMultipleTask(client *http.Client, log *logger.Logger) *CloudMultipl
 
 func (t *CloudMultipleTask) Run() error {
 	t.pending = false
+	// 只有查询成功且两个资格标记均有效时才跳过；状态未知时保留领取兜底。
+	if info, infoErr := t.api.CloudPendingInfo(); infoErr == nil && responseCodeIs(info, 0) {
+		if result, ok := info.Result.(map[string]interface{}); ok {
+			backup, backupErr := strconv.ParseBool(fmt.Sprint(result["curMonthBackup"]))
+			claimed, claimedErr := strconv.ParseBool(fmt.Sprint(result["curMonthBackupSignAccept"]))
+			if backupErr == nil && claimedErr == nil && (!backup || claimed) {
+				t.lastMessage = "签到翻倍跳过：本月未备份或已领取翻倍"
+				t.logger.Info(t.lastMessage)
+				return nil
+			}
+		}
+	}
 	resp, err := t.api.CloudMultiple()
 	if err != nil {
 		t.logger.Error("云朵翻倍失败", err)

@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
+
+	http "caiyun/internal/core/http"
 )
 
 func (api *CaiyunAPI) GetCloudRecord(pageNumber, pageSize, recordType int) (*CaiyunResponse, error) {
@@ -20,6 +22,9 @@ func (api *CaiyunAPI) GetCloudRecord(pageNumber, pageSize, recordType int) (*Cai
 	body, err := api.client.ReadResponseBody(resp)
 	if err != nil {
 		return nil, err
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("云朵流水 HTTP %d", resp.StatusCode)
 	}
 
 	var result CaiyunResponse
@@ -114,10 +119,10 @@ func (api *CaiyunAPI) GetTaskExpansion() (*CaiyunResponse, error) {
 func (api *CaiyunAPI) ReceiveTaskExpansion(acceptDate string) (*CaiyunResponse, error) {
 	api.prepareSignInCenterSession(true)
 
-	resp, err := api.client.Get(
-		fmt.Sprintf("%s/signin/page/receiveTaskExpansion?acceptDate=%s",
+	resp, err := api.client.RequestWithOptions(
+		"GET", fmt.Sprintf("%s/signin/page/receiveTaskExpansion?acceptDate=%s",
 			MobileMarketURL, url.QueryEscape(acceptDate)),
-		api.buildReceiveHeaders(""),
+		api.buildReceiveHeaders(""), nil, http.WithoutRetries(),
 	)
 	if err != nil {
 		return nil, err

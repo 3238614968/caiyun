@@ -84,7 +84,11 @@ func (r *TaskRunner) runFamilyCircleTask() *TaskResult {
 	task := tasks.NewFamilyCircleTask(r.httpClient, r.logger)
 	task.SetAccountPhone(r.account.Phone)
 	err := task.Run()
-	return activityTaskResult("family_circle", startTime, err, task.Message(), "家庭圈任务状态已查询")
+	result := activityTaskResult("family_circle", startTime, err, task.Message(), "家庭圈任务状态已查询")
+	if err == nil && task.Pending() {
+		result.Status = "pending"
+	}
+	return result
 }
 
 // runAIStoreTask 探测 AI Store 授权并在配置时保存作品。
@@ -93,7 +97,11 @@ func (r *TaskRunner) runAIStoreTask() *TaskResult {
 	task := tasks.NewAIStoreTask(r.httpClient, r.logger)
 	task.SetAccountPhone(r.account.Phone)
 	err := task.Run()
-	return activityTaskResult("ai_store", startTime, err, task.Message(), "AI Store 任务执行完成")
+	result := activityTaskResult("ai_store", startTime, err, task.Message(), "AI Store 任务已检查")
+	if err == nil && task.Pending() {
+		result.Status = "pending"
+	}
+	return result
 }
 
 // runAlbumBackupReportTask 查询相册备份状态，并在配置了真实开关值时上报。

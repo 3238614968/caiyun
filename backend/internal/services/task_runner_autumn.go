@@ -1,6 +1,7 @@
 package services
 
 import (
+	"caiyun/internal/core/auth"
 	"caiyun/internal/core/tasks"
 	"time"
 )
@@ -22,7 +23,12 @@ func autumnTaskDefinitions() []TaskDefinition {
 }
 func (r *TaskRunner) runAutumnTask(code string) *TaskResult {
 	started := time.Now()
-	task := tasks.NewAutumnTask(r.httpClient, code)
+	if code == "annual_bill" || code == "luckybag" {
+		if blocked := r.gpAuthenticationResult(code, started); blocked != nil {
+			return blocked
+		}
+	}
+	task := tasks.NewAutumnTask(r.httpClient, code).SetStorage(r.storage)
 	if r.account != nil {
 		task.SetAccountPhone(r.account.Phone)
 	}
@@ -35,6 +41,9 @@ func (r *TaskRunner) runAutumnTask(code string) *TaskResult {
 }
 func (r *TaskRunner) runGPTaskList() *TaskResult {
 	started := time.Now()
+	if blocked := r.gpAuthenticationResult("tasklist_gp", started); blocked != nil {
+		return blocked
+	}
 	task := tasks.NewGPTaskListTask(r.httpClient, r.logger).SetStorage(r.storage)
 	if r.account != nil {
 		task.SetAccountContext(r.account.Phone, r.getRawAccountToken())
@@ -45,4 +54,16 @@ func (r *TaskRunner) runGPTaskList() *TaskResult {
 		result.Status = "pending"
 	}
 	return result
+}
+
+func (r *TaskRunner) gpAuthenticationResult(code string, started time.Time) *TaskResult {
+	if r.gpAuthErr == nil {
+		return nil
+	}
+	if auth.GPAccountRequiresActivation(r.gpAuthErr) {
+		result := activityTaskResult(code, started, nil, "GP 活动账号尚未启用（9430）：请在移动云盘 App 打开一次国补/欢澄活动页后重试；当前未执行 GP 任务", "")
+		result.Status = "pending"
+		return result
+	}
+	return activityTaskResult(code, started, r.gpAuthErr, "", "")
 }

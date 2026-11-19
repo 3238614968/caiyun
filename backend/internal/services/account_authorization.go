@@ -112,12 +112,14 @@ func (s *AccountService) RefreshTokenContext(ctx context.Context, account *model
 	}
 
 	if refreshed.SSOToken != "" {
-		if token, err := authForAccount.TyrzLoginContext(ctx, refreshed.SSOToken); err == nil && token != "" {
-			jwtToken = token
+		token, jwtErr := authForAccount.TyrzLoginContext(ctx, refreshed.SSOToken)
+		if jwtErr != nil || token == "" {
+			if jwtErr == nil {
+				jwtErr = fmt.Errorf("JWT token 为空")
+			}
+			return fmt.Errorf("凭据已轮换但 JWT 重取失败: %w", jwtErr)
 		}
-		if err := ctx.Err(); err != nil {
-			return err
-		}
+		jwtToken = token
 	}
 	applyAuthorizationRefreshToAccount(account, refreshed, jwtToken)
 	account.JWTToken = jwtToken

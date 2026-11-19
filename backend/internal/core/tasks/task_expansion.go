@@ -28,8 +28,7 @@ func (t *TaskExpansionRewardTask) Run() error {
 	if t == nil || t.base == nil {
 		return nil
 	}
-	t.base.receiveTaskExpansion()
-	return nil
+	return t.base.receiveTaskExpansion()
 }
 
 func (t *TaskExpansionRewardTask) Pending() bool {

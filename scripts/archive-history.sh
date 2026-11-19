@@ -38,8 +38,10 @@ archive_table() {
     # Copy and deletion are one transaction.  A duplicate destination ID is
     # an explicit error that rolls the transaction back; INSERT IGNORE would
     # otherwise permit a later DELETE to silently discard source history.
+    # Explicitly lock the source even at READ COMMITTED, matching the Worker
+    # archiver and user erasure's live-before-archive lock order.
     local deleted
-    deleted="$(run_sql "START TRANSACTION; INSERT INTO ${archive_table} SELECT * FROM ${source_table} WHERE id IN (SELECT id FROM (SELECT id FROM ${source_table} WHERE created_at < ${cutoff_expr} ORDER BY id LIMIT ${ARCHIVE_BATCH_SIZE}) AS picked); DELETE FROM ${source_table} WHERE id IN (SELECT id FROM (SELECT id FROM ${source_table} WHERE created_at < ${cutoff_expr} ORDER BY id LIMIT ${ARCHIVE_BATCH_SIZE}) AS picked); SELECT ROW_COUNT(); COMMIT;")"
+    deleted="$(run_sql "START TRANSACTION; INSERT INTO ${archive_table} SELECT * FROM ${source_table} WHERE id IN (SELECT id FROM (SELECT id FROM ${source_table} WHERE created_at < ${cutoff_expr} ORDER BY id LIMIT ${ARCHIVE_BATCH_SIZE}) AS picked) FOR UPDATE; DELETE FROM ${source_table} WHERE id IN (SELECT id FROM (SELECT id FROM ${source_table} WHERE created_at < ${cutoff_expr} ORDER BY id LIMIT ${ARCHIVE_BATCH_SIZE}) AS picked); SELECT ROW_COUNT(); COMMIT;")"
     deleted="${deleted//[[:space:]]/}"
     if [[ -z "${deleted}" || ! "${deleted}" =~ ^[0-9]+$ ]]; then
       echo "[archive] ${source_table}: invalid moved row count: ${deleted:-<empty>}" >&2

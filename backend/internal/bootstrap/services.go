@@ -67,6 +67,7 @@ func InitSharedServices(core *Core, eventHubs ...*ws.Hub) (*SharedServices, erro
 		eventHub,
 	)
 	exchangeService.SetLockStore(core.Redis)
+	exchangeService.SetReceiptRepository(core.Repository.ExchangeReceipt)
 	operationService := services.NewOperationService(repos.Operation, taskQueue)
 
 	return &SharedServices{

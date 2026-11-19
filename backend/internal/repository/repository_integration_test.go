@@ -9,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
-	"strings"
 	"testing"
 	"time"
 
@@ -111,6 +110,10 @@ func TestAccountMailPeersStayWithinOwnerAndReenableResetsFailureCount(t *testing
 			t.Fatal(err)
 		}
 	}
+	// GORM applies the model's default:true during Create for a zero bool.
+	if err := db.Model(accounts[2]).Update("is_active", false).Error; err != nil {
+		t.Fatal(err)
+	}
 	peers, err := repo.ListActiveMailPeers(1, accounts[0].ID)
 	if err != nil {
 		t.Fatal(err)
@@ -196,6 +199,129 @@ func TestSystemConfigRepositoryBatchUpdateAndCanceledContext(t *testing.T) {
 	}
 }
 
+func TestExchangeReceiptSubmissionAndFinalizeAreIdempotent(t *testing.T) {
+	db := newRepositoryTestDB(t, &ExchangeExecutionReceipt{}, &models.ExchangeRecord{})
+	if err := db.Create(&models.Operation{ID: "operation-1", UserID: 8, OperationType: models.OperationTypeExchangeMonthly,
+		Status: models.OperationRunning, Payload: "{}", IdempotencyKey: "receipt-test", QueuedAt: time.Now()}).Error; err != nil {
+		t.Fatal(err)
+	}
+	repo := NewExchangeReceiptRepository(db)
+	receipt := &ExchangeExecutionReceipt{OperationID: "operation-1", ResourceID: 7, ResourceKind: "exchange_account", UserID: 8, ProductID: 9}
+	if err := repo.StartSubmission(receipt); err != nil {
+		t.Fatal(err)
+	}
+	if receipt.Outcome != string(models.ExchangeOutcomeUnknown) || receipt.ID == 0 {
+		t.Fatalf("submission receipt = %+v", receipt)
+	}
+	if err := repo.StartSubmission(receipt); err == nil {
+		t.Fatal("same submitted receipt was claimed again")
+	}
+	receipt.Message = "accepted"
+	receipt.Outcome = string(models.ExchangeOutcomeAccepted)
+	now := time.Now()
+	receipt.CompletedAt = &now
+	record := &models.ExchangeRecord{UserID: 8, ExchangeAccountID: 7, ProductID: 9, PrizeID: "p", PrizeName: "p", Status: "success", Outcome: receipt.Outcome}
+	if err := repo.Finalize(receipt, record); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.Finalize(receipt, record); err == nil {
+		t.Fatal("completed receipt inserted a second record")
+	}
+	var count int64
+	if err := db.Model(&models.ExchangeRecord{}).Count(&count).Error; err != nil || count != 1 {
+		t.Fatalf("record count = %d err=%v", count, err)
+	}
+}
+
+func TestSeparateMonthlyOperationsKeepSeparateUnknownRecords(t *testing.T) {
+	db := newRepositoryTestDB(t, &ExchangeExecutionReceipt{}, &models.ExchangeRecord{})
+	repo := NewExchangeReceiptRepository(db)
+	for _, operationID := range []string{"monthly-one", "monthly-two"} {
+		if err := db.Create(&models.Operation{ID: operationID, OperationType: models.OperationTypeExchangeMonthly, IdempotencyKey: operationID}).Error; err != nil {
+			t.Fatal(err)
+		}
+		receipt := &ExchangeExecutionReceipt{OperationID: operationID, UserID: 8, ResourceID: 7, ResourceKind: "exchange_account"}
+		if err := repo.StartSubmission(receipt); err != nil {
+			t.Fatal(err)
+		}
+		record := &models.ExchangeRecord{UserID: receipt.UserID, ExchangeAccountID: receipt.ResourceID, PrizeID: "monthly", Outcome: receipt.Outcome, Status: "failed", Message: operationID}
+		if err := repo.Finalize(receipt, record); err != nil {
+			t.Fatal(err)
+		}
+		if err := repo.Finalize(receipt, record); err == nil {
+			t.Fatal("finalized the same receipt twice")
+		}
+	}
+	var records []models.ExchangeRecord
+	if err := db.Order("id").Find(&records).Error; err != nil || len(records) != 2 || records[0].Message != "monthly-one" || records[1].Message != "monthly-two" {
+		t.Fatalf("distinct operations lost their history: %+v err=%v", records, err)
+	}
+}
+
+func TestProductSyncDoesNotRewriteSubmittedRunningTask(t *testing.T) {
+	db := newRepositoryTestDB(t, &models.ExchangeTask{}, &models.ExchangeRecord{})
+	task := &models.ExchangeTask{UserID: 7, ExchangeAccountID: 8, ProductID: 9, PrizeID: "old", PrizeName: "removed", Status: string(models.ExchangeTaskRunning), ExecutionToken: "owner", Outcome: string(models.ExchangeOutcomeUnknown)}
+	if err := db.Create(task).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Model(&models.ExchangeTask{}).Where("id = ? AND status = ?", task.ID, models.ExchangeTaskPending).Updates(map[string]interface{}{"status": models.ExchangeTaskCompleted}).Error; err != nil {
+		t.Fatal(err)
+	}
+	var current models.ExchangeTask
+	if err := db.First(&current, task.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if current.Status != string(models.ExchangeTaskRunning) || current.Outcome != string(models.ExchangeOutcomeUnknown) || current.ExecutionToken != "owner" {
+		t.Fatalf("submitted task was overwritten: %+v", current)
+	}
+}
+
+func TestExchangeTaskSubmissionRecoveryPreservesUnknownResult(t *testing.T) {
+	db := newRepositoryTestDB(t, &models.ExchangeTask{}, &models.ExchangeRecord{}, &models.SystemConfig{})
+	repo := NewExchangeTaskRepository(db)
+	task := &models.ExchangeTask{UserID: 7, ExchangeAccountID: 8, ProductID: 9, PrizeID: "submitted", PrizeName: "submitted", Status: string(models.ExchangeTaskPending)}
+	if err := db.Create(task).Error; err != nil {
+		t.Fatal(err)
+	}
+	claimed, token, err := repo.TryMarkRunning(task.ID)
+	if err != nil || !claimed {
+		t.Fatalf("claim task: %t %v", claimed, err)
+	}
+	if err := repo.MarkSubmissionOwned(task.ID, token); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.MarkSubmissionOwned(task.ID, token); !errors.Is(err, ErrExchangeTaskExecutionLost) {
+		t.Fatalf("second submission was allowed: %v", err)
+	}
+	if released, err := repo.ReleaseRunning(task.ID, token, "must not release"); err != nil || released {
+		t.Fatalf("submitted task released: %t %v", released, err)
+	}
+	if err := db.Model(task).Update("updated_at", time.Now().Add(-2*time.Hour)).Error; err != nil {
+		t.Fatal(err)
+	}
+	result, err := repo.RecoverStaleRunningWithResults(time.Hour)
+	if err != nil || result.Resumed != 0 || len(result.Unknown) != 1 {
+		t.Fatalf("recovery = %+v %v", result, err)
+	}
+	var current models.ExchangeTask
+	if err := db.First(&current, task.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if current.Status != string(models.ExchangeTaskFailed) || current.Outcome != string(models.ExchangeOutcomeUnknown) || current.ExecutionToken != "" || current.AttemptedCount != 1 || current.FailCount != 1 {
+		t.Fatalf("unknown recovery = %+v", current)
+	}
+	var records []models.ExchangeRecord
+	if err := db.Find(&records).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 1 || records[0].Outcome != string(models.ExchangeOutcomeUnknown) || records[0].Status != string(models.ExchangeRecordFailed) {
+		t.Fatalf("unknown records = %+v", records)
+	}
+	if claimed, _, err := repo.TryMarkRunning(task.ID); err != nil || claimed {
+		t.Fatalf("unknown was reclaimed: %t %v", claimed, err)
+	}
+}
+
 func TestExchangeTaskRepositoryRunningStateMigration(t *testing.T) {
 	db := newRepositoryTestDB(t, &models.ExchangeTask{})
 	repo := NewExchangeTaskRepository(db)
@@ -239,21 +365,21 @@ func TestExchangeTaskRepositoryRunningStateMigration(t *testing.T) {
 }
 
 func TestExchangeTaskRepositoryManualRetryFencesOldOwnerAndPreservesHistory(t *testing.T) {
-	db := newRepositoryTestDB(t, &models.ExchangeTask{}, &models.ExchangeRecord{})
+	db := newRepositoryTestDB(t, &models.ExchangeTask{}, &models.ExchangeRecord{}, &models.SystemConfig{})
 	repo := NewExchangeTaskRepository(db)
 	task := &models.ExchangeTask{
 		UserID: 7, ExchangeAccountID: 8, ProductID: 9, PrizeID: "manual-retry-prize", PrizeName: "manual retry",
 		Status: "failed", LastResult: "活动异常 Error Code：GK", RetryCount: 3, AttemptedCount: 4, FailCount: 4,
 	}
 	mustCreateRecords(t, db, task)
-	if claimed, _, err := repo.TryMarkForManualExecution(task.ID, 8, "failed", task.UpdatedAt); err != nil || claimed {
+	if claimed, _, err := repo.TryMarkForManualExecution(task.ID, 8, "failed", task.UpdatedAt, ""); err != nil || claimed {
 		t.Fatalf("wrong owner claimed task: %t %v", claimed, err)
 	}
-	claimed, token, err := repo.TryMarkForManualExecution(task.ID, 7, "failed", task.UpdatedAt)
+	claimed, token, err := repo.TryMarkForManualExecution(task.ID, 7, "failed", task.UpdatedAt, "")
 	if err != nil || !claimed || token == "" {
 		t.Fatalf("failed task retry = %t %q %v", claimed, token, err)
 	}
-	if duplicate, _, err := repo.TryMarkForManualExecution(task.ID, 7, "failed", task.UpdatedAt); err != nil || duplicate {
+	if duplicate, _, err := repo.TryMarkForManualExecution(task.ID, 7, "failed", task.UpdatedAt, ""); err != nil || duplicate {
 		t.Fatalf("duplicate request reclaimed task: %t %v", duplicate, err)
 	}
 	var current models.ExchangeTask
@@ -263,10 +389,13 @@ func TestExchangeTaskRepositoryManualRetryFencesOldOwnerAndPreservesHistory(t *t
 	if current.RetryCount != 0 || current.LastResult != "" || current.AttemptedCount != 4 || current.FailCount != 4 {
 		t.Fatalf("retry reset erased history or retained stale failure: %+v", current)
 	}
-	if err := repo.FinalizeOwned(task, "old-execution-token", false, "stale result", models.ExchangeTaskFailed, 0); !errors.Is(err, ErrExchangeTaskExecutionLost) {
+	if err := repo.MarkSubmissionOwned(task.ID, token); err != nil {
+		t.Fatalf("mark manual submission: %v", err)
+	}
+	if err := repo.FinalizeOwned(task, "old-execution-token", ExchangeSettlement{Outcome: models.ExchangeOutcomeRejected, Message: "stale result", Status: models.ExchangeTaskFailed}); !errors.Is(err, ErrExchangeTaskExecutionLost) {
 		t.Fatalf("stale owner finalized retried task: %v", err)
 	}
-	if err := repo.FinalizeOwned(task, token, true, "retry success", models.ExchangeTaskCompleted, 10); err != nil {
+	if err := repo.FinalizeOwned(task, token, ExchangeSettlement{Outcome: models.ExchangeOutcomeAccepted, Message: "retry success", Status: models.ExchangeTaskCompleted, ExecutionTimeMs: 10}); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.First(&current, task.ID).Error; err != nil || current.Status != "completed" || current.AttemptedCount != 5 || current.FailCount != 4 || current.SuccessCount != 1 {
@@ -275,7 +404,7 @@ func TestExchangeTaskRepositoryManualRetryFencesOldOwnerAndPreservesHistory(t *t
 }
 
 func TestExchangeTaskRepositoryFencingTokenRejectsStaleWorker(t *testing.T) {
-	db := newRepositoryTestDB(t, &models.ExchangeTask{}, &models.ExchangeRecord{})
+	db := newRepositoryTestDB(t, &models.ExchangeTask{}, &models.ExchangeRecord{}, &models.SystemConfig{})
 	repo := NewExchangeTaskRepository(db)
 	task := &models.ExchangeTask{
 		UserID:            7,
@@ -301,7 +430,7 @@ func TestExchangeTaskRepositoryFencingTokenRejectsStaleWorker(t *testing.T) {
 		t.Fatalf("second claim = (%t, %q, %v)", claimed, newToken, err)
 	}
 
-	if err := repo.FinalizeOwned(task, oldToken, false, "stale failure", models.ExchangeTaskFailed, 0); !errors.Is(err, ErrExchangeTaskExecutionLost) {
+	if err := repo.FinalizeOwned(task, oldToken, ExchangeSettlement{Outcome: models.ExchangeOutcomeRejected, Message: "stale failure", Status: models.ExchangeTaskFailed}); !errors.Is(err, ErrExchangeTaskExecutionLost) {
 		t.Fatalf("stale finalize error = %v, want ErrExchangeTaskExecutionLost", err)
 	}
 	var current models.ExchangeTask
@@ -316,7 +445,10 @@ func TestExchangeTaskRepositoryFencingTokenRejectsStaleWorker(t *testing.T) {
 		t.Fatalf("records after stale finalize = %d, err=%v; want 0", recordCount, err)
 	}
 
-	if err := repo.FinalizeOwned(task, newToken, true, "success", models.ExchangeTaskCompleted, 12); err != nil {
+	if err := repo.MarkSubmissionOwned(task.ID, newToken); err != nil {
+		t.Fatalf("mark second submission: %v", err)
+	}
+	if err := repo.FinalizeOwned(task, newToken, ExchangeSettlement{Outcome: models.ExchangeOutcomeAccepted, Message: "success", Status: models.ExchangeTaskCompleted, ExecutionTimeMs: 12}); err != nil {
 		t.Fatalf("new owner finalize: %v", err)
 	}
 	if err := db.First(&current, task.ID).Error; err != nil {
@@ -819,15 +951,25 @@ func TestCloudStatsRepositoryUpsertUsesAccountDateUniqueness(t *testing.T) {
 }
 
 func TestCloudStatsRepositoryUsesLatestSnapshotAndAggregateTimestamps(t *testing.T) {
-	db := newRepositoryTestDB(t, &models.CloudStats{})
+	db := newRepositoryTestDB(t, &models.Account{}, &models.CloudStats{})
 	repo := NewCloudStatsRepository(db)
-	today := time.Now().In(cstZone).Format("2006-01-02")
-	yesterday := time.Now().In(cstZone).AddDate(0, 0, -1).Format("2006-01-02")
+	accounts := []*models.Account{
+		{UserID: 1, Phone: "13800000001"},
+		{UserID: 1, Phone: "13800000002"},
+	}
+	for _, account := range accounts {
+		if err := db.Create(account).Error; err != nil {
+			t.Fatalf("create account: %v", err)
+		}
+	}
+	now := time.Now().In(cstZone)
+	today := now.Format("2006-01-02")
+	yesterday := now.AddDate(0, 0, -1).Format("2006-01-02")
 	rows := []*models.CloudStats{
-		{UserID: 1, AccountID: 1, Date: yesterday, CloudCount: 100},
-		{UserID: 1, AccountID: 2, Date: yesterday, CloudCount: 200},
-		{UserID: 1, AccountID: 1, Date: today, CloudCount: 300},
-		{UserID: 1, AccountID: 2, Date: today, CloudCount: 400},
+		{UserID: 1, AccountID: accounts[0].ID, Date: yesterday, CloudCount: 100},
+		{UserID: 1, AccountID: accounts[1].ID, Date: yesterday, CloudCount: 200},
+		{UserID: 1, AccountID: accounts[0].ID, Date: today, CloudCount: 300},
+		{UserID: 1, AccountID: accounts[1].ID, Date: today, CloudCount: 400},
 	}
 	for _, row := range rows {
 		if err := db.Create(row).Error; err != nil {

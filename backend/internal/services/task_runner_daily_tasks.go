@@ -20,7 +20,7 @@ func (r *TaskRunner) runWeChatTask() *TaskResult {
 	startTime := time.Now()
 	task := tasks.NewWeChatTask(r.httpClient, r.logger)
 	err := task.RunSignIn()
-	return taskResultFromErr("wechat", startTime, err, "微信任务执行成功")
+	return wechatTaskResult("wechat", startTime, task, err)
 }
 
 // runWxDrawTask 执行微信抽奖任务
@@ -30,7 +30,19 @@ func (r *TaskRunner) runWxDrawTask() *TaskResult {
 	drawTimes := readTaskEnvInt("CAIYUN_TASK_WXDRAW_TIMES", 1)
 	drawDelayMs := readTaskEnvInt("CAIYUN_TASK_WXDRAW_DELAY_MS", 500)
 	err := task.RunDrawWithInterval(drawTimes, time.Duration(drawDelayMs)*time.Millisecond)
-	return taskResultFromErr("wxdraw", startTime, err, "微信抽奖执行成功")
+	return wechatTaskResult("wxdraw", startTime, task, err)
+}
+
+func wechatTaskResult(code string, started time.Time, task *tasks.WeChatTask, err error) *TaskResult {
+	result := activityTaskResult(code, started, err, task.Message(), "微信任务已检查")
+	if err == nil {
+		if task.Skipped() {
+			result.Status = "skipped"
+		} else if task.Pending() {
+			result.Status = "pending"
+		}
+	}
+	return result
 }
 
 // runShakeTask 执行摇一摇任务
@@ -60,8 +72,11 @@ func (r *TaskRunner) runTodayCloudTask() *TaskResult {
 		result.Message = err.Error()
 	} else {
 		result.Status = "success"
-		result.CloudGained = task.TotalCloud()
-		result.Message = fmt.Sprintf("今日获得%d次云朵，数量共计：%d", task.TodayCount(), task.TotalCloud())
+		result.Message = fmt.Sprintf("今日获得%d次云朵，累计%d（仅统计，不重复计入本次收益）", task.TodayCount(), task.TotalCloud())
+		if task.Pending() {
+			result.Status = "pending"
+			result.Message += "；部分流水无效或分页未读取完整"
+		}
 	}
 
 	return result

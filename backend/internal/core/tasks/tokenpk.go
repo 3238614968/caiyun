@@ -173,6 +173,7 @@ func (t *TokenPKTask) Run() error {
 		}
 		t.logger.Debug(fmt.Sprintf("自动领取抽奖次数失败: %v", chanceErr))
 	}
+	lotteryDraws, lotteryWins := t.drawTokenPKLottery()
 
 	month := time.Now().In(time.FixedZone("CST", 8*3600)).Format("200601")
 	if rank, err := t.api.TokenPKRank(month); err != nil {
@@ -190,6 +191,9 @@ func (t *TokenPKTask) Run() error {
 	}
 	if chanceReward > 0 {
 		parts = append(parts, fmt.Sprintf("抽奖次数+%d", chanceReward))
+	}
+	if lotteryDraws > 0 {
+		parts = append(parts, fmt.Sprintf("榜单抽奖%d次、中奖%d次", lotteryDraws, lotteryWins))
 	}
 	if usedToken > 0 {
 		parts = append(parts, fmt.Sprintf("累计算力%s", formatTokenCount(usedToken)))
@@ -215,6 +219,34 @@ func (t *TokenPKTask) Run() error {
 	}
 	t.logger.Success("算力大作战: " + t.lastMessage)
 	return nil
+}
+
+// tokenPKLotteryBatchLimit 单轮榜单抽奖的防御上限，避免服务端次数异常时
+// 无限循环；正常账号每日达标产生的次数远低于该值。
+const tokenPKLotteryBatchLimit = 20
+
+// drawTokenPKLottery 消费榜单抽奖次数：先查询剩余次数，再循环抽奖
+// （单轮至多 min(次数, 20) 次）。中奖写日志；查询/抽奖失败只记 Debug，
+// 不中断任务主流程（次数留待下轮）。
+func (t *TokenPKTask) drawTokenPKLottery() (draws, wins int) {
+	remain, err := t.api.TokenPKQueryRemainChance()
+	if err != nil {
+		t.logger.Debug(fmt.Sprintf("查询榜单抽奖次数失败: %v", err))
+		return 0, 0
+	}
+	for draws < min(remain, tokenPKLotteryBatchLimit) {
+		result, err := t.api.TokenPKLottery()
+		if err != nil {
+			t.logger.Debug(fmt.Sprintf("榜单抽奖失败: %v", err))
+			break
+		}
+		draws++
+		if result.Win {
+			wins++
+			t.logger.Success(fmt.Sprintf("算力大作战榜单抽奖中奖: %s", result.PrizeName))
+		}
+	}
+	return draws, wins
 }
 
 func (t *TokenPKTask) receiveFinishedPrizes(attempted map[int]bool) (int, error) {

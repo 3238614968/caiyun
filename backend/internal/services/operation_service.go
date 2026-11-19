@@ -98,10 +98,28 @@ func (s *OperationService) SetMetrics(metrics *monitor.Metrics) {
 // separately because the operation remains durably queued and is still safe to
 // acknowledge with HTTP 202; callers should log it for operational visibility.
 func (s *OperationService) Submit(ctx context.Context, request SubmitOperationRequest) (operation *models.Operation, created bool, dispatchErr error, err error) {
+	return s.submit(ctx, request, false)
+}
+
+// SubmitScheduledMonthlyExchange is the trusted cron entry point. System
+// operations use user_id=0 (no user FK) and remain invisible to user queries.
+// Public Submit continues to require an authenticated, nonzero user ID.
+func (s *OperationService) SubmitScheduledMonthlyExchange(ctx context.Context, at time.Time) (*models.Operation, bool, error, error) {
+	if at.IsZero() {
+		at = time.Now()
+	}
+	return s.submit(ctx, SubmitOperationRequest{
+		OperationType:  models.OperationTypeExchangeMonthly,
+		Payload:        struct{}{},
+		IdempotencyKey: "cron:exchange.monthly:" + at.In(cstZone).Format("2006-01-02"),
+	}, true)
+}
+
+func (s *OperationService) submit(ctx context.Context, request SubmitOperationRequest, systemMonthly bool) (operation *models.Operation, created bool, dispatchErr error, err error) {
 	if s == nil || s.repo == nil || s.taskQueue == nil {
 		return nil, false, nil, errors.New("operation service is not configured")
 	}
-	if request.UserID == 0 {
+	if request.UserID == 0 && !(systemMonthly && request.OperationType == models.OperationTypeExchangeMonthly) {
 		return nil, false, nil, errors.New("operation user id is required")
 	}
 	request.OperationType = strings.TrimSpace(request.OperationType)
@@ -348,6 +366,10 @@ func (s *OperationService) enqueue(operation *models.Operation) error {
 func operationErrorSummary(err error) string {
 	if err == nil {
 		return ""
+	}
+	var batch *TaskBatchFailure
+	if errors.As(err, &batch) {
+		return taskBatchStoredSummary(batch)
 	}
 	summary := strings.TrimSpace(err.Error())
 	if len(summary) <= maxOperationErrorSummaryBytes {

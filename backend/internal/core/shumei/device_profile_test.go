@@ -15,7 +15,10 @@ import (
 
 func TestDeviceRegistrationKeepsTheActivityUserAgent(t *testing.T) {
 	const userAgent = "Mozilla/5.0 (Linux; Android 13; wv) MCloudApp/13.2.5"
-	const pageURL = "https://m.mcloud.139.com/portal/mobilecloud/index.html?path=newsignin&token=fixture-sso"
+	const pageURL = "https://m.mcloud.139.com/portal/mobilecloud/index.html?path=newsignin"
+	if got := deviceProfileFields(userAgent, "local-smid", 0)["url"]; got != pageURL {
+		t.Fatal("device profile must only contain the public page identifier")
+	}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var body deviceProfileRequest
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -28,7 +31,7 @@ func TestDeviceRegistrationKeepsTheActivityUserAgent(t *testing.T) {
 		_, _ = io.WriteString(w, `{"code":1100,"detail":{"deviceId":"fixture-device"}}`)
 	}))
 	defer server.Close()
-	id, err := FetchDeviceIDForPage(context.Background(), server.Client(), server.URL, userAgent, pageURL)
+	id, err := FetchDeviceIDWithUserAgent(context.Background(), server.Client(), server.URL, userAgent)
 	if err != nil || id != "Bfixture-device" {
 		t.Fatalf("device registration: %q %v", id, err)
 	}

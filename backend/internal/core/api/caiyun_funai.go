@@ -166,6 +166,30 @@ func (api *CaiyunAPI) FunaiLotteryForMarket(marketName, moduleID string) (*Funai
 	return &prize, nil
 }
 
+// FunaiZhangtingLottery 掌厅每日抽奖一次（不消耗模块 drawTimes）。
+// 抓包验证：page/zhangtingLottery {isZhangting:true,marketName:"National_playAI"}，
+// result 为 {isWin:0|1,prizeName}；每日限一次，由服务端约束。
+func (api *CaiyunAPI) FunaiZhangtingLottery() (*FunaiLotteryPrize, error) {
+	body, err := api.activityPostBody(FunAIMarketName, MobileMarketURL+"/funai/api/page/zhangtingLottery", map[string]interface{}{
+		"isZhangting": true,
+		"marketName":  FunAIMarketName,
+	})
+	if err != nil {
+		return nil, err
+	}
+	envelope, err := decodeActivityBody("趣玩AI掌厅抽奖", body)
+	if err != nil {
+		return nil, err
+	}
+	var prize FunaiLotteryPrize
+	if len(envelope.Result) > 0 {
+		if err := json.Unmarshal(envelope.Result, &prize); err != nil {
+			return nil, fmt.Errorf("解析趣玩AI掌厅抽奖结果失败: %w", err)
+		}
+	}
+	return &prize, nil
+}
+
 // FunaiInviteCode 生成趣玩AI 邀请码（result 是纯字符串）。
 func (api *CaiyunAPI) FunaiInviteCode() (string, error) {
 	body, err := api.activityGetBody(FunAIMarketName, MobileMarketURL+"/funai/api/invite/getcode")

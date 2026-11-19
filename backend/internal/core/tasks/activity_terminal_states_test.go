@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"caiyun/internal/core/api"
 	corehttp "caiyun/internal/core/http"
@@ -49,7 +50,25 @@ func TestActivityEndedClassification(t *testing.T) {
 	}
 }
 
+func TestPosterExpiredGuardSkipsWithoutRequests(t *testing.T) {
+	orig := activityNow
+	activityNow = func() time.Time { return time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC) }
+	t.Cleanup(func() { activityNow = orig })
+	client := corehttp.NewClient(corehttp.WithTransport(hiddenRewardRoundTrip(func(req *http.Request) (*http.Response, error) {
+		t.Fatalf("expired poster must not send requests: %s", req.URL)
+		return nil, nil
+	})))
+	task := NewPosterTask(client, logger.NewLogger(logger.LevelError))
+	if err := task.Run(); err != nil {
+		t.Fatalf("expired activity must not fail: %v", err)
+	}
+	if task.Pending() || !strings.Contains(task.Message(), "到期") {
+		t.Fatalf("pending=%v message=%s", task.Pending(), task.Message())
+	}
+}
+
 func TestPosterTaskSkipsEndedActivityWithoutFailing(t *testing.T) {
+	freezeActivityClock(t)
 	t.Setenv("CAIYUN_SHUMEI_DEVICE_ID", "fixture-device")
 	client := corehttp.NewClient(corehttp.WithTransport(hiddenRewardRoundTrip(func(req *http.Request) (*http.Response, error) {
 		switch req.URL.Path {

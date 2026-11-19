@@ -17,6 +17,15 @@ const (
 	cloudPhoneAppID   = "12345681"
 	cloudPhoneSalt    = "e10adc3949ba59abbe56e057f20f883e"
 	cloudPhoneOrigin  = "https://cpactiv.buy.139.com/#/redEnvelopeParty/home?loginType=0&channelSrc=red-mcloudapp-001&enableShare=1&isThrApp=true"
+
+	// cloud.139.com 新链（2026-11 实测旧链全会话 401 时的兜底）：
+	// 登录走 /uniphone 的 h5 签名（appId/salt 与 market 不同），
+	// market 业务路径兜底仍用 market 签名（两边 appId/salt 相同）。
+	cloud139Base          = "https://cloud.139.com"
+	cloudPhoneH5AppID     = "3099801"
+	cloudPhoneH5Salt      = "esdkabncgfsfkmlondn"
+	cloudPhoneH5ClientID  = "X3qUAu6hA1yO6CegzcMSrQJknuZ7aEs1"
+	cloudPhoneH5ClientKey = "AqXZ3iQtf713yN70ydXRZkCkxdeGo3jo"
 )
 
 type CloudPhoneTask struct {
@@ -63,10 +72,37 @@ func cloudPhoneHeaders(token string) map[string]string {
 	}
 }
 
-func (api *CaiyunAPI) cloudPhoneCall(token, path string, payload, target interface{}) error {
-	body, err := api.marketRawRequest("POST", cloudPhoneBase+path, payload, cloudPhoneHeaders(token))
+// cloud139Headers 是 cloud.139.com /uniphone 登录链的 h5 签名头。
+// sign 形状与 market 相同（md5(requestId+appId+token+salt+timestamp)），
+// 但 appId/salt 换成 h5 专用值；登录前 token 为空串。
+func cloud139Headers(token string) map[string]string {
+	now := time.Now()
+	ts := strconv.FormatInt(now.UnixMilli(), 10)
+	rid := now.In(time.FixedZone("CST", 8*3600)).Format("20060102150405") + ts + utils.RandomString(8)
+	return map[string]string{
+		"Content-Type": "application/json;charset=UTF-8", "Accept": "application/json, text/plain, */*",
+		"User-Agent": MarketUserAgent, "appId": cloudPhoneH5AppID, "requestId": rid, "timestamp": ts,
+		"sign": strings.ToLower(utils.MD5(rid + cloudPhoneH5AppID + token + cloudPhoneH5Salt + ts)), "token": token,
+		"platform": "h5", "x-channelSrc": "02040",
+		"x-kpcc-clientid": cloudPhoneH5ClientID, "x-kpcc-clientkey": cloudPhoneH5ClientKey,
+	}
+}
+
+// cloudPhoneAuthStatus 识别会话被拒的 401 族状态码（旧链实测全会话失效）。
+func cloudPhoneAuthStatus(status string) bool {
+	switch status {
+	case "401", "4001024", "4001025", "500022":
+		return true
+	}
+	return false
+}
+
+// cloudPhoneEnvelope 请求 base+path 并解析 {header:{status},data} 信封，
+// 返回业务 status 供调用方判断是否需要换链兜底。
+func (api *CaiyunAPI) cloudPhoneEnvelope(base, path string, payload interface{}, headers map[string]string, target interface{}) (string, error) {
+	body, err := api.marketRawRequest("POST", base+path, payload, headers)
 	if err != nil {
-		return err
+		return "", err
 	}
 	var envelope struct {
 		Header struct {
@@ -76,26 +112,33 @@ func (api *CaiyunAPI) cloudPhoneCall(token, path string, payload, target interfa
 		Data json.RawMessage `json:"data"`
 	}
 	if err := json.Unmarshal([]byte(body), &envelope); err != nil {
-		return fmt.Errorf("解析云手机响应失败: %w", err)
+		return "", fmt.Errorf("解析云手机响应失败: %w", err)
 	}
-	if envelope.Header.Status.String() != "200" {
-		return fmt.Errorf("云手机接口 %s: status=%s %s", path, envelope.Header.Status, envelope.Header.ErrMsg)
+	status := envelope.Header.Status.String()
+	if status != "200" {
+		return status, fmt.Errorf("云手机接口 %s: status=%s %s", path, status, envelope.Header.ErrMsg)
 	}
 	if len(envelope.Data) == 0 || string(envelope.Data) == "null" {
-		return fmt.Errorf("云手机接口 %s 缺少 data", path)
+		return status, fmt.Errorf("云手机接口 %s 缺少 data", path)
 	}
 	if err := json.Unmarshal(envelope.Data, target); err != nil {
-		return fmt.Errorf("解析云手机接口 %s 数据失败: %w", path, err)
+		return status, fmt.Errorf("解析云手机接口 %s 数据失败: %w", path, err)
 	}
-	return nil
+	return status, nil
 }
 
-// CloudPhoneLogin 必须重新换取云手机专属 SSO；云盘主 SSO 不能复用。
-func (api *CaiyunAPI) CloudPhoneLogin(phone string) (string, error) {
-	phone = strings.TrimSpace(phone)
-	if phone == "" {
-		return "", fmt.Errorf("云手机登录缺少手机号")
+func (api *CaiyunAPI) cloudPhoneCall(token, path string, payload, target interface{}) error {
+	status, err := api.cloudPhoneEnvelope(cloudPhoneBase, path, payload, cloudPhoneHeaders(token), target)
+	if err == nil || !cloudPhoneAuthStatus(status) {
+		return err
 	}
+	// 旧链会话被拒：market 签名 appId/salt 两边相同，同路径换 cloud.139.com 重试。
+	_, err = api.cloudPhoneEnvelope(cloud139Base+"/cloudphone-market", path, payload, cloudPhoneHeaders(token), target)
+	return err
+}
+
+// cloudPhoneSpecToken 换取云手机专属 SSO（toSourceId=001216，单次消费）。
+func (api *CaiyunAPI) cloudPhoneSpecToken(phone string) (string, error) {
 	body, err := api.marketRawRequest("POST",
 		"https://orches.yun.139.com/orchestration/auth-rebuild/token/v1.0/querySpecToken",
 		map[string]string{"account": phone, "toSourceId": cloudPhoneSource}, nil)
@@ -110,13 +153,42 @@ func (api *CaiyunAPI) CloudPhoneLogin(phone string) (string, error) {
 	if err := json.Unmarshal([]byte(body), &sso); err != nil || strings.TrimSpace(sso.Data.Token) == "" {
 		return "", fmt.Errorf("获取云手机专属 SSO 失败")
 	}
+	return sso.Data.Token, nil
+}
+
+// CloudPhoneLogin 必须重新换取云手机专属 SSO；云盘主 SSO 不能复用。
+// 旧链 tokenValidate 被拒（401 族）或未返回 token 时，SSO 已被单次消费，
+// 需重新 querySpecToken 并走 cloud.139.com/uniphone 的 h5 新链兜底。
+func (api *CaiyunAPI) CloudPhoneLogin(phone string) (string, error) {
+	phone = strings.TrimSpace(phone)
+	if phone == "" {
+		return "", fmt.Errorf("云手机登录缺少手机号")
+	}
+	sso, err := api.cloudPhoneSpecToken(phone)
+	if err != nil {
+		return "", err
+	}
 	var session struct {
 		Token string `json:"token"`
 	}
 	// deviceId/loginConfig 会切换到蜂窝取号登录，故请求体只含这三个键。
-	if err := api.cloudPhoneCall("", "/user/tokenValidate", map[string]interface{}{
-		"version": "1.0", "pintype": 13, "token": sso.Data.Token,
-	}, &session); err != nil {
+	status, err := api.cloudPhoneEnvelope(cloudPhoneBase, "/user/tokenValidate", map[string]interface{}{
+		"version": "1.0", "pintype": 13, "token": sso,
+	}, cloudPhoneHeaders(""), &session)
+	if err == nil && strings.TrimSpace(session.Token) != "" {
+		return session.Token, nil
+	}
+	if err != nil && !cloudPhoneAuthStatus(status) {
+		return "", err
+	}
+	fresh, err := api.cloudPhoneSpecToken(phone)
+	if err != nil {
+		return "", err
+	}
+	session.Token = ""
+	if _, err := api.cloudPhoneEnvelope(cloud139Base+"/uniphone", "/user/tokenValidate", map[string]interface{}{
+		"version": "1.2", "pintype": 5, "token": fresh,
+	}, cloud139Headers(""), &session); err != nil {
 		return "", err
 	}
 	if strings.TrimSpace(session.Token) == "" {

@@ -73,7 +73,7 @@ func TestJWTGatewayMigrationPreservesSignedContract(t *testing.T) {
 				} else {
 					token, err = NewAuth(corehttp.NewClient(corehttp.WithTransport(transport))).TyrzLogin("test-sso")
 				}
-				if err != nil || token != "new-jwt" || strings.Join(hosts, ",") != "m.mcloud.139.com,gp.mcloud.139.com" {
+				if err == nil || token != "" || strings.Join(hosts, ",") != "m.mcloud.139.com" {
 					t.Fatalf("token=%s hosts=%v err=%v", token, hosts, err)
 				}
 			})
@@ -108,6 +108,20 @@ func TestSpecTokenUsesOrchesAndStopsOnExpiredCredential(t *testing.T) {
 			t.Fatalf("result=%+v err=%v", result, err)
 		}
 	}
+	for _, expiredCode := range []string{"05050006", "1010010015"} {
+		t.Run(expiredCode, func(t *testing.T) {
+			calls := 0
+			client := corehttp.NewClient(corehttp.WithTransport(protocolTransport(func(r *http.Request) (*http.Response, error) {
+				calls++
+				return protocolResponse(r, 200, `{"success":false,"code":"`+expiredCode+`","message":"鉴权失效"}`), nil
+			})))
+			client.SetAuth("Basic fixture")
+			_, err := NewAuth(client).QuerySpecToken("13800000001")
+			if calls != 1 || !errors.Is(err, ErrCredentialExpired) || !strings.Contains(err.Error(), expiredCode) {
+				t.Fatalf("calls=%d err=%v", calls, err)
+			}
+		})
+	}
 }
 
 func TestBoundGatewayFallbackHonorsCancellation(t *testing.T) {
@@ -120,7 +134,7 @@ func TestBoundGatewayFallbackHonorsCancellation(t *testing.T) {
 		if strings.HasSuffix(r.URL.Path, "tyrzLogin") {
 			cancel()
 		}
-		return protocolResponse(r, 404, "not found"), nil
+		return nil, context.Canceled
 	})}
 	if _, err := LoginH5Session(ctx, client, "sso", "ua", "https://m.mcloud.139.com/"); !errors.Is(err, context.Canceled) {
 		t.Fatalf("err=%v", err)

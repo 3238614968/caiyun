@@ -197,6 +197,7 @@ func (s *ExchangeService) CreateExchangeTasks(userID uint, exchangeAccountIDs []
 		task, err := s.CreateExchangeTaskWithOptions(userID, id, productID, options)
 		item := CreateExchangeTaskItemResult{TargetType: "exchange_rule", TargetID: id}
 		if err != nil {
+			log.Printf("【抢兑创建失败】账号规则 %d: %v", id, err)
 			item.Success = false
 			item.Message = exchangeErrorPublicMessage(err)
 			result.Errors = append(result.Errors, fmt.Sprintf("账号规则 %d: %s", id, item.Message))
@@ -213,6 +214,9 @@ func (s *ExchangeService) CreateExchangeTasks(userID uint, exchangeAccountIDs []
 		task, err := s.CreateExchangeTaskByAccountIDWithOptions(userID, id, productID, options)
 		item := CreateExchangeTaskItemResult{TargetType: "cloud_account", TargetID: id}
 		if err != nil {
+			// 兜底文案会吞掉真实原因（如建规则/写库失败）；这里必须把原始错误
+			// 记入日志，否则线上只看到"创建失败，请稍后重试"无法排查。
+			log.Printf("【抢兑创建失败】云盘账号 %d: %v", id, err)
 			item.Success = false
 			item.Message = exchangeErrorPublicMessage(err)
 			result.Errors = append(result.Errors, fmt.Sprintf("云盘账号 %d: %s", id, item.Message))

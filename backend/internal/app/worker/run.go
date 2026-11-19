@@ -163,7 +163,10 @@ func Run(ctx context.Context, args []string) error {
 	}
 
 	// 添加自动兑换月卡定时任务
-	registerMonthlyExchangeJob(jobScheduler, exchangeService, repos.SystemConfig)
+	registerMonthlyExchangeJob(jobScheduler, operationService, repos.SystemConfig)
+
+	// 饭点、晚安各有独立定时，保留原有每日批次。
+	registerMiguWindowJobs(ctx, jobScheduler, repos.TaskConfig, repos.Account, operationService, core.Redis)
 
 	// 添加商品自动更新定时任务
 	registerAutoUpdateProductsJob(jobScheduler, exchangeService, repos.SystemConfig, repos.Account, core.Redis)

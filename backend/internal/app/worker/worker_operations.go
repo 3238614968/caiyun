@@ -210,6 +210,7 @@ func isTerminalOperationError(err error) bool {
 	return errors.Is(err, services.ErrExchangeTaskConflict) ||
 		errors.Is(err, services.ErrExchangeTaskAlreadyExists) ||
 		errors.Is(err, services.ErrExchangeMonthlyLimitReached) ||
+		errors.Is(err, services.ErrExchangeOutcomeUnknown) ||
 		errors.Is(err, services.ErrExchangeExecutionFailed) ||
 		errors.Is(err, services.ErrExchangeBatchPartialFailure) ||
 		errors.Is(err, services.ErrExchangeBatchFailed) ||
@@ -243,7 +244,7 @@ func (w *Worker) executeOperation(operation *models.Operation) error {
 		if err := w.requireAccountOwner(payload.AccountID, operation.UserID); err != nil {
 			return err
 		}
-		return w.ExecuteQueueAccountTask(payload.AccountID, payload.TaskType)
+		return w.executeQueueAccountTaskContext(services.WithTaskOperation(w.ctx, operation.ID, operation.AttemptCount), payload.AccountID, payload.TaskType)
 
 	case models.OperationTypeAccountTaskBatch:
 		var payload services.AccountTaskBatchOperationPayload
@@ -260,7 +261,7 @@ func (w *Worker) executeOperation(operation *models.Operation) error {
 			if err := w.requireAccountOwner(accountID, operation.UserID); err != nil {
 				return err
 			}
-			return w.ExecuteQueueAccountTask(accountID, "all_tasks")
+			return w.executeQueueAccountTaskContext(services.WithTaskOperation(w.ctx, operation.ID, operation.AttemptCount), accountID, "all_tasks")
 		})
 
 	case models.OperationTypeExchangeTask:
@@ -274,7 +275,7 @@ func (w *Worker) executeOperation(operation *models.Operation) error {
 		if payload.TaskID == 0 {
 			return errors.New("invalid exchange task payload")
 		}
-		return w.exchangeService.ExecuteExchangeTaskContext(w.ctx, payload.TaskID, operation.UserID)
+		return w.exchangeService.ExecuteExchangeTaskContext(services.WithTaskOperation(w.ctx, operation.ID, operation.AttemptCount), payload.TaskID, operation.UserID)
 
 	case models.OperationTypeExchangeTaskBatch:
 		if w.exchangeService == nil {
@@ -287,11 +288,14 @@ func (w *Worker) executeOperation(operation *models.Operation) error {
 		if len(payload.TaskIDs) == 0 || len(payload.TaskIDs) > 1000 {
 			return errors.New("invalid exchange task batch payload")
 		}
-		results := w.exchangeService.BatchExecuteExchangeTasksContext(w.ctx, payload.TaskIDs, operation.UserID)
+		results := w.exchangeService.BatchExecuteExchangeTasksContext(services.WithTaskOperation(w.ctx, operation.ID, operation.AttemptCount), payload.TaskIDs, operation.UserID)
 		succeeded := 0
 		failed := 0
 		failures := make([]string, 0, len(results))
 		for _, result := range results {
+			if result.Outcome == string(models.ExchangeOutcomeUnknown) {
+				return fmt.Errorf("%w: 批量抢兑存在结果待核对项，请核对领奖专区及兑换记录，暂勿重复兑换", services.ErrExchangeOutcomeUnknown)
+			}
 			if result.Success {
 				succeeded++
 				continue
@@ -327,7 +331,7 @@ func (w *Worker) executeOperation(operation *models.Operation) error {
 		if err := w.ctx.Err(); err != nil {
 			return err
 		}
-		return w.exchangeService.ExecuteMonthlyExchangeContext(w.ctx)
+		return w.exchangeService.ExecuteMonthlyExchangeContext(services.WithTaskOperation(w.ctx, operation.ID, operation.AttemptCount), operation.UserID == 0)
 
 	default:
 		return fmt.Errorf("unsupported operation type %q", operation.OperationType)
@@ -339,7 +343,7 @@ func (w *Worker) executeImmediateExchangeOperation(operation *models.Operation) 
 		return errors.New("exchange service is not configured")
 	}
 	if operation.ResourceID > 0 {
-		return w.exchangeService.ExecuteExchangeTaskContext(w.ctx, operation.ResourceID, operation.UserID)
+		return w.exchangeService.ExecuteExchangeTaskContext(services.WithTaskOperation(w.ctx, operation.ID, operation.AttemptCount), operation.ResourceID, operation.UserID)
 	}
 	var payload services.ImmediateExchangeOperationPayload
 	if err := decodeOperationPayload(operation, &payload); err != nil {
@@ -362,7 +366,7 @@ func (w *Worker) executeImmediateExchangeOperation(operation *models.Operation) 
 	if err := w.operationService.SetResourceID(w.ctx, operation.ID, operation.ExecutionToken, task.ID); err != nil {
 		return fmt.Errorf("link immediate exchange task: %w", err)
 	}
-	return w.exchangeService.ExecuteExchangeTaskContext(w.ctx, task.ID, operation.UserID)
+	return w.exchangeService.ExecuteExchangeTaskContext(services.WithTaskOperation(w.ctx, operation.ID, operation.AttemptCount), task.ID, operation.UserID)
 }
 
 func (w *Worker) requireAccountOwner(accountID, userID uint) error {

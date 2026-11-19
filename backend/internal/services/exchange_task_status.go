@@ -7,7 +7,16 @@ import (
 
 // exchangeTaskFinalStatus keeps a long-term task scheduled after a failed
 // slot, while preserving manual review for uncertain or invalid results.
-func exchangeTaskFinalStatus(task *models.ExchangeTask, success bool, message string, retriesUsed int) models.ExchangeTaskStatus {
+func exchangeTaskFinalStatus(task *models.ExchangeTask, result exchangeAttemptResult) models.ExchangeTaskStatus {
+	if result.outcome == models.ExchangeOutcomeUnknown {
+		return models.ExchangeTaskFailed
+	}
+	message := result.message
+	success := result.success
+	retriesUsed := 0
+	if task != nil {
+		retriesUsed = task.RetryCount
+	}
 	if !success {
 		if strings.Contains(message, "兑换结果待确认") || strings.Contains(message, "任务执行异常") {
 			return models.ExchangeTaskFailed

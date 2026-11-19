@@ -21,11 +21,12 @@ import (
 
 // TaskResult 任务执行结果
 type TaskResult struct {
-	TaskType      string // 任务类型: signin, wechat, shake等
-	Status        string // success, failed, pending
-	Message       string // 执行结果/错误信息
-	CloudGained   int    // 获得云朵数
-	ExecutionTime int    // 执行时长(毫秒)
+	TaskType        string // 任务类型: signin, wechat, shake等
+	Status          string // success, failed, pending
+	Message         string // 执行结果/错误信息
+	CloudGained     int    // 获得云朵数
+	MiguNotesGained int    // 已确认获得的咪咕AI音符，与云朵分开记录
+	ExecutionTime   int    // 执行时长(毫秒)
 }
 
 type TaskService struct {
@@ -82,13 +83,17 @@ type TaskRunner struct {
 	startTime         time.Time
 	storage           tasks.Storage
 	authMgr           *auth.Auth
-	initialCloudCount int             // 任务执行前的云朵数
-	finalCloudCount   int             // 任务执行后的云朵数
+	initialCloudCount int // 任务执行前的云朵数
+	finalCloudCount   int // 任务执行后的云朵数
+	initialCloudKnown bool
+	finalCloudKnown   bool
 	disabledTasks     map[string]bool // 被下架的任务类型
+	gpAuthErr         error
 	mailPeers         []tasks.MailPeer
 	mailDedup         tasks.MailSendDedupStore
 	assistTokenMgr    *TokenManager
 	assistAccountRepo *repository.AccountRepository
+	miguTask          *tasks.MiguTask
 }
 
 func (s *TaskService) SetMailDedupStore(store tasks.MailSendDedupStore) {
@@ -149,6 +154,7 @@ func buildTaskRunner(svc *TaskService, account *models.Account, storage tasks.St
 	authMgrForJWT := auth.NewAuth(authClient)
 	if opts.useManagedJWT {
 		client.SetJWTToken(account.JWTToken)
+		runner.gpAuthErr = attachGPJWTToken(client, authMgrForJWT, account.Phone, lg)
 		return runner
 	}
 
@@ -185,8 +191,28 @@ func buildTaskRunner(svc *TaskService, account *models.Account, storage tasks.St
 	if ssoToken != "" {
 		client.SetSSOToken(ssoToken)
 	}
+	runner.gpAuthErr = attachGPJWTToken(client, authMgrForJWT, account.Phone, lg)
 
 	return runner
+}
+
+// attachGPJWTToken 为客户端补充 gp 域票（2026-11-03 起服务端 JWT 按网关分域：
+// m/caiyun 只认 m 票，gp 宿主的 GP 任务表/抽抽乐/我的账单/开福袋只认 gp 票）。
+// gp 票单独取 sso 换取（sso 单次消费）；失败不阻塞主流程，仅 gp 渠道任务降级。
+func attachGPJWTToken(client *http.Client, authMgr *auth.Auth, phone string, lg *logger.Logger) error {
+	if client == nil || authMgr == nil || strings.TrimSpace(phone) == "" {
+		return fmt.Errorf("gp 登录缺少账号上下文")
+	}
+	token, err := authMgr.GetGPJWTToken(phone)
+	if err != nil || token == "" {
+		if err == nil {
+			err = fmt.Errorf("gp 登录未返回 token")
+		}
+		lg.Error("获取 gp 域 JWT 失败（gp 渠道任务将降级）:", err)
+		return err
+	}
+	client.SetJWTTokenGP(token)
+	return nil
 }
 
 func newTaskRunner(account *models.Account, client *http.Client, lg *logger.Logger, storage tasks.Storage, authMgr *auth.Auth, disabledTasks map[string]bool) *TaskRunner {
@@ -225,12 +251,17 @@ func readTaskEnvInt(key string, defaultVal int) int {
 
 // GetTaskLogs 获取任务日志。
 func (s *TaskService) GetTaskLogs(userID uint, accountID *uint, taskType, status string, page, pageSize int) ([]*models.TaskLog, int64, error) {
-	return s.GetTaskLogsContext(context.Background(), userID, accountID, taskType, status, page, pageSize)
+	return s.GetTaskLogsContext(context.Background(), userID, accountID, taskType, status, false, page, pageSize)
 }
 
 // GetTaskLogsContext propagates cancellation through ownership validation and
 // the filtered log query without storing request context on the service.
-func (s *TaskService) GetTaskLogsContext(ctx context.Context, userID uint, accountID *uint, taskType, status string, page, pageSize int) ([]*models.TaskLog, int64, error) {
+// hasReward 为 true 时仅返回实际获得云朵或咪咕音符奖励的日志。
+func (s *TaskService) GetTaskLogsContext(ctx context.Context, userID uint, accountID *uint, taskType, status string, hasReward bool, page, pageSize int) ([]*models.TaskLog, int64, error) {
+	return s.GetTaskLogsForDateContext(ctx, userID, accountID, taskType, status, hasReward, "", false, page, pageSize)
+}
+
+func (s *TaskService) GetTaskLogsForDateContext(ctx context.Context, userID uint, accountID *uint, taskType, status string, hasReward bool, date string, latestOnly bool, page, pageSize int) ([]*models.TaskLog, int64, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -246,7 +277,15 @@ func (s *TaskService) GetTaskLogsContext(ctx context.Context, userID uint, accou
 			return nil, 0, ErrAccountNotFound
 		}
 	}
-	return s.taskLogRepo.WithContext(ctx).FindByFilter(userID, accountID, taskType, status, (page-1)*pageSize, pageSize)
+	var start, end time.Time
+	if date != "" || latestOnly {
+		var err error
+		start, end, err = TaskLogDayRange(date)
+		if err != nil {
+			return nil, 0, err
+		}
+	}
+	return s.taskLogRepo.FindByFilterInRange(ctx, userID, accountID, taskType, status, hasReward, start, end, latestOnly, (page-1)*pageSize, pageSize)
 }
 
 // DailyTaskTypes 返回当前配置下参与“每日已执行”判断的日常任务类型。

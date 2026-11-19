@@ -172,10 +172,14 @@ func (w *Worker) ExecuteSingleAccount(accountID uint) error {
 
 // ExecuteQueueAccountTask 执行队列指定的账号任务，支持具体任务类型。
 func (w *Worker) ExecuteQueueAccountTask(accountID uint, taskType string) error {
+	return w.executeQueueAccountTaskContext(w.ctx, accountID, taskType)
+}
+
+func (w *Worker) executeQueueAccountTaskContext(ctx context.Context, accountID uint, taskType string) error {
 	if w.accountSlots != nil {
 		select {
-		case <-w.ctx.Done():
-			return w.ctx.Err()
+		case <-ctx.Done():
+			return ctx.Err()
 		case w.accountSlots <- struct{}{}:
 		}
 		defer func() { <-w.accountSlots }()
@@ -202,7 +206,7 @@ func (w *Worker) ExecuteQueueAccountTask(accountID uint, taskType string) error 
 		taskType,
 		func() error {
 			// TaskService 通过 TokenManager 按需刷新，避免两条刷新路径并发竞争。
-			_, err := w.taskService.ExecuteSelectedTaskForAccountContext(w.ctx, account, taskType)
+			_, err := w.taskService.ExecuteSelectedTaskForAccountContext(ctx, account, taskType)
 			return err
 		},
 		func(progress float64, message string) {

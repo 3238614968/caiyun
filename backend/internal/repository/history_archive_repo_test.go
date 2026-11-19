@@ -19,7 +19,7 @@ func TestArchiveInsertSQLUsesExplicitSchemaAlignedColumns(t *testing.T) {
 		{
 			source:  "exchange_records",
 			archive: "exchange_records_archive",
-			must:    []string{"`exchange_account_id`", "`exchange_rule_id`", "`exchange_task_id`"},
+			must:    []string{"`exchange_account_id`", "`exchange_rule_id`", "`exchange_task_id`", "`outcome`"},
 		},
 	}
 

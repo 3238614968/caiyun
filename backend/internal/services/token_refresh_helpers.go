@@ -5,6 +5,8 @@ import (
 	"caiyun/internal/models"
 	"encoding/base64"
 	"encoding/json"
+	"os"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -43,11 +45,43 @@ func accountAuthorizationExpireAt(account *models.Account) int64 {
 	return 0
 }
 
+// authorizationRefreshLead 提前续期窗口：凭据在到期前该时长内即触发轮换。
+//
+// 背景（2026-11 实测）：Authorization 有效期约 30 天；硬过期后 querySpecToken 回
+// 1010010015（非 05050006），且 refreshToken 拿过期凭据会被服务端拒绝，只能走
+// 重新登录。旧策略「到期才刷」导致每月凭据到期日（各账号均为 20 几号）连续 3 次
+// JWT 失败后账号被自动停用。提前在有效期内轮换可无限续链。
+// CAIYUN_AUTH_REFRESH_LEAD_HOURS=0 关闭提前续期（回到旧的到期后行为）。
+func authorizationRefreshLead() time.Duration {
+	raw := strings.TrimSpace(os.Getenv("CAIYUN_AUTH_REFRESH_LEAD_HOURS"))
+	if raw == "" {
+		return 72 * time.Hour
+	}
+	hours, err := strconv.ParseFloat(raw, 64)
+	if err != nil || hours <= 0 {
+		return 0
+	}
+	return time.Duration(hours * float64(time.Hour))
+}
+
 func authorizationShouldRefresh(expireAt int64, now time.Time) bool {
 	if expireAt <= 0 {
 		return true
 	}
-	return expireAt <= now.UnixMilli()
+	if expireAt <= now.UnixMilli() {
+		return true
+	}
+	return expireAt <= now.Add(authorizationRefreshLead()).UnixMilli()
+}
+
+// authorizationShouldRotateEarly 判定「JWT 兑换成功时」是否仍应主动轮换：
+// 只有到期时间落在未来 lead 窗口内才轮换；已过去或为 0 的到期时间属于
+// 陈旧/缺失元数据（凭据实际可用），不作为主动轮换依据。
+func authorizationShouldRotateEarly(expireAt int64, now time.Time) bool {
+	if expireAt <= now.UnixMilli() {
+		return false
+	}
+	return expireAt <= now.Add(authorizationRefreshLead()).UnixMilli()
 }
 
 func applyAuthorizationRefreshToAccount(account *models.Account, refreshed *auth.AuthorizationRefreshResult, jwtToken string) {

@@ -1,7 +1,11 @@
 package tasks
 
 import (
+	"crypto/sha256"
+	"encoding/json"
 	"fmt"
+	"strconv"
+	"strings"
 	"time"
 
 	"caiyun/internal/core/api"
@@ -9,119 +13,159 @@ import (
 	"caiyun/internal/core/logger"
 )
 
-// TodayCloudTask 今日云朵任务
 type TodayCloudTask struct {
-	client     *http.Client
-	logger     *logger.Logger
-	api        *api.CaiyunAPI
-	todayCount int
-	totalCloud int
+	api                    *api.CaiyunAPI
+	logger                 *logger.Logger
+	todayCount, totalCloud int
+	pending                bool
+	now                    func() time.Time
 }
 
-// NewTodayCloudTask 创建今日云朵任务
 func NewTodayCloudTask(client *http.Client, log *logger.Logger) *TodayCloudTask {
-	return &TodayCloudTask{
-		client: client,
-		logger: log,
-		api:    api.NewCaiyunAPI(client),
-	}
+	return &TodayCloudTask{api: api.NewCaiyunAPI(client), logger: log, now: time.Now}
 }
+func (t *TodayCloudTask) TodayCount() int { return t.todayCount }
+func (t *TodayCloudTask) TotalCloud() int { return t.totalCloud }
+func (t *TodayCloudTask) Pending() bool   { return t.pending }
 
-// Run 执行今日云朵任务
-func (t *TodayCloudTask) Run() error {
-	// 获取云朵记录（type=1 表示获得记录）
-	resp, err := t.api.GetCloudRecord(1, 300, 1)
-	if err != nil {
-		t.logger.Fail("获取云朵记录失败")
-		return err
+var cloudRecordZone = time.FixedZone("CST", 8*3600)
+
+func cloudRecordTime(value interface{}) (time.Time, error) {
+	text := fmt.Sprint(value)
+	for _, format := range []string{time.RFC3339Nano, "2006-01-02 15:04:05.999999999", "2006-01-02T15:04:05.999999999", "2006-01-02"} {
+		if stamp, err := time.ParseInLocation(format, text, cloudRecordZone); err == nil {
+			return stamp.In(cloudRecordZone), nil
+		}
 	}
-
-	// 解析响应 code
-	code := 0
-	switch v := resp.Code.(type) {
-	case int:
-		code = v
+	var n int64
+	switch v := value.(type) {
 	case float64:
-		code = int(v)
-	case string:
-		if v == "0" {
-			code = 0
+		n = int64(v)
+	case int64:
+		n = v
+	default:
+		n, _ = strconv.ParseInt(text, 10, 64)
+	}
+	if n > 1e12 {
+		return time.UnixMilli(n).In(cloudRecordZone), nil
+	}
+	if n >= 1e9 {
+		return time.Unix(n, 0).In(cloudRecordZone), nil
+	}
+	return time.Time{}, fmt.Errorf("流水时间无效")
+}
+func cloudRecordDate(row map[string]interface{}) (time.Time, error) {
+	for _, key := range []string{"inserttime", "insertTime", "updatetime", "updateTime"} {
+		if value, exists := row[key]; exists {
+			if stamp, err := cloudRecordTime(value); err == nil {
+				return stamp, nil
+			}
 		}
 	}
+	return time.Time{}, fmt.Errorf("流水缺少有效时间")
+}
 
-	if code != 0 {
-		msg := resp.Message
-		if msg == "" {
-			msg = resp.Msg
-		}
-		t.logger.Error("获取云朵记录失败", fmt.Errorf("code=%d, msg=%s", code, msg))
-		return fmt.Errorf("获取云朵记录失败: code=%d, msg=%s", code, msg)
-	}
-
-	// 解析结果
-	if resp.Result == nil {
-		t.logger.Info("今日获得0次云朵，数量共计：0")
-		return nil
-	}
-
-	resultMap, ok := resp.Result.(map[string]interface{})
-	if !ok {
-		t.logger.Info("今日获得0次云朵，数量共计：0")
-		return nil
-	}
-
-	records, ok := resultMap["records"].([]interface{})
-	if !ok || len(records) == 0 {
-		t.logger.Info("今日获得0次云朵，数量共计：0")
-		return nil
-	}
-
-	// 筛选今日记录
-	today := time.Now()
-	t.todayCount = 0
-	t.totalCloud = 0
-
-	for _, record := range records {
-		recordMap, ok := record.(map[string]interface{})
-		if !ok {
-			continue
-		}
-
-		// inserttime 为 RFC3339 字符串，例如 2026-01-28T04:58:18.000+00:00
-		insertTimeStr, ok := recordMap["inserttime"].(string)
-		if !ok {
-			continue
-		}
-
-		num, ok := recordMap["num"].(float64)
-		if !ok {
-			continue
-		}
-
-		recordTime, err := time.Parse(time.RFC3339, insertTimeStr)
+// Run reports a daily cumulative statistic. It must never be recorded as this
+// execution's new gain. Unknown records or an exceeded page bound stay pending.
+func (t *TodayCloudTask) Run() error {
+	t.todayCount, t.totalCloud, t.pending = 0, 0, false
+	today := t.now().In(cloudRecordZone).Format("2006-01-02")
+	const pageSize, maxPages = 300, 20
+	seenIDs := map[string]bool{}
+	seenPages := map[[32]byte]bool{}
+	for page := 1; page <= maxPages; page++ {
+		resp, err := t.api.GetCloudRecord(page, pageSize, 1)
 		if err != nil {
-			continue
+			return err
 		}
-		recordTime = recordTime.In(time.Local)
-
-		// 仅统计今天且为正数的获得记录
-		if recordTime.Day() == today.Day() &&
-			recordTime.Month() == today.Month() &&
-			recordTime.Year() == today.Year() &&
-			num > 0 {
-			t.todayCount++
-			t.totalCloud += int(num)
+		if err := rewardResponseError("获取云朵流水", resp); err != nil {
+			return err
+		}
+		data, ok := resp.Result.(map[string]interface{})
+		if !ok {
+			return fmt.Errorf("云朵流水缺少有效结果")
+		}
+		records, ok := data["records"].([]interface{})
+		if !ok {
+			return fmt.Errorf("云朵流水缺少records数组")
+		}
+		if len(records) == 0 {
+			break
+		}
+		raw, _ := json.Marshal(records)
+		fingerprint := sha256.Sum256(raw)
+		if seenPages[fingerprint] {
+			t.pending = true
+			break
+		}
+		seenPages[fingerprint] = true
+		for _, item := range records {
+			row, ok := item.(map[string]interface{})
+			if !ok {
+				t.pending = true
+				continue
+			}
+			id := ""
+			for _, key := range []string{"id", "recordId", "oid"} {
+				if v, exists := row[key]; exists && v != nil && fmt.Sprint(v) != "" {
+					id = key + ":" + fmt.Sprint(v)
+					break
+				}
+			}
+			if id != "" {
+				if seenIDs[id] {
+					continue
+				}
+				seenIDs[id] = true
+			}
+			stamp, err := cloudRecordDate(row)
+			if err != nil {
+				t.pending = true
+				continue
+			}
+			if stamp.Format("2006-01-02") != today {
+				continue
+			}
+			amount, err := strconv.Atoi(fmt.Sprint(row["num"]))
+			if err != nil {
+				t.pending = true
+				continue
+			}
+			if amount > 0 {
+				if amount > int(^uint(0)>>1)-t.totalCloud {
+					return fmt.Errorf("云朵流水金额超出可统计范围")
+				}
+				t.todayCount++
+				t.totalCloud += amount
+			}
+		}
+		stop := len(records) < pageSize
+		if pages, exists := data["pages"]; exists {
+			n, e := strconv.Atoi(fmt.Sprint(pages))
+			if e != nil || n < page {
+				return fmt.Errorf("云朵流水分页元数据无效")
+			}
+			stop = page >= n
+		} else if total, exists := data["total"]; exists {
+			n, e := strconv.Atoi(fmt.Sprint(total))
+			if e != nil || n < 0 {
+				return fmt.Errorf("云朵流水总数无效")
+			}
+			stop = page*pageSize >= n
+		}
+		if stop {
+			break
+		}
+		if page == maxPages {
+			t.pending = true
 		}
 	}
-
-	t.logger.Info(fmt.Sprintf("今日获得%d次云朵，数量共计：%d", t.todayCount, t.totalCloud))
+	if t.logger != nil {
+		message := fmt.Sprintf("今日获得%d次云朵，累计%d（仅统计）", t.todayCount, t.totalCloud)
+		if t.pending {
+			message += "；部分流水无效或分页未读取完整"
+		}
+		t.logger.Info(strings.TrimSpace(message))
+	}
 	return nil
-}
-
-func (t *TodayCloudTask) TodayCount() int {
-	return t.todayCount
-}
-
-func (t *TodayCloudTask) TotalCloud() int {
-	return t.totalCloud
 }

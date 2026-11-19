@@ -3,6 +3,7 @@ package tasks
 import (
 	"caiyun/internal/core/api"
 	corehttp "caiyun/internal/core/http"
+	"caiyun/internal/core/logger"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -20,13 +21,17 @@ type AutumnTask struct {
 	pending bool
 	message string
 	delay   time.Duration
+	actions *activityActions
+	backup  func() error
 }
 
 func NewAutumnTask(client *corehttp.Client, kind string) *AutumnTask {
-	return &AutumnTask{api: api.NewCaiyunAPI(client), kind: kind, delay: 800 * time.Millisecond}
+	actions := newActivityActions(client, logger.NewLogger(logger.LevelError))
+	return &AutumnTask{api: api.NewCaiyunAPI(client), kind: kind, delay: 800 * time.Millisecond, actions: actions, backup: actions.performAlbumBackup}
 }
-func (t *AutumnTask) Pending() bool   { return t.pending }
-func (t *AutumnTask) Message() string { return t.message }
+func (t *AutumnTask) SetStorage(store Storage) *AutumnTask { t.actions.setStorage(store); return t }
+func (t *AutumnTask) Pending() bool                        { return t.pending }
+func (t *AutumnTask) Message() string                      { return t.message }
 func (t *AutumnTask) pause() {
 	if t.delay > 0 {
 		time.Sleep(t.delay)
@@ -79,6 +84,10 @@ func (t *AutumnTask) bill() error {
 	if err != nil {
 		return err
 	}
+	if len(initial) == 0 {
+		t.pending = true
+		t.message = "年度账单未返回可核验的任务记录"
+	}
 	// 默认问卷答案与前端示例一致：服务端只要求 param 是对象；保留按账号覆盖。
 	feedback := map[string]interface{}{
 		"reasonChoice":  "A",
@@ -101,13 +110,28 @@ func (t *AutumnTask) bill() error {
 			continue
 		}
 		switch task.Code {
-		case "BROWSE_REPORT", "MEMORY_ALBUM", "AI_PHOTO", "FEEDBACK":
+		case "BROWSE_REPORT", "MEMORY_ALBUM", "AI_PHOTO", "FEEDBACK", "QUESTIONNAIRE", "AI_VIDEO", "AUTO_BACKUP":
+		case "SHARE_BINDING":
+			// 真实分享任务，协议无自助路径，跳过。
+			continue
 		default:
 			continue
 		}
+		if task.Code == "AUTO_BACKUP" {
+			if err := t.backup(); err != nil {
+				issues = append(issues, fmt.Errorf("年度账单真实备份: %w", err))
+				continue
+			}
+		}
+		// AI_VIDEO 完成由服务端 AI 平台事件驱动；11-25 活动上线前服务端
+		// 回 10005（未登记），视为正常跳过而非错误。
+		allowed := []int{10003}
+		if task.Code == "AI_VIDEO" {
+			allowed = append(allowed, 10005)
+		}
 		resp, e := t.api.BillExecute(task.Code, feedback)
 		if e == nil {
-			e = rewardResponseError("年度账单/"+task.Code, resp, 10003)
+			e = rewardResponseError("年度账单/"+task.Code, resp, allowed...)
 		}
 		if e != nil {
 			issues = append(issues, e)
@@ -121,11 +145,21 @@ func (t *AutumnTask) bill() error {
 	}
 	done := 0
 	var left []string
+	confirmed := make(map[string]billTask, len(latest))
 	for _, task := range latest {
-		if task.Total > 0 && task.Completed >= task.Total {
+		confirmed[task.Code] = task
+	}
+	seen := map[string]bool{}
+	for _, original := range append(initial, latest...) {
+		if seen[original.Code] {
+			continue
+		}
+		seen[original.Code] = true
+		task, exists := confirmed[original.Code]
+		if exists && task.Total > 0 && task.Completed >= task.Total {
 			done++
 		} else {
-			left = append(left, task.Code)
+			left = append(left, original.Code)
 		}
 	}
 	t.pending = t.pending || len(left) > 0
@@ -164,7 +198,10 @@ func (t *AutumnTask) bill() error {
 	if e != nil {
 		issues = append(issues, e)
 	}
-	t.message = fmt.Sprintf("年度账单确认完成%d/%d项；抽奖%d次", done, len(latest), draws)
+	t.message = fmt.Sprintf("年度账单确认完成%d/%d项；抽奖%d次", done, len(seen), draws)
+	if len(seen) == 0 {
+		t.message += "；未返回可核验的任务记录"
+	}
 	if len(left) > 0 {
 		t.message += "；待完成：" + strings.Join(left, "、")
 	}
@@ -386,6 +423,7 @@ func (t *AutumnTask) timedLottery() error {
 	draws := 0
 	var issues []error
 	seen := map[string]bool{}
+	alreadyDrawn, noChance := 0, 0
 	for _, module := range modules {
 		for _, task := range module.TaskIDs {
 			key := module.ModuleID + "/" + task.ID
@@ -400,12 +438,22 @@ func (t *AutumnTask) timedLottery() error {
 			}
 			if responseCodeIs(r, 0) {
 				draws++
-			} else if !responseCodeIs(r, 10001) && !isNoLotteryChanceError(fmt.Errorf("%s", r.MessageText())) {
+			} else if responseCodeIs(r, 10001) {
+				alreadyDrawn++
+			} else if responseCodeIs(r, 500) && strings.Contains(r.MessageText(), "已经刮过奖") {
+				alreadyDrawn++
+			} else if responseCodeIs(r, 500) && isNoLotteryChanceError(fmt.Errorf("%s", r.MessageText())) {
+				noChance++
+				t.pending = true
+			} else {
 				issues = append(issues, rewardResponseError("限时抽奖/"+key, r))
 			}
 			t.pause()
 		}
 	}
 	t.message = fmt.Sprintf("限时活动抽奖%d次（各已完成任务最多尝试一次）", draws)
+	if alreadyDrawn > 0 || noChance > 0 {
+		t.message += fmt.Sprintf("；已抽过%d项、暂无抽奖机会%d项", alreadyDrawn, noChance)
+	}
 	return errors.Join(issues...)
 }

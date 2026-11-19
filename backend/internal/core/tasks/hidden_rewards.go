@@ -23,6 +23,7 @@ type HiddenRewardsTask struct {
 	api         *api.CaiyunAPI
 	logger      *logger.Logger
 	lastMessage string
+	pending     bool
 }
 
 func NewHiddenRewardsTask(client *http.Client, log *logger.Logger) *HiddenRewardsTask {
@@ -30,8 +31,10 @@ func NewHiddenRewardsTask(client *http.Client, log *logger.Logger) *HiddenReward
 }
 
 func (t *HiddenRewardsTask) Message() string { return t.lastMessage }
+func (t *HiddenRewardsTask) Pending() bool   { return t.pending }
 
 func (t *HiddenRewardsTask) Run() error {
+	t.pending = false
 	var issues []error
 	var parts []string
 	seen := map[string]bool{}
@@ -80,11 +83,13 @@ func (t *HiddenRewardsTask) Run() error {
 		issues = append(issues, fmt.Errorf("月度福袋任务: %w", err))
 	} else if responseCodeIs(resp, 0) {
 		registered := 0
+		alreadyRegistered := 0
 		for _, item := range responseArray(resp.Result) {
 			task, ok := item.(map[string]interface{})
 			if !ok || !toBool(task["needRegister"]) || toBool(task["complete"]) {
 				continue
 			}
+			t.pending = true
 			mark := fmt.Sprint(task["id"])
 			if mark == "<nil>" || mark == "" {
 				continue
@@ -94,6 +99,8 @@ func (t *HiddenRewardsTask) Run() error {
 				issues = append(issues, fmt.Errorf("月度福袋任务%s登记: %w", mark, registerErr))
 			} else if responseCodeIs(result, 0) {
 				registered++
+			} else if responseCodeIs(result, 5006) && strings.Contains(result.MessageText(), "已存在该任务记录") {
+				alreadyRegistered++
 			} else {
 				issues = append(issues, rewardResponseError("月度福袋任务登记", result))
 			}
@@ -120,7 +127,7 @@ func (t *HiddenRewardsTask) Run() error {
 		} else {
 			issues = append(issues, rewardResponseError("月度福袋抽奖次数", count))
 		}
-		parts = append(parts, fmt.Sprintf("月度福袋登记%d项、抽奖%d次", registered, drew))
+		parts = append(parts, fmt.Sprintf("月度福袋新登记%d项、此前已登记%d项、抽奖%d次（登记不等于任务完成）", registered, alreadyRegistered, drew))
 	} else {
 		issues = append(issues, rewardResponseError("月度福袋任务", resp, 602))
 	}
@@ -165,6 +172,7 @@ func (t *HiddenRewardsTask) Run() error {
 	}
 
 	claimed := 0
+	var endedMarkets []string
 	for _, market := range hiddenPrizeMarkets {
 		query, err := t.api.QueryUnclaimedPrize(market)
 		if err != nil {
@@ -180,11 +188,16 @@ func (t *HiddenRewardsTask) Run() error {
 			issues = append(issues, fmt.Errorf("%s领奖: %w", market, err))
 		} else if responseCodeIs(accept, 0) {
 			claimed++
+		} else if responseCodeIs(accept, 602) {
+			endedMarkets = append(endedMarkets, market)
 		} else {
 			issues = append(issues, rewardResponseError(market+"领奖", accept, 410))
 		}
 	}
 	parts = append(parts, fmt.Sprintf("未领奖扫描%d项、新领%d项", len(hiddenPrizeMarkets), claimed))
+	if len(endedMarkets) > 0 {
+		parts = append(parts, "已结束活动跳过："+strings.Join(endedMarkets, "、"))
+	}
 	t.lastMessage = strings.Join(parts, "；")
 	if t.logger != nil {
 		t.logger.Info(t.lastMessage)

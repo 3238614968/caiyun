@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strconv"
@@ -131,4 +132,123 @@ func cloudRewardStillPending(items []CloudReceiveItem, id int64) bool {
 		}
 	}
 	return false
+}
+
+func (api *CaiyunAPI) getGPCloudInfo() (*CloudInfoResponse, error) {
+	resp, err := api.client.Get(GPMarketURL+"/signin/page/infoV3?client=app", api.buildReceiveHeaders(""))
+	if err != nil {
+		return nil, fmt.Errorf("gp云朵信息查询失败: %w", err)
+	}
+	body, err := api.client.ReadResponseBody(resp)
+	if err != nil {
+		return nil, fmt.Errorf("读取gp云朵信息响应失败: %w", err)
+	}
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("gp云朵信息 HTTP %d", resp.StatusCode)
+	}
+	var info CloudInfoResponse
+	if err := json.Unmarshal([]byte(body), &info); err != nil {
+		return nil, fmt.Errorf("解析gp云朵信息失败: %w", err)
+	}
+	if !isSuccessIntCode(info.Code) {
+		return nil, fmt.Errorf("gp云朵信息查询失败: code=%s %s", info.CodeText(), info.MessageText())
+	}
+	if info.Result.ReceiveList == nil {
+		return nil, fmt.Errorf("gp云朵信息缺少待领列表")
+	}
+	return &info, nil
+}
+
+// ReceivePendingCloudRewardsGP 探测并领取 gp 域待领云朵。
+// 614/615 归因 App 验证；成功回包须经同一 gp 会话复查记录与余额后才记为到账。
+func (api *CaiyunAPI) ReceivePendingCloudRewardsGP() (*CaiyunResponse, error) {
+	info, err := api.getGPCloudInfo()
+	if err != nil {
+		return nil, err
+	}
+	rewards, pending := pendingCloudRewards(info.Result.ReceiveList)
+	items := len(rewards)
+	result := map[string]interface{}{
+		"pendingCloud": pending, "pendingCount": items,
+		"receivedCloud": 0, "claimedCount": 0,
+		"total": info.Result.Total, "toReceive": info.Result.ToReceive,
+	}
+	if items == 0 {
+		return &CaiyunResponse{Code: 0, Success: true, Result: result,
+			Msg: fmt.Sprintf("gp当前没有可领取云朵，余额%d", info.Result.Total)}, nil
+	}
+	headers := api.buildReceiveHeaders("")
+	headers["Content-Type"] = "application/json;charset=UTF-8"
+	ack, err := api.marketJSONRequest("POST", GPMarketURL+"/signin/page/receiveV3", map[string]interface{}{
+		"client": "app", "cloudId": "", "cloudType": 4,
+	}, headers)
+	if err != nil {
+		return nil, fmt.Errorf("gp领取云朵请求失败: %w", err)
+	}
+	if ack == nil {
+		return nil, fmt.Errorf("gp领取云朵响应为空")
+	}
+	switch fmt.Sprint(ack.Code) {
+	case "614", "615":
+		result["appRequired"] = true
+		return &CaiyunResponse{Code: 0, Success: true, Result: result,
+			Msg: fmt.Sprintf("gp待领云朵%d（%d项），需App领取（code=%v）", pending, items, ack.Code)}, nil
+	}
+	if fmt.Sprint(ack.Code) != "0" {
+		return nil, fmt.Errorf("gp领取云朵业务失败: code=%v %s", ack.Code, ack.MessageText())
+	}
+	unconfirmed := func(cause error) (*CaiyunResponse, error) {
+		return &CaiyunResponse{Code: -1, Result: result,
+			Msg: fmt.Sprintf("gp领取云朵结果待确认（已确认%d云朵、%d项）：%v", result["receivedCloud"], result["claimedCount"], cause)}, cause
+	}
+	payload, valid := resultMap(ack)
+	amount, amountErr := strconv.Atoi(fmt.Sprint(payload["receive"]))
+	ackTotal, totalErr := strconv.Atoi(fmt.Sprint(payload["total"]))
+	if !valid || amountErr != nil || totalErr != nil || amount < 0 || ackTotal < 0 {
+		return unconfirmed(fmt.Errorf("gp领取响应缺少有效的到账数量或余额"))
+	}
+	after, checkErr := api.getGPCloudInfo()
+	if checkErr != nil {
+		return unconfirmed(fmt.Errorf("gp领取后状态确认失败: %w", checkErr))
+	}
+	remaining, pending := pendingCloudRewards(after.Result.ReceiveList)
+	result["pendingCloud"], result["pendingCount"] = pending, len(remaining)
+	result["total"], result["toReceive"] = after.Result.Total, after.Result.ToReceive
+	claimed, confirmedCloud := 0, 0
+	for id, item := range rewards {
+		if _, stillPending := remaining[id]; !stillPending {
+			claimed++
+			confirmedCloud += item.CloudNum
+		}
+	}
+	if confirmedCloud != amount || (amount > 0 && claimed == 0) {
+		return unconfirmed(fmt.Errorf("gp领取回包与待领记录变化不一致"))
+	}
+	if ackTotal < info.Result.Total+amount || after.Result.Total < ackTotal {
+		return unconfirmed(fmt.Errorf("gp领取回包与余额变化不一致"))
+	}
+	result["receivedCloud"] = amount
+	result["claimedCount"] = claimed
+	if len(remaining) > 0 || after.Result.ToReceive > 0 {
+		return unconfirmed(fmt.Errorf("gp复查仍有云朵待领取"))
+	}
+	return &CaiyunResponse{Code: 0, Success: true, Result: result,
+		Msg: fmt.Sprintf("gp已领取%d云朵（%d项），当前云朵%d", amount, claimed, after.Result.Total)}, nil
+}
+
+func pendingCloudRewards(items []CloudReceiveItem) (map[int64]CloudReceiveItem, int) {
+	rewards := make(map[int64]CloudReceiveItem)
+	pending := 0
+	for _, item := range items {
+		id := item.RewardID()
+		if item.CloudType != 0 || id <= 0 {
+			continue
+		}
+		if _, seen := rewards[id]; seen {
+			continue
+		}
+		rewards[id] = item
+		pending += item.CloudNum
+	}
+	return rewards, pending
 }

@@ -154,8 +154,37 @@ func WithCircuitBreakerConfig(config CircuitBreakerConfig) ClientOption {
 type RequestOption func(*requestOptions)
 
 type requestOptions struct {
-	idempotencyKey string
-	timeout        time.Duration
+	idempotencyKey        string
+	timeout               time.Duration
+	withoutCookieJar      bool
+	withoutRetries        bool
+	withoutDefaultHeaders bool
+	withoutRedirects      bool
+}
+
+// WithoutRedirects keeps a sensitive independent protocol on its configured
+// endpoint. The redirect response is returned for normal status validation.
+func WithoutRedirects() RequestOption {
+	return func(options *requestOptions) { options.withoutRedirects = true }
+}
+
+// WithoutDefaultHeaders is for an independent upstream protocol whose explicit
+// headers must not inherit cloud Basic/JWT credentials or cloud device fields.
+func WithoutDefaultHeaders() RequestOption {
+	return func(options *requestOptions) { options.withoutDefaultHeaders = true }
+}
+
+// WithoutRetries is for upstream mutation endpoints exposed as HTTP GET.
+// A timeout may mean the action happened, so transport retries are unsafe.
+func WithoutRetries() RequestOption {
+	return func(options *requestOptions) { options.withoutRetries = true }
+}
+
+// WithoutCookieJar uses only the request's explicit cookies. It prevents a
+// shared jar from adding a stale, duplicate session cookie; the shared client
+// and its jar are not modified. Set-Cookie is still available on the response.
+func WithoutCookieJar() RequestOption {
+	return func(options *requestOptions) { options.withoutCookieJar = true }
 }
 
 // WithRequestTimeout overrides the timeout for this request, including body reads,
@@ -184,6 +213,7 @@ type Client struct {
 	userAgent        string
 	auth             string // Basic Auth
 	jwtToken         string
+	jwtTokenGP       string // gp.mcloud.139.com 域专用 JWT（2026-11-03 起服务端按网关分域）
 	ssoToken         string
 	userDomain       string
 	clientInfo       string
@@ -214,7 +244,7 @@ func NewClient(options ...ClientOption) *Client {
 		client: &http.Client{
 			Timeout:   30 * time.Second,
 			Jar:       jar,
-			Transport: otelhttp.NewTransport(http.DefaultTransport),
+			Transport: otelhttp.NewTransport(NewCoc3ProfileTransport(taskTransport)),
 		},
 		maxRetries: defaultMaxRetries,
 		retryDelay: defaultRetryDelay,
@@ -274,6 +304,37 @@ func (c *Client) SetJWTToken(token string) {
 	}
 }
 
+// SetJWTTokenGP 设置 gp.mcloud.139.com 域专用 JWT。
+// 2026-11-03 起服务端 JWT 严格按网关分域：m/caiyun 只认 m 票，gp 只认 gp 票
+// （拿 m 票打 gp 的 signin/shake/bill/luckybag 回 90001 未登录）。
+// gp 票须用单独的 ssoToken 经 gp auth-service 换取（sso 单次消费）。
+func (c *Client) SetJWTTokenGP(token string) {
+	c.jwtTokenGP = strings.TrimSpace(token)
+	if c.jwtTokenGP == "" {
+		return
+	}
+	c.SetCookie("jwtToken", c.jwtTokenGP, "gp.mcloud.139.com")
+}
+
+// GetJWTTokenGP 获取 gp 域 JWT（可能为空，调用方自行降级）。
+func (c *Client) GetJWTTokenGP() string {
+	return c.jwtTokenGP
+}
+
+// GetJWTTokenForURL 按目标 URL 选择 JWT（2026-11-03 网关分域）：
+//   - gp 域 /ycloud/*（signin/bill/luckybag 等新服务）只认 gp 票；
+//   - gp 域 /market/*（shake-server/manager/prizeApi 等老营销平台）只认 m 票
+//     ★ shake-server 拿 gp 票回 90001，拿 m/7071 票正常 —— 按路径而非主机区分；
+//   - 其余主机一律 m 票。gp 票未设置时回落 m 票（旧行为）。
+func (c *Client) GetJWTTokenForURL(rawurl string) string {
+	if u, err := url.Parse(rawurl); err == nil &&
+		u.Hostname() == "gp.mcloud.139.com" &&
+		!strings.HasPrefix(u.Path, "/market/") && c.jwtTokenGP != "" {
+		return c.jwtTokenGP
+	}
+	return c.jwtToken
+}
+
 // SetSSOToken 设置当前 SSO Token
 func (c *Client) SetSSOToken(token string) {
 	c.ssoToken = strings.TrimSpace(token)
@@ -292,6 +353,13 @@ func (c *Client) SetMarketAccount(account string) {
 	if deviceLive {
 		c.seedMarketDeviceCookie(deviceID, account)
 	}
+}
+
+// GetMarketAccount returns the current account for native cloud API requests.
+func (c *Client) GetMarketAccount() string {
+	c.deviceMu.Lock()
+	defer c.deviceMu.Unlock()
+	return c.account
 }
 
 // SetUserAgent 设置 User-Agent
@@ -340,10 +408,6 @@ func (c *Client) EnsureShumeiDeviceID(ctx context.Context) error {
 }
 
 func (c *Client) EnsureShumeiDeviceIDWithUserAgent(ctx context.Context, userAgent string) error {
-	return c.EnsureShumeiDeviceIDForPage(ctx, userAgent, "")
-}
-
-func (c *Client) EnsureShumeiDeviceIDForPage(ctx context.Context, userAgent, pageURL string) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -354,7 +418,7 @@ func (c *Client) EnsureShumeiDeviceIDForPage(ctx context.Context, userAgent, pag
 			c.setDeviceID(manualDeviceID, true)
 		} else {
 			var deviceID string
-			deviceID, err = shumei.FetchDeviceIDForPage(ctx, c.client, "", userAgent, pageURL)
+			deviceID, err = shumei.FetchDeviceIDWithUserAgent(ctx, c.client, "", userAgent)
 			if err == nil && deviceID != "" {
 				c.setDeviceID(deviceID, true)
 			}
@@ -440,10 +504,20 @@ func (c *Client) buildHeaders(reqURL string, customHeaders map[string]string) ma
 	// c.auth 存储的是纯 base64 字符串（不包含 "Basic " 前缀）
 	// 对于 caiyun/mrp/m 域名:
 	//   authorization = "Basic " + c.auth
-	//   jwttoken = jwtToken
+	//   jwttoken = m 域票
+	// 对于 gp 域名（2026-11-03 起网关分域）:
+	//   jwttoken = gp 域票（未设置时回落 m 票，保持旧行为）
 	// 对于其他域名:
 	//   authorization = "Basic " + c.auth
-	if strings.Contains(hostname, "caiyun.feixin.10086.cn") ||
+	if hostname == "gp.mcloud.139.com" {
+		if token := c.GetJWTTokenForURL(reqURL); token != "" {
+			headers["jwttoken"] = token
+			headers["jwtToken"] = token
+		}
+		if c.auth != "" {
+			headers["Authorization"] = "Basic " + c.auth
+		}
+	} else if strings.Contains(hostname, "caiyun.feixin.10086.cn") ||
 		strings.Contains(hostname, "mrp.mcloud.139.com") ||
 		strings.Contains(hostname, "m.mcloud.139.com") {
 		if c.jwtToken != "" {
@@ -468,6 +542,13 @@ func (c *Client) buildHeaders(reqURL string, customHeaders map[string]string) ma
 		if value != "" {
 			merged[http.CanonicalHeaderKey(key)] = value
 		}
+	}
+
+	// gp 域票兜底强制：活动层通用头（buildMarketHeaders 等）可能显式带上 m 票，
+	// 目标是 gp /ycloud/* 时必须换成 gp 票，否则服务端回 90001（2026-11-03 分域）。
+	// ★ 例外：gp /market/*（shake-server 等老营销平台）反而只认 m 票，不换。
+	if hostname == "gp.mcloud.139.com" && !strings.HasPrefix(u.Path, "/market/") && c.jwtTokenGP != "" {
+		merged[http.CanonicalHeaderKey("jwtToken")] = c.jwtTokenGP
 	}
 
 	return merged
@@ -510,14 +591,22 @@ func (c *Client) RequestWithContextOptions(ctx context.Context, method, reqURL s
 		}
 	}
 	requestClient := c.client
-	if requestOptions.timeout > 0 {
+	if requestOptions.timeout > 0 || requestOptions.withoutCookieJar || requestOptions.withoutRedirects {
 		localClient := *c.client
-		localClient.Timeout = requestOptions.timeout
+		if requestOptions.timeout > 0 {
+			localClient.Timeout = requestOptions.timeout
+		}
+		if requestOptions.withoutCookieJar {
+			localClient.Jar = nil
+		}
+		if requestOptions.withoutRedirects {
+			localClient.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+		}
 		requestClient = &localClient
 	}
 
 	maxRetries := 0
-	if methodRetriesByDefault(method) || requestOptions.idempotencyKey != "" {
+	if !requestOptions.withoutRetries && (methodRetriesByDefault(method) || requestOptions.idempotencyKey != "") {
 		maxRetries = c.maxRetries
 		if maxRetries < 0 {
 			maxRetries = 0
@@ -574,7 +663,15 @@ func (c *Client) RequestWithContextOptions(ctx context.Context, method, reqURL s
 			return nil, fmt.Errorf("创建请求失败: %w", err)
 		}
 
-		allHeaders := c.buildHeaders(reqURL, headers)
+		var allHeaders map[string]string
+		if requestOptions.withoutDefaultHeaders {
+			allHeaders = make(map[string]string, len(headers))
+			for key, value := range headers {
+				allHeaders[http.CanonicalHeaderKey(key)] = value
+			}
+		} else {
+			allHeaders = c.buildHeaders(reqURL, headers)
+		}
 		if requestOptions.idempotencyKey != "" {
 			allHeaders["Idempotency-Key"] = requestOptions.idempotencyKey
 		}

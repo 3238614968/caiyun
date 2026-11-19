@@ -180,6 +180,7 @@ func registerTaskRoutes(parent *gin.RouterGroup, taskHandler *handlers.TaskHandl
 	tasks := parent.Group("/tasks")
 	{
 		tasks.GET("/logs", taskHandler.GetTaskLogs)
+		tasks.GET("/daily-summary", taskHandler.GetTaskDailySummary)
 		tasks.POST("/trigger-all", taskHandler.TriggerAllTasks)
 		tasks.GET("/queue-status", middleware.AdminMiddleware(), queueStatusHandler.GetQueueStatus)
 		tasks.GET("/status", taskHandler.GetTaskStatus)
@@ -340,7 +341,7 @@ func registerWebSocketRoute(r *gin.Engine, deps routeDependencies) {
 			return
 		}
 
-		wsHub.HandleWebSocket(c.Writer, c.Request, user.ID)
+		wsHub.HandleWebSocket(c.Writer, c.Request, user.ID, realtimeSessionAuthorization(deps, claims))
 	})
 
 	r.GET("/events", func(c *gin.Context) {
@@ -364,6 +365,20 @@ func registerWebSocketRoute(r *gin.Engine, deps routeDependencies) {
 			apiresponse.Unauthorized(c, "session revoked")
 			return
 		}
-		wsHub.HandleSSE(c.Writer, c.Request, user.ID)
+		wsHub.HandleSSE(c.Writer, c.Request, user.ID, realtimeSessionAuthorization(deps, claims))
 	})
+}
+
+func realtimeSessionAuthorization(deps routeDependencies, claims *jwt.Claims) ws.SessionAuthorization {
+	return ws.SessionAuthorization{
+		ExpiresAt: claims.ExpiresAt.Time,
+		Validate: func(ctx context.Context) bool {
+			user, err := deps.repos.User.WithContext(ctx).FindByID(claims.UserID)
+			if err != nil || user.TokenVersion != claims.TokenVersion {
+				return false
+			}
+			active, err := deps.repos.RefreshSession.IsActive(ctx, claims.SessionID, claims.UserID, time.Now())
+			return err == nil && active
+		},
+	}
 }

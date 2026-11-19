@@ -3,31 +3,35 @@ package services
 import (
 	"caiyun/internal/constants"
 	"caiyun/internal/models"
+	"caiyun/internal/repository"
 	"caiyun/internal/ws"
 	"context"
 	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"time"
 )
 
-// ExecuteMonthlyExchange 执行月卡兑换任务（所有账号）
-func (s *ExchangeService) ExecuteMonthlyExchange() {
-	_ = s.ExecuteMonthlyExchangeContext(context.Background())
-}
-
 // ExecuteMonthlyExchangeContext executes the monthly fan-out under a caller
 // context so Worker shutdown cancels semaphore waits and upstream HTTP calls.
-func (s *ExchangeService) ExecuteMonthlyExchangeContext(ctx context.Context) error {
+func (s *ExchangeService) ExecuteMonthlyExchangeContext(ctx context.Context, scheduled bool) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	if exchangeOperationContextID(ctx) == "" {
+		return fmt.Errorf("%w: 月卡兑换必须关联持久化操作", ErrExchangeInvalidInput)
+	}
+	guard := s.monthlySubmissionGuard(scheduled)
+	if err := guard(ctx); err != nil {
+		return err
+	}
 	locked, releaseRunLock := s.acquireMonthlyExchangeRunLock()
 	if !locked {
-		return nil
+		return fmt.Errorf("%w: 月卡兑换已有运行或今日已完成，请先核对记录", ErrExchangeTaskConflict)
 	}
 	keepRunLock := false
 	defer func() {
@@ -44,9 +48,8 @@ func (s *ExchangeService) ExecuteMonthlyExchangeContext(ctx context.Context) err
 		s.broadcast(ws.Message{
 			Type: "exchange_error",
 			Data: map[string]interface{}{
-				"task":    "monthly_exchange",
-				"error":   "获取兑换账号列表失败",
-				"details": err.Error(),
+				"task":  "monthly_exchange",
+				"error": "获取兑换账号列表失败",
 			},
 		})
 		return err
@@ -72,6 +75,7 @@ func (s *ExchangeService) ExecuteMonthlyExchangeContext(ctx context.Context) err
 	}
 
 	semaphore := make(chan struct{}, concurrency)
+	results := make(chan monthlyExchangeResult, len(accounts))
 	var wg sync.WaitGroup
 
 	for _, account := range accounts {
@@ -82,28 +86,32 @@ func (s *ExchangeService) ExecuteMonthlyExchangeContext(ctx context.Context) err
 		go func(acc *models.ExchangeAccount) {
 			defer wg.Done()
 			defer func() {
-				if r := recover(); r != nil {
-					accountID := uint(0)
-					if acc != nil {
-						accountID = acc.ID
-					}
-					log.Printf("【月卡兑换】账号 %d 执行 panic: %v", accountID, r)
+				if recovered := recover(); recovered != nil {
+					results <- monthlyExchangeResult{accountID: acc.ID, outcome: models.ExchangeOutcomeUnknown, message: fmt.Sprintf("月卡账号执行异常: %v", recovered)}
 				}
 			}()
-
 			select {
 			case semaphore <- struct{}{}:
 			case <-ctx.Done():
+				results <- monthlyExchangeResult{accountID: acc.ID, outcome: models.ExchangeOutcomeNotSubmitted, message: ctx.Err().Error()}
 				return
 			}
 			defer func() { <-semaphore }()
-
-			// 执行月卡兑换
-			s.executeMonthlyExchangeForAccountContext(ctx, acc, monthlyCardPrizeID)
+			results <- s.executeMonthlyExchangeForAccountContext(ctx, acc, monthlyCardPrizeID, guard)
 		}(account)
 	}
-
 	wg.Wait()
+	close(results)
+	var failures []string
+	for result := range results {
+		if result.outcome != models.ExchangeOutcomeAccepted {
+			failures = append(failures, fmt.Sprintf("账号%d：%s", result.accountID, result.message))
+		}
+	}
+	if len(failures) > 0 {
+		return fmt.Errorf("%w: 月卡兑换未全部完成：%s", ErrExchangeBatchPartialFailure, strings.Join(failures, "；"))
+	}
+
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -111,98 +119,147 @@ func (s *ExchangeService) ExecuteMonthlyExchangeContext(ctx context.Context) err
 	return nil
 }
 
-// executeMonthlyExchangeForAccount 为单个账号执行月卡兑换
-func (s *ExchangeService) executeMonthlyExchangeForAccount(account *models.ExchangeAccount, prizeID string) {
-	s.executeMonthlyExchangeForAccountContext(context.Background(), account, prizeID)
+func (s *ExchangeService) monthlySubmissionGuard(scheduled bool) exchangeSubmissionGuard {
+	return func(ctx context.Context) error {
+		if s.configRepo == nil {
+			return fmt.Errorf("兑换开关存储不可用")
+		}
+		enabled, err := s.ExchangeEnabled(ctx)
+		if err != nil {
+			return fmt.Errorf("读取抢兑开关失败: %w", err)
+		}
+		if !enabled {
+			return fmt.Errorf("%w: 抢兑功能已关闭", ErrExchangeTaskConflict)
+		}
+		if scheduled {
+			enabled, err = s.MonthlyExchangeEnabled(ctx)
+			if err != nil {
+				return fmt.Errorf("读取月卡自动兑换开关失败: %w", err)
+			}
+			if !enabled {
+				return fmt.Errorf("%w: 月卡自动兑换已关闭", ErrExchangeTaskConflict)
+			}
+		}
+		return nil
+	}
 }
 
-func (s *ExchangeService) executeMonthlyExchangeForAccountContext(ctx context.Context, account *models.ExchangeAccount, prizeID string) {
+type monthlyExchangeResult struct {
+	accountID uint
+	outcome   models.ExchangeOutcome
+	message   string
+	execTime  int
+	skipped   bool
+}
+
+func (s *ExchangeService) monthlyReceipt(ctx context.Context, account *models.ExchangeAccount, product *models.Product) (*repository.ExchangeExecutionReceipt, error) {
+	if s.exchangeReceiptRepo == nil || account == nil {
+		return nil, fmt.Errorf("月卡执行回执存储不可用")
+	}
+	operationID := exchangeOperationContextID(ctx)
+	if operationID == "" {
+		return nil, fmt.Errorf("%w: 月卡回执缺少持久化操作 ID", ErrExchangeInvalidInput)
+	}
+	receipt, err := s.exchangeReceiptRepo.WithContext(ctx).FindByOperationResource(operationID, exchangeAccountReceiptKind, account.ID)
+	if err != nil {
+		return nil, err
+	}
+	if receipt == nil {
+		receipt = &repository.ExchangeExecutionReceipt{OperationID: operationID, ResourceID: account.ID, ResourceKind: exchangeAccountReceiptKind, UserID: account.UserID, ProductID: product.ID}
+	}
+	return receipt, nil
+}
+
+func (s *ExchangeService) executeMonthlyExchangeForAccountContext(ctx context.Context, account *models.ExchangeAccount, prizeID string, guard exchangeSubmissionGuard) monthlyExchangeResult {
+	result := monthlyExchangeResult{outcome: models.ExchangeOutcomeNotSubmitted}
+	if account == nil || account.ID == 0 {
+		result.message = "月卡账号为空"
+		return result
+	}
+	result.accountID = account.ID
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	if account == nil {
-		return
-	}
-	if ctx.Err() != nil {
-		return
+	if err := ctx.Err(); err != nil {
+		result.message = err.Error()
+		return result
 	}
 	locked, releaseAccountLock := s.acquireMonthlyExchangeAccountLock(account.ID)
 	if !locked {
-		return
+		result.skipped = true
+		result.message = "账号今日已有月卡执行或已完成，跳过"
+		return result
 	}
 	keepAccountLock := false
 	defer func() {
-		if r := recover(); r != nil {
-			log.Printf("【月卡兑换】账号 %d 执行 panic: %v", account.ID, r)
-		}
 		if !keepAccountLock {
 			releaseAccountLock()
 		}
 	}()
-
 	startTime := time.Now()
+	product, err := s.productRepo.WithContext(ctx).GetByPrizeID(prizeID)
+	if err != nil {
+		product = &models.Product{PrizeID: prizeID, PrizeName: "移动云盘月卡", POrder: 0, Category: "会员权益"}
+	}
+	receipt, err := s.monthlyReceipt(ctx, account, product)
+	if err != nil {
+		result.message = err.Error()
+		return result
+	}
+	if receipt.CompletedAt != nil && receipt.Outcome != string(models.ExchangeOutcomeUnknown) {
+		result.outcome = models.ExchangeOutcome(receipt.Outcome)
+		result.message = receipt.Message
+		return result
+	}
+	if receipt.Outcome == string(models.ExchangeOutcomeUnknown) {
+		result.outcome = models.ExchangeOutcomeUnknown
+		result.message = "兑换结果待确认，请核对领奖专区及兑换记录，暂勿重复兑换"
+		return result
+	}
+	if err := s.exchangeReceiptRepo.WithContext(ctx).StartSubmission(receipt); err != nil {
+		result.message = fmt.Sprintf("提交边界持久化失败，未提交兑换: %v", err)
+		return result
+	}
+	keepAccountLock = true
+	upstream := performExchangeWithControlsContext(ctx, account, prizeID, s.tokenMgr, s.lockStore, &exchangePreparedSession{}, guard)
+	result = s.finalizeMonthlyExchange(ctx, account, product, receipt, upstream, int(time.Since(startTime).Milliseconds()))
+	if upstream.guardErr != nil && result.outcome == models.ExchangeOutcomeNotSubmitted {
+		keepAccountLock = false
+	}
+	return result
+}
+
+func (s *ExchangeService) finalizeMonthlyExchange(ctx context.Context, account *models.ExchangeAccount, product *models.Product, receipt *repository.ExchangeExecutionReceipt, upstream exchangeAttemptResult, execTime int) monthlyExchangeResult {
+	result := monthlyExchangeResult{accountID: account.ID, outcome: upstream.outcome, message: upstream.message, execTime: execTime}
+	record := &models.ExchangeRecord{
+		UserID: account.UserID, ExchangeAccountID: account.ID, ProductID: product.ID,
+		PrizeID: product.PrizeID, PrizeName: product.PrizeName, Status: string(models.ExchangeRecordFailed),
+		Outcome: string(upstream.outcome), Message: upstream.message, ExecutionTimeMs: result.execTime,
+	}
+	if upstream.success {
+		record.Status = string(models.ExchangeRecordSuccess)
+	}
+	receipt.Outcome = string(upstream.outcome)
+	receipt.Message = upstream.message
+	receipt.ExecutionTimeMs = result.execTime
+	now := time.Now()
+	receipt.CompletedAt = &now
+	if err := s.exchangeReceiptRepo.WithContext(ctx).Finalize(receipt, record); err != nil {
+		// The upstream may already have accepted this request. Keep the account
+		// protection even when its local result could not be persisted.
+		result.outcome = models.ExchangeOutcomeUnknown
+		result.message = fmt.Sprintf("月卡结果保存失败，需核对兑换记录，暂勿重复兑换: %v", err)
+		return result
+	}
 	accountName := account.Remark
 	if accountName == "" {
 		accountName = account.Phone
 	}
-	maskedAccountName := maskExchangeAccountName(accountName)
-
-	log.Printf("【月卡兑换】开始为账号 %s 执行兑换", maskedAccountName)
-
-	// 执行兑换
-	success, message, execTime := s.doExchangeContext(ctx, account, prizeID)
-	if ctx.Err() != nil {
-		return
-	}
-	keepAccountLock = true
-
-	// 查找或创建月卡商品记录
-	product, err := s.productRepo.WithContext(ctx).GetByPrizeID(prizeID)
-	if err != nil {
-		// 如果商品不存在，创建一个临时记录
-		product = &models.Product{
-			PrizeID:   prizeID,
-			PrizeName: "移动云盘月卡",
-			POrder:    0,
-			Category:  "会员权益",
-		}
-		log.Printf("【月卡兑换】商品 %s 不存在，使用临时记录", prizeID)
-	}
-
-	// 记录兑换结果
-	record := &models.ExchangeRecord{
-		UserID:            account.UserID,
-		ExchangeAccountID: account.ID,
-		ProductID:         product.ID,
-		PrizeID:           prizeID,
-		PrizeName:         product.PrizeName,
-		Status:            string(models.ExchangeRecordSuccess),
-		Message:           message,
-		ExecutionTimeMs:   execTime,
-	}
-
-	if !success {
-		record.Status = string(models.ExchangeRecordFailed)
-		log.Printf("【月卡兑换】账号 %s 兑换失败: %s", maskedAccountName, message)
-	} else {
-		log.Printf("【月卡兑换】账号 %s 兑换成功，耗时 %d ms", maskedAccountName, execTime)
-	}
-
-	if err := s.exchangeRecordRepo.WithContext(ctx).Create(record); err != nil {
-		log.Printf("【月卡兑换】记录兑换结果失败: %v", err)
-	}
-
-	// 推送 WebSocket 通知
-	s.sendToUser(account.UserID, ws.Message{
-		Type: "monthly_exchange_complete",
-		Data: map[string]interface{}{
-			"account_name": accountName,
-			"product_name": product.PrizeName,
-			"success":      success,
-			"message":      message,
-			"exec_time":    time.Since(startTime).Milliseconds(),
-		},
-	})
+	s.sendToUser(account.UserID, ws.Message{Type: "monthly_exchange_complete", Data: map[string]interface{}{
+		"account_name": accountName, "product_name": product.PrizeName, "success": upstream.success,
+		"outcome": string(upstream.outcome), "message": upstream.message, "exec_time": result.execTime,
+	}})
+	return result
 }
 
 func (s *ExchangeService) acquireMonthlyExchangeRunLock() (bool, func()) {

@@ -109,6 +109,7 @@ type Repositories struct {
 	Announcement    *repository.AnnouncementRepository
 	WSMessage       *repository.WSMessageRepository
 	Operation       *repository.OperationRepository
+	ExchangeReceipt *repository.ExchangeReceiptRepository
 	Schema          *repository.SchemaRepository
 }
 
@@ -180,6 +181,7 @@ func InitCoreWithConfig(config CoreConfig) (*Core, error) {
 		Announcement:    repository.NewAnnouncementRepository(db),
 		WSMessage:       repository.NewWSMessageRepository(db),
 		Operation:       repository.NewOperationRepository(db),
+		ExchangeReceipt: repository.NewExchangeReceiptRepository(db),
 		Schema:          repository.NewSchemaRepository(db),
 	}
 

@@ -103,6 +103,18 @@ func NewTaskCatalog() *TaskCatalog {
 			},
 		},
 		{
+			Code:           "redeposit",
+			Name:           "一键转存",
+			Description:    "云朵中心转存类任务槽（机制式跟进轮换）",
+			SortOrder:      52,
+			DefaultEnabled: true,
+			RunInBatch:     true,
+			Aliases:        []string{"save_link", "zhuan_cun"},
+			execute: func(r *TaskRunner) *TaskResult {
+				return r.runRedepositTask()
+			},
+		},
+		{
 			Code:           "mail_mutual",
 			Name:           "139邮箱账号互发",
 			Description:    "同一用户下的活跃账号两两互发邮件，每个有序账号对每月最多一次",
@@ -248,10 +260,10 @@ func NewTaskCatalog() *TaskCatalog {
 		{
 			Code:           "cloudphone",
 			Name:           "云手机红包派对",
-			Description:    "登录协议已迁移，暂时停用，待新登录链验证后恢复",
+			Description:    "换取独立会话，执行免云机协议任务并核对云币；其余任务需真实云机或验证码",
 			SortOrder:      160,
-			DefaultEnabled: false,
-			RunInBatch:     false,
+			DefaultEnabled: true,
+			RunInBatch:     true,
 			Aliases:        []string{"cloud_phone_redpack"},
 			execute: func(r *TaskRunner) *TaskResult {
 				return r.runCloudPhoneTask()
@@ -307,10 +319,10 @@ func NewTaskCatalog() *TaskCatalog {
 		{
 			Code:           "poster_activity",
 			Name:           "校园海报活动",
-			Description:    "完成AI相机体验任务并抽取校园海报活动奖励",
+			Description:    "完成AI相机体验任务并抽取校园海报活动奖励（活动 2026-10-31 到期，Run 内有到期守卫）",
 			SortOrder:      158,
-			DefaultEnabled: true,
-			RunInBatch:     true,
+			DefaultEnabled: false,
+			RunInBatch:     false,
 			Aliases:        []string{"poster", "newyear_special"},
 			execute: func(r *TaskRunner) *TaskResult {
 				return r.runPosterTask()
@@ -426,7 +438,7 @@ func NewTaskCatalog() *TaskCatalog {
 		{
 			Code:           "family_circle",
 			Name:           "家庭圈任务",
-			Description:    "查询家庭圈备份与任务状态（需先开通家庭圈群组）",
+			Description:    "试验接口，真实宿主仍待核验；需已开通的账号群组，默认关闭",
 			SortOrder:      164,
 			DefaultEnabled: false,
 			RunInBatch:     false,
@@ -521,10 +533,10 @@ func NewTaskCatalog() *TaskCatalog {
 		{
 			Code:           "lantern",
 			Name:           "全网猜谜得红包",
-			Description:    "按已知谜底答题并抽奖，每日最多4次，未知题目跳过；活动状态以服务端为准",
+			Description:    "按已知谜底答题并抽奖（活动 2026-10-07 到期，Run 内有到期守卫）",
 			SortOrder:      158,
-			DefaultEnabled: true,
-			RunInBatch:     true,
+			DefaultEnabled: false,
+			RunInBatch:     false,
 			Aliases:        []string{"lantern_riddles"},
 			execute: func(r *TaskRunner) *TaskResult {
 				return r.runLanternTask()
@@ -542,6 +554,18 @@ func NewTaskCatalog() *TaskCatalog {
 				return r.runLiveFlowerTask()
 			},
 		},
+		{
+			Code:           "coc3",
+			Name:           "中国移动权益市场",
+			Description:    "每日签到、AI豆苗任务与阳光值领取、浏览和免费抽奖，按服务端记录复查完成状态",
+			SortOrder:      174,
+			DefaultEnabled: true,
+			RunInBatch:     true,
+			Aliases:        []string{"coc3_market", "china_mobile_coc3"},
+			execute: func(r *TaskRunner) *TaskResult {
+				return r.runCoc3Task()
+			},
+		},
 	}
 
 	catalog := &TaskCatalog{
@@ -550,6 +574,12 @@ func NewTaskCatalog() *TaskCatalog {
 	}
 
 	defs = append(defs, autumnTaskDefinitions()...)
+	defs = append(defs, miguTaskDefinitions()...)
+	defs = append(defs,
+		TaskDefinition{Code: "activity_collect", Name: "活动中心收藏", Description: "显式执行时收藏活动中心广告，最多100项，无奖励；默认不修改账号收藏", SortOrder: 177, DefaultEnabled: false, RunInBatch: false, execute: func(r *TaskRunner) *TaskResult { return r.runActivityCollectTask() }},
+		TaskDefinition{Code: "coc_web6", Name: "中国移动7日打卡与网龄成长", Description: "纯Go换取独立Web6会话，签到和免费抽奖后复查记录；网龄评价使用账号配置内容", SortOrder: 175, DefaultEnabled: true, RunInBatch: true, execute: func(r *TaskRunner) *TaskResult { return r.runCocWeb6Task() }},
+		TaskDefinition{Code: "coc3_scan", Name: "COC3活动目录扫描", Description: "只读检查157项历史活动目录的当前时间窗和0元商品，不自动下单", SortOrder: 176, DefaultEnabled: false, RunInBatch: false, execute: func(r *TaskRunner) *TaskResult { return r.runCoc3ScanTask() }},
+	)
 	for _, def := range defs {
 		code := normalizeTaskCode(def.Code)
 		def.Code = code
@@ -658,7 +688,7 @@ func (c *TaskCatalog) ResolveBatchCodes(configs []*models.TaskConfig) []string {
 			continue
 		}
 		code := c.Normalize(cfg.TaskType)
-		if code == "" || code == "cloudphone" || seen[code] {
+		if code == "" || seen[code] {
 			continue
 		}
 		if _, ok := c.definitions[code]; !ok {

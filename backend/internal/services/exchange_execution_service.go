@@ -2,9 +2,11 @@ package services
 
 import (
 	"caiyun/internal/models"
+	"caiyun/internal/repository"
 	"caiyun/internal/utils"
 	"caiyun/internal/ws"
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"strings"
@@ -43,6 +45,7 @@ func (s *ExchangeService) ExecuteExchangeTaskContext(ctx context.Context, taskID
 type BatchExecuteResult struct {
 	TaskID  uint   `json:"task_id"`
 	Success bool   `json:"success"`
+	Outcome string `json:"outcome,omitempty"`
 	Message string `json:"message"`
 }
 
@@ -77,6 +80,12 @@ func (s *ExchangeService) BatchExecuteExchangeTasksContext(ctx context.Context, 
 			}
 
 			task, err := s.exchangeTaskRepo.WithContext(ctx).GetByID(id)
+			if err := ctx.Err(); err != nil {
+				result.Message = "任务已取消"
+				results[index] = result
+				return
+			}
+
 			if err != nil {
 				if ctxErr := ctx.Err(); ctxErr != nil {
 					result.Message = "任务已取消"
@@ -94,6 +103,9 @@ func (s *ExchangeService) BatchExecuteExchangeTasksContext(ctx context.Context, 
 
 			if err := s.executeSingleTaskSafelyContext(ctx, task); err != nil {
 				result.Message = exchangeErrorPublicMessage(err)
+				if errors.Is(err, ErrExchangeOutcomeUnknown) || (task.Status == string(models.ExchangeTaskFailed) && task.Outcome == string(models.ExchangeOutcomeUnknown)) {
+					result.Outcome = string(models.ExchangeOutcomeUnknown)
+				}
 			} else {
 				result.Success = true
 				result.Message = "任务执行成功"
@@ -129,12 +141,39 @@ func (s *ExchangeService) executeSingleTaskSafelyContext(ctx context.Context, ta
 	return s.executeSingleTaskContext(ctx, task)
 }
 
+func (s *ExchangeService) settleUnknownTask(ctx context.Context, task *models.ExchangeTask, operationID string) error {
+	cutoff := time.Now().Add(-exchangeTaskRunningTimeoutFromEnv())
+	conflict := fmt.Errorf("%w: %s", ErrExchangeTaskConflict, exchangeTaskClaimConflictReason(string(models.ExchangeTaskRunning)))
+	if !task.UpdatedAt.Before(cutoff) {
+		return conflict
+	}
+	if err := s.exchangeTaskRepo.WithContext(ctx).FinalizeStaleSubmission(task, cutoff, operationID); errors.Is(err, repository.ErrExchangeTaskExecutionLost) {
+		if completed, readErr := s.completedTaskResult(ctx, operationID, task.ID); completed || readErr != nil {
+			return readErr
+		}
+		return conflict
+	} else if err != nil {
+		return err
+	}
+	const message = "兑换结果待确认，请核对领奖专区及兑换记录，暂勿重复兑换"
+	createExchangeSystemLog(s.taskLogRepo, task.UserID, task.ExchangeAccount.AccountID, task.PrizeName, exchangeAccountName(&task.ExchangeAccount), false, message, 0)
+	s.sendToUser(task.UserID, ws.Message{Type: "exchange_result", Data: map[string]interface{}{
+		"task_id": task.ID, "prize_name": task.PrizeName, "success": false,
+		"outcome": string(models.ExchangeOutcomeUnknown), "message": message,
+	}})
+	return newExchangeOutcomeUnknownError(message)
+}
+
 // executeSingleTask 执行单个抢兑任务（带重试机制）
 func (s *ExchangeService) executeSingleTask(task *models.ExchangeTask) {
 	_ = s.executeSingleTaskContext(context.Background(), task)
 }
 
-func (s *ExchangeService) executeSingleTaskContext(ctx context.Context, task *models.ExchangeTask) (execErr error) {
+func (s *ExchangeService) executeSingleTaskContext(ctx context.Context, task *models.ExchangeTask) error {
+	return s.executeTaskWithSession(ctx, task, &exchangePreparedSession{})
+}
+
+func (s *ExchangeService) executeTaskWithSession(ctx context.Context, task *models.ExchangeTask, preparedSession *exchangePreparedSession) (execErr error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -144,13 +183,23 @@ func (s *ExchangeService) executeSingleTaskContext(ctx context.Context, task *mo
 	if task == nil || task.ID == 0 {
 		return ErrExchangeInvalidInput
 	}
-	claim, err := claimExchangeTaskManually(s.exchangeTaskRepo.WithContext(ctx), task, time.Now(), exchangeTaskRunningTimeoutFromEnv())
+	operationID := exchangeOperationContextID(ctx)
+	if completed, err := s.completedTaskResult(ctx, operationID, task.ID); completed || err != nil {
+		return err
+	}
+	if task.Status == string(models.ExchangeTaskRunning) && task.Outcome == string(models.ExchangeOutcomeUnknown) {
+		return s.settleUnknownTask(ctx, task, operationID)
+	}
+	claim, err := claimExchangeTaskManually(s.exchangeTaskRepo.WithContext(ctx), task, time.Now(), exchangeTaskRunningTimeoutFromEnv(), operationID)
 	if err != nil {
 		log.Printf("【抢兑任务】任务 %d 抢占执行权失败: %v", task.ID, err)
 		return err
 	}
 	task = claim.task
 	if !claim.started {
+		if completed, err := s.completedTaskResult(ctx, operationID, task.ID); completed || err != nil {
+			return err
+		}
 		log.Printf("【抢兑任务】任务 %d 未取得执行权: 当前状态=%s，原因=%s", task.ID, task.Status, claim.reason)
 		s.sendToUser(task.UserID, ws.Message{Type: "exchange_skipped", Data: map[string]interface{}{
 			"task_id": task.ID, "account_name": exchangeAccountName(&task.ExchangeAccount),
@@ -159,19 +208,22 @@ func (s *ExchangeService) executeSingleTaskContext(ctx context.Context, task *mo
 		return fmt.Errorf("%w: %s", ErrExchangeTaskConflict, claim.reason)
 	}
 	executionToken := claim.token
+	stopHeartbeat := startExchangeLeaseHeartbeat(ctx, s.exchangeTaskRepo.WithContext(ctx), task.ID, executionToken, exchangeTaskRunningTimeoutFromEnv())
+	defer stopHeartbeat()
 	finished := false
+	var result exchangeAttemptResult
 	defer func() {
 		if recovered := recover(); recovered != nil {
+			if finished {
+				execErr = nil
+				return
+			}
 			message := fmt.Sprintf("任务执行异常，已自动标记失败: %v", recovered)
 			log.Printf("【抢兑任务】任务 %d 执行 panic: %v", task.ID, recovered)
-			cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
-			if persistErr := s.persistExchangeOutcome(cleanupCtx, task, executionToken, false, message, 0, models.ExchangeTaskFailed); persistErr != nil {
-				log.Printf("【抢兑任务】panic 结果持久化失败: task_id=%d err=%v", task.ID, persistErr)
-			} else {
-				finished = true
-			}
-			execErr = fmt.Errorf("%w: %s", ErrExchangeExecutionFailed, message)
+			result = preflightExchangeResult(message, true)
+			result.stop = true
+			execErr = s.finalizeTaskExecution(task, result, executionToken, operationID)
+			finished = execErr == nil || errors.Is(execErr, ErrExchangeOutcomeUnknown)
 			return
 		}
 		if finished || ctx.Err() == nil {
@@ -184,7 +236,13 @@ func (s *ExchangeService) executeSingleTaskContext(ctx context.Context, task *mo
 			log.Printf("【抢兑任务】取消后恢复任务失败: task_id=%d err=%v", task.ID, releaseErr)
 		} else if released {
 			log.Printf("【抢兑任务】任务 %d 因上下文取消已恢复为 pending", task.ID)
+			return
 		}
+		// Unknown submissions are settled independently; cancellation must not
+		// discard the durable boundary or replay the upstream request.
+		result = unknownExchangeResult("兑换结果待确认，请核对领奖专区及兑换记录，暂勿重复兑换", 0)
+		execErr = s.finalizeTaskExecution(task, result, executionToken, operationID)
+		finished = execErr == nil || errors.Is(execErr, ErrExchangeOutcomeUnknown)
 	}()
 	if err := ctx.Err(); err != nil {
 		return err
@@ -206,7 +264,7 @@ func (s *ExchangeService) executeSingleTaskContext(ctx context.Context, task *mo
 	account, err := s.exchangeAccountRepo.WithContext(ctx).GetByID(task.ExchangeAccountID)
 	if err != nil {
 		message := "获取兑换账号失败"
-		if persistErr := s.persistExchangeOutcome(ctx, task, executionToken, false, message, 0, models.ExchangeTaskFailed); persistErr != nil {
+		if persistErr := s.persistExchangeOutcome(ctx, task, executionToken, preflightExchangeResult(message, true), models.ExchangeTaskFailed); persistErr != nil {
 			return persistErr
 		}
 		finished = true
@@ -223,7 +281,7 @@ func (s *ExchangeService) executeSingleTaskContext(ctx context.Context, task *mo
 		cloudAccount, err := s.accountRepo.WithContext(ctx).GetByID(account.AccountID)
 		if err != nil {
 			message := "云盘账号不存在或已删除"
-			if persistErr := s.persistExchangeOutcome(ctx, task, executionToken, false, message, 0, models.ExchangeTaskFailed); persistErr != nil {
+			if persistErr := s.persistExchangeOutcome(ctx, task, executionToken, preflightExchangeResult(message, true), models.ExchangeTaskFailed); persistErr != nil {
 				return persistErr
 			}
 			finished = true
@@ -231,7 +289,7 @@ func (s *ExchangeService) executeSingleTaskContext(ctx context.Context, task *mo
 		}
 		if !cloudAccount.IsActive {
 			message := "云盘账号已失效，请重新登录后再启用任务"
-			if persistErr := s.persistExchangeOutcome(ctx, task, executionToken, false, message, 0, models.ExchangeTaskPending); persistErr != nil {
+			if persistErr := s.persistExchangeOutcome(ctx, task, executionToken, preflightExchangeResult(message, true), models.ExchangeTaskPending); persistErr != nil {
 				return persistErr
 			}
 			finished = true
@@ -239,7 +297,7 @@ func (s *ExchangeService) executeSingleTaskContext(ctx context.Context, task *mo
 		}
 		if strings.TrimSpace(cloudAccount.Auth) == "" {
 			message := "云盘账号认证为空，请重新登录"
-			if persistErr := s.persistExchangeOutcome(ctx, task, executionToken, false, message, 0, models.ExchangeTaskPending); persistErr != nil {
+			if persistErr := s.persistExchangeOutcome(ctx, task, executionToken, preflightExchangeResult(message, true), models.ExchangeTaskPending); persistErr != nil {
 				return persistErr
 			}
 			finished = true
@@ -250,27 +308,22 @@ func (s *ExchangeService) executeSingleTaskContext(ctx context.Context, task *mo
 	log.Printf("【抢兑任务】开始执行任务 %d，账号: %s，商品: %s", task.ID, maskedAccountName, task.PrizeName)
 	maxRetries := effectiveExchangeMaxRetries(task.MaxRetries)
 
-	var success bool
-	var message string
-	var execTime int
-	attemptsUsed := 0
+	var attemptsUsed int
 	releaseMonthlySeriesLock := func() {}
 	keepMonthlySeriesLock := false
 	if locked, release, reason := acquireMonthlySeriesLock(s.lockStore, s.productRepo, task, time.Now()); !locked {
-		success, message, execTime = false, reason, 0
+		result = preflightExchangeResult(reason, false)
 	} else {
 		releaseMonthlySeriesLock = release
-		// Context cancellation, a persistence error or a panic can occur after
-		// a monthly lock has been acquired.  Failures must release only their
-		// own token; successful claims intentionally remain until month end.
+		// Accepted and unknown outcomes may both represent an upstream monthly
+		// claim. Never release that protection before reconciliation.
 		defer func() {
 			if !keepMonthlySeriesLock {
 				releaseMonthlySeriesLock()
 			}
 		}()
 		var retryErr error
-		preparedSession := &exchangePreparedSession{}
-		success, message, execTime, attemptsUsed, retryErr = runExchangeWithRetries(
+		result, attemptsUsed, retryErr = runExchangeWithRetries(
 			ctx,
 			maxRetries,
 			func(attempt int) error {
@@ -281,55 +334,86 @@ func (s *ExchangeService) executeSingleTaskContext(ctx context.Context, task *mo
 				}
 				return sleepExchangeContext(ctx, time.Duration(attempt*2)*time.Second)
 			},
-			func() (bool, string, int) {
+			func() exchangeAttemptResult {
 				prizeID := s.resolveTaskPrizeID(task)
 				if !isUsableExchangePrizeID(prizeID) {
-					return false, "商品已下架或不存在，请更新商品列表后重新创建抢兑任务", 0
+					return preflightExchangeResult("商品已下架或不存在，请更新商品列表后重新创建抢兑任务", true)
 				}
-				return s.doExchangeContext(ctx, account, prizeID, preparedSession)
+				return performExchangeWithControlsContext(ctx, account, prizeID, s.tokenMgr, s.lockStore, preparedSession,
+					newExchangeSubmissionGuard(s.exchangeTaskRepo.WithContext(ctx), task.ID, executionToken))
 			},
 		)
+		if retryErr != nil && result.outcome == models.ExchangeOutcomeUnknown {
+			keepMonthlySeriesLock = exchangeResultPreservesMonthlySeries(result)
+			return s.finalizeTaskExecution(task, result, executionToken, operationID)
+		}
 		if retryErr != nil {
 			return retryErr
 		}
 	}
 
-	finalStatus := exchangeTaskFinalStatus(task, success, message, attemptsUsed)
-	if success {
+	if result.guardErr != nil {
+		if err := s.exchangeTaskRepo.WithContext(ctx).TransitionRunning(task.ID, executionToken, string(models.ExchangeTaskPending), result.message); err != nil {
+			return err
+		}
+		finished = true
+		return result.guardErr
+	}
+	if result.outcome != "" && result.outcome != models.ExchangeOutcomeNotSubmitted {
+		keepMonthlySeriesLock = exchangeResultPreservesMonthlySeries(result)
+		err := s.finalizeTaskExecution(task, result, executionToken, operationID)
+		if err != nil && !errors.Is(err, ErrExchangeOutcomeUnknown) && !errors.Is(err, ErrExchangeExecutionFailed) {
+			return err
+		}
+		finished = true
+		s.notifyExchangeCompleted(ctx, task, result, attemptsUsed)
+		return err
+	}
+	finalStatus := exchangeTaskFinalStatus(task, result)
+	if result.success {
 		log.Printf("【抢兑任务】任务 %d 执行成功，账号: %s", task.ID, maskedAccountName)
 	} else {
-		log.Printf("【抢兑任务】任务 %d 执行失败，账号: %s，原因: %s", task.ID, maskedAccountName, message)
+		log.Printf("【抢兑任务】任务 %d 执行结束，账号: %s，结果: %s", task.ID, maskedAccountName, result.message)
 		if finalStatus == models.ExchangeTaskPending {
 			log.Printf("【抢兑任务】任务 %d 本场失败，等待下一个抢兑时间", task.ID)
 		}
 	}
-
-	// Upstream acceptance is already an externally visible monthly claim. Keep
-	// the lease even if the following database finalization is temporarily
-	// unavailable; releasing it here would permit a second redemption in the
-	// same month before the recovery path can persist the first result.
-	if success {
-		keepMonthlySeriesLock = true
-	}
-	if err := s.persistExchangeOutcome(ctx, task, executionToken, success, message, execTime, finalStatus); err != nil {
+	keepMonthlySeriesLock = exchangeResultPreservesMonthlySeries(result)
+	task.RetryCount = attemptsUsed
+	if err := s.persistExchangeOutcome(context.Background(), task, executionToken, result, finalStatus); err != nil {
 		return err
 	}
 	finished = true
-	if !success {
+	if result.outcome == models.ExchangeOutcomeRejected || result.outcome == models.ExchangeOutcomeNotSubmitted {
 		releaseMonthlySeriesLock()
 	}
-	// A terminally persisted result is no longer an in-flight lock: failures
-	// were released above, while successful monthly claims remain in Redis.
 	keepMonthlySeriesLock = true
 
+	operation, _ := ctx.Value(taskOperationKey{}).(taskOperation)
 	s.sendToUser(task.UserID, ws.Message{Type: "exchange_complete", Data: map[string]interface{}{
 		"task_id": task.ID, "account_name": accountName, "product_name": task.PrizeName,
-		"success": success, "message": message, "retry_count": task.RetryCount,
+		"success": result.success, "outcome": string(result.outcome), "message": result.message, "retry_count": attemptsUsed,
+		"operation_id": operation.id, "operation_attempt": operation.attempt,
 	}})
-	if !success {
-		return fmt.Errorf("%w: %s", ErrExchangeExecutionFailed, strings.TrimSpace(message))
+	if result.outcome == models.ExchangeOutcomeUnknown {
+		return newExchangeOutcomeUnknownError(result.message)
+	}
+	if !result.success {
+		return fmt.Errorf("%w: %s", ErrExchangeExecutionFailed, strings.TrimSpace(result.message))
 	}
 	return nil
+}
+
+func (s *ExchangeService) notifyExchangeCompleted(ctx context.Context, task *models.ExchangeTask, result exchangeAttemptResult, attemptsUsed int) {
+	if task == nil {
+		return
+	}
+	operation, _ := ctx.Value(taskOperationKey{}).(taskOperation)
+	s.sendToUser(task.UserID, ws.Message{Type: "exchange_complete", Data: map[string]interface{}{
+		"task_id": task.ID, "account_name": exchangeAccountName(&task.ExchangeAccount), "product_name": task.PrizeName,
+		"success": result.success, "outcome": string(result.outcome), "message": result.message, "retry_count": attemptsUsed,
+		"operation_id": operation.id, "operation_attempt": operation.attempt,
+	}})
 }
 
 // shouldRetry 判断是否需要重试（使用公共函数）
@@ -340,13 +424,12 @@ func (s *ExchangeService) shouldRetry(message string) bool {
 	return isExchangeRetryableFailure(message)
 }
 
-// doExchange 执行兑换请求
+func (s *ExchangeService) doExchangeContext(ctx context.Context, account *models.ExchangeAccount, prizeID string) (bool, string, int) {
+	result := performExchangeWithControlsContext(ctx, account, prizeID, s.tokenMgr, s.lockStore, &exchangePreparedSession{})
+	return result.success, result.message, result.execTime
+}
 func (s *ExchangeService) doExchange(account *models.ExchangeAccount, prizeID string) (bool, string, int) {
 	return performExchangeWithControls(account, prizeID, s.tokenMgr, s.lockStore)
-}
-
-func (s *ExchangeService) doExchangeContext(ctx context.Context, account *models.ExchangeAccount, prizeID string, prepared ...*exchangePreparedSession) (bool, string, int) {
-	return performExchangeWithControlsContext(ctx, account, prizeID, s.tokenMgr, s.lockStore, prepared...)
 }
 
 func (s *ExchangeService) resolveTaskPrizeID(task *models.ExchangeTask) string {
@@ -375,39 +458,4 @@ func (s *ExchangeService) resolveTaskPrizeID(task *models.ExchangeTask) string {
 		log.Printf("【抢兑任务】任务 %d 已自动修正商品ID为 %s，避免使用历史 memo 导致 404", task.ID, product.PrizeID)
 	}
 	return product.PrizeID
-}
-
-// persistExchangeOutcome atomically creates the immutable result record and
-// advances the task counters/final status. A partial write is never exposed:
-// any failure rolls back all three mutations and leaves the running task
-// recoverable by the Worker lease/retry path.
-func (s *ExchangeService) persistExchangeOutcome(ctx context.Context, task *models.ExchangeTask, executionToken string, success bool, message string, execTimeMs int, status models.ExchangeTaskStatus) error {
-	if task == nil || task.ID == 0 {
-		return fmt.Errorf("refuse to persist empty exchange task")
-	}
-	err := s.exchangeTaskRepo.WithContext(ctx).FinalizeOwned(task, executionToken, success, message, status, execTimeMs)
-	if err != nil {
-		log.Printf("【抢兑任务】原子保存结果失败: task_id=%d status=%s err=%v", task.ID, status, err)
-		return err
-	}
-
-	task.AttemptedCount++
-	task.LastResult = message
-	task.Status = string(status)
-	if success {
-		task.SuccessCount++
-	} else {
-		task.FailCount++
-	}
-	createExchangeSystemLog(
-		s.taskLogRepo,
-		task.UserID,
-		task.ExchangeAccount.AccountID,
-		task.PrizeName,
-		exchangeAccountName(&task.ExchangeAccount),
-		success,
-		message,
-		execTimeMs,
-	)
-	return nil
 }

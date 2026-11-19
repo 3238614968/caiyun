@@ -3,14 +3,14 @@ package services
 import (
 	"caiyun/internal/models"
 	"caiyun/internal/ws"
-	"log"
+	"context"
 	"strings"
 	"time"
 )
 
 // reportSkippedTask 记录被调度层跳过的任务结果，避免重复入队时前端完全无感知。
 func (s *ExchangeScheduler) reportSkippedTask(task *models.ExchangeTask, message string) {
-	if task == nil {
+	if task == nil || task.Status != string(models.ExchangeTaskPending) {
 		return
 	}
 	_, _ = s.exchangeTaskRepo.UpdatePendingLastResult(task.ID, message)
@@ -59,7 +59,9 @@ func (s *ExchangeScheduler) shouldStopExchange(message string) bool {
 }
 
 // recordResult 记录抢兑结果，并与手动执行路径保持一致地更新尝试次数和最后结果。
-func (s *ExchangeScheduler) recordResult(task *models.ExchangeTask, success bool, message string, execTime int) {
+func (s *ExchangeScheduler) recordResult(task *models.ExchangeTask, result exchangeAttemptResult, execTime int) {
+	success := result.success
+	message := result.message
 	if s.metrics != nil {
 		s.metrics.RecordExchangeAttempt(success, exchangeFailureReasonLabel(message), time.Duration(execTime)*time.Millisecond)
 	}
@@ -81,36 +83,20 @@ func (s *ExchangeScheduler) recordResult(task *models.ExchangeTask, success bool
 			"task_id":      task.ID,
 			"prize_name":   task.PrizeName,
 			"success":      success,
+			"outcome":      string(result.outcome),
 			"message":      message,
 			"execution_ms": execTime,
 		},
 	})
 }
 
-func (s *ExchangeScheduler) finalizeTaskResult(task *models.ExchangeTask, executionToken string, success bool, message string, execTime int) {
+func (s *ExchangeScheduler) finalizeTaskResult(task *models.ExchangeTask, execution exchangeTaskExecutionResult) error {
 	if task == nil {
-		return
+		return nil
 	}
-	if executionToken == "" {
-		// This task was skipped before this Worker acquired it.  Only annotate a
-		// still-pending task; never reset another Worker's running lease.
-		s.reportSkippedTask(task, message)
-		return
+	if execution.skipped || task.Status == string(models.ExchangeTaskCompleted) || task.Status == string(models.ExchangeTaskFailed) {
+		s.reportSkippedTask(task, execution.message)
+		return nil
 	}
-
-	status := exchangeTaskFinalStatus(task, success, message, task.RetryCount)
-
-	if err := s.exchangeTaskRepo.FinalizeOwned(task, executionToken, success, message, status, execTime); err != nil {
-		log.Printf("【抢兑调度器】保存任务结果失败: task_id=%d err=%v", task.ID, err)
-		return
-	}
-	task.AttemptedCount++
-	task.LastResult = message
-	task.Status = string(status)
-	if success {
-		task.SuccessCount++
-	} else {
-		task.FailCount++
-	}
-	s.recordResult(task, success, message, execTime)
+	return s.persistSchedulerResult(context.Background(), task, execution)
 }

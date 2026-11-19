@@ -24,6 +24,8 @@ CORE_OPENAPI_SCHEMAS = [
     "TaskLogAccount",
     "TaskLog",
     "TaskLogList",
+    "TaskDailySummary",
+    "TaskDailySummaryList",
     "QueueBackendMeta",
     "QueueStatus",
     "DeadLetter",

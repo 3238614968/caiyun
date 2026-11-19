@@ -1,6 +1,7 @@
 package api
 
 import (
+	corehttp "caiyun/internal/core/http"
 	"fmt"
 	"net/url"
 )
@@ -20,13 +21,16 @@ func (api *CaiyunAPI) BillTasks() (*CaiyunResponse, error) {
 func (api *CaiyunAPI) BillExecute(code string, feedback map[string]interface{}) (*CaiyunResponse, error) {
 	body := map[string]interface{}{"taskCode": code}
 	switch code {
-	case "BROWSE_REPORT", "MEMORY_ALBUM":
+	case "BROWSE_REPORT", "MEMORY_ALBUM", "AUTO_BACKUP":
+	case "AI_VIDEO":
+		// 仅登记；完成由服务端 AI 平台事件驱动（11-25 活动上线）。
 	case "AI_PHOTO":
 		if api.client.GetUserDomainID() == "" {
 			return nil, fmt.Errorf("年度账单缺少 userDomainId")
 		}
 		body["param"] = api.client.GetUserDomainID()
-	case "FEEDBACK":
+	case "FEEDBACK", "QUESTIONNAIRE":
+		// QUESTIONNAIRE 与 FEEDBACK 同形，复用问卷答案 param。
 		if len(feedback) == 0 {
 			return nil, fmt.Errorf("年度账单未配置问卷答案")
 		}
@@ -40,7 +44,7 @@ func (api *CaiyunAPI) BillLotteryCount() (*CaiyunResponse, error) {
 	return api.marketJSONRequest("GET", GPMarketURL+"/bill/taskLottery/queryCount", nil, nil)
 }
 func (api *CaiyunAPI) BillDraw() (*CaiyunResponse, error) {
-	return api.marketJSONRequest("GET", GPMarketURL+"/bill/taskLottery/prize?channel=app", nil, nil)
+	return api.marketJSONRequest("GET", GPMarketURL+"/bill/taskLottery/prize?channel=app", nil, nil, corehttp.WithoutRetries())
 }
 func (api *CaiyunAPI) LuckybagInfo() (*CaiyunResponse, error) {
 	return api.marketJSONRequest("GET", GPMarketURL+"/luckybag/common/user/info", nil, nil)

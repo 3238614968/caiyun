@@ -135,6 +135,9 @@ func exchangeRecordLocksMonthlySeries(record *models.ExchangeRecord) bool {
 	if record == nil {
 		return false
 	}
+	if record.Outcome == string(models.ExchangeOutcomeUnknown) {
+		return true
+	}
 	if record.Status == string(models.ExchangeRecordSuccess) {
 		return true
 	}

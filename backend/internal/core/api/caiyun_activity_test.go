@@ -59,6 +59,63 @@ func TestTokenPKAcceptInviteFallsBackOnBusinessNotFound(t *testing.T) {
 	}
 }
 
+func TestTokenPKLotteryProtocol(t *testing.T) {
+	var queried, drawn int
+	client := corehttp.NewClient(corehttp.WithTransport(mailRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+		switch req.URL.Path {
+		case "/ycloud/tokenpk/toplist/progress/queryRemainChance":
+			queried++
+			if req.Method != "GET" {
+				t.Fatalf("queryRemainChance method = %s, want GET", req.Method)
+			}
+			return mailTestResponse(req, 200, `{"code":0,"result":2}`), nil
+		case "/ycloud/tokenpk/toplist/progress/lottery":
+			drawn++
+			if req.Method != "POST" {
+				t.Fatalf("lottery method = %s, want POST", req.Method)
+			}
+			if req.Body != nil {
+				body, _ := io.ReadAll(req.Body)
+				if len(body) != 0 {
+					t.Fatalf("lottery must have no request body, got %s", body)
+				}
+			}
+			return mailTestResponse(req, 200, `{"code":0,"result":{"win":true,"prizeName":"10G空间卡","remainChance":1}}`), nil
+		default:
+			t.Fatalf("unexpected tokenpk lottery request: %s", req.URL)
+		}
+		return nil, nil
+	})))
+	api := NewCaiyunAPI(client)
+	remain, err := api.TokenPKQueryRemainChance()
+	if err != nil || remain != 2 || queried != 1 {
+		t.Fatalf("remain=%d queried=%d err=%v", remain, queried, err)
+	}
+	result, err := api.TokenPKLottery()
+	if err != nil || drawn != 1 {
+		t.Fatalf("drawn=%d err=%v", drawn, err)
+	}
+	if !result.Win || result.PrizeName != "10G空间卡" || result.RemainChance != 1 {
+		t.Fatalf("lottery result = %+v", result)
+	}
+}
+
+func TestTokenPKLotteryRejectsBusinessErrors(t *testing.T) {
+	client := corehttp.NewClient(corehttp.WithTransport(mailRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if strings.HasSuffix(req.URL.Path, "queryRemainChance") {
+			return mailTestResponse(req, 200, `{"code":403,"msg":"活动已下线"}`), nil
+		}
+		return mailTestResponse(req, 200, `{"code":9002,"msg":"次数不足"}`), nil
+	})))
+	api := NewCaiyunAPI(client)
+	if _, err := api.TokenPKQueryRemainChance(); err == nil || !strings.Contains(err.Error(), "活动已下线") {
+		t.Fatalf("queryRemainChance error = %v", err)
+	}
+	if _, err := api.TokenPKLottery(); err == nil || !strings.Contains(err.Error(), "次数不足") {
+		t.Fatalf("lottery error = %v", err)
+	}
+}
+
 func TestDecodeActivityBodyAcceptsNumericAndStringCodes(t *testing.T) {
 	for _, body := range []string{
 		`{"code":0,"msg":"success","result":{"a":1}}`,

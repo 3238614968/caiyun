@@ -12,6 +12,9 @@ import (
 	"caiyun/internal/core/utils"
 )
 
+// activityNow 是到期守卫的时钟，测试可注入固定时间。
+var activityNow = time.Now
+
 // activityBusinessCode 返回活动接口业务错误码；非业务错误返回空串。
 func activityBusinessCode(err error) string {
 	var businessErr *api.ActivityBusinessError
@@ -75,6 +78,11 @@ func (a *activityActions) uploadTextFileWithChannel(prefix, channel string) (str
 		ChannelSrc:   channel,
 		Ext:          ".txt",
 	})
+	if resp != nil && resp.FileID != "" {
+		if registerErr := AppendStringList(a.storage, KeyTempFiles, resp.FileID); registerErr != nil {
+			err = errors.Join(err, fmt.Errorf("登记上传资源回收失败: %w", registerErr))
+		}
+	}
 	if err != nil {
 		return "", "", err
 	}
@@ -100,6 +108,11 @@ func (a *activityActions) uploadPhotoFile(prefix string) (string, error) {
 		ChannelSrc:   "10000023",
 		Ext:          ".jpg",
 	})
+	if resp != nil && resp.FileID != "" {
+		if registerErr := AppendStringList(a.storage, KeyTempFiles, resp.FileID); registerErr != nil {
+			err = errors.Join(err, fmt.Errorf("登记上传资源回收失败: %w", registerErr))
+		}
+	}
 	if err != nil {
 		return "", err
 	}
@@ -187,11 +200,13 @@ func (a *activityActions) performAlbumBackup() error {
 		OpType:       "backup",
 		Ext:          ".jpg",
 	})
+	if uploaded != nil && uploaded.FileID != "" {
+		if registerErr := AppendStringList(a.storage, KeyTempFiles, uploaded.FileID); registerErr != nil {
+			return errors.Join(err, fmt.Errorf("登记备份资源回收失败: %w", registerErr))
+		}
+	}
 	if err != nil {
 		return err
-	}
-	if uploaded != nil && uploaded.FileID != "" {
-		_ = AppendStringList(a.storage, KeyTempFiles, uploaded.FileID)
 	}
 	return a.fileAPI.TriggerAlbumBackup()
 }

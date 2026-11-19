@@ -6,9 +6,11 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -21,6 +23,25 @@ import (
 
 // 本文件锁定 SSE 的投递语义：写入 HTTP 响应不等于送达，SSE 永远不做 ACK；
 // 持久化消息保持 pending，直到 WebSocket 显式 ACK 或 TTL 清理。
+
+func TestSSEReplayDrainsMultiplePagesWithoutAcknowledging(t *testing.T) {
+	h, db, repo := newSSEDeliveryHub(t)
+	const userID uint = 91
+	for index := 0; index < 201; index++ {
+		if _, err := repo.PersistMessageEnvelope(userID, "notification", map[string]any{"index": index}, fmt.Sprintf("page-%d", index), time.Now().Add(time.Hour)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writer := newSSETestWriter(false)
+	done, cancel := serveSSEForTest(t, h, writer, userID)
+	waitSSEData(t, writer.eventWritten)
+	cancel()
+	waitSSEHandlerExit(t, done)
+	var count int64
+	if err := db.Model(&models.WebSocketMessage{}).Where("user_id = ?", userID).Count(&count).Error; err != nil || count != 201 {
+		t.Fatalf("persisted messages = %d err=%v", count, err)
+	}
+}
 
 func TestSSELIVEKeepsMessagePendingAcrossConnections(t *testing.T) {
 	h, db, _ := newSSEDeliveryHub(t)
@@ -176,6 +197,7 @@ type sseTestWriter struct {
 	header       http.Header
 	failEvent    bool
 	eventWritten chan struct{}
+	eventCount   atomic.Int64
 }
 
 func newSSETestWriter(failEvent bool) *sseTestWriter {
@@ -194,6 +216,7 @@ func (w *sseTestWriter) Write(p []byte) (int, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	if bytes.Contains(p, []byte("data:")) {
+		w.eventCount.Add(1)
 		select {
 		case w.eventWritten <- struct{}{}:
 		default:

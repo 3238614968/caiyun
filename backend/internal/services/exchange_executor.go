@@ -5,6 +5,7 @@ import (
 	"caiyun/internal/core/auth"
 	corehttp "caiyun/internal/core/http"
 	"caiyun/internal/models"
+	"caiyun/internal/repository"
 	"caiyun/internal/utils"
 	"caiyun/internal/version"
 	"context"
@@ -43,6 +44,58 @@ type exchangeAttemptResult struct {
 	message  string
 	execTime int
 	stop     bool
+	outcome  models.ExchangeOutcome
+	guardErr error
+}
+
+type exchangeSubmissionGuard func(context.Context) error
+
+type exchangeTaskExecutionResult struct {
+	exchangeAttemptResult
+	executionToken string
+	attemptsUsed   int
+	skipped        bool
+	persistenceErr error
+}
+
+func newExchangeAttemptResult(success bool, message string, execTime int, outcome models.ExchangeOutcome) exchangeAttemptResult {
+	return exchangeAttemptResult{success: success, message: message, execTime: execTime, outcome: outcome, stop: outcome == models.ExchangeOutcomeUnknown}
+}
+
+func preflightExchangeResult(message string, stop bool) exchangeAttemptResult {
+	return exchangeAttemptResult{message: message, stop: stop, outcome: models.ExchangeOutcomeNotSubmitted}
+}
+
+func unknownExchangeResult(message string, execTime int) exchangeAttemptResult {
+	if !strings.Contains(message, "兑换结果待确认") {
+		message += " | 兑换结果待确认，请核对领奖专区及兑换记录，暂勿重复兑换"
+	}
+	return newExchangeAttemptResult(false, message, execTime, models.ExchangeOutcomeUnknown)
+}
+
+func acceptedExchangeResult(message string, execTime int) exchangeAttemptResult {
+	return newExchangeAttemptResult(true, message, execTime, models.ExchangeOutcomeAccepted)
+}
+
+func rejectedExchangeResult(message string, execTime int, stop bool) exchangeAttemptResult {
+	result := newExchangeAttemptResult(false, message, execTime, models.ExchangeOutcomeRejected)
+	result.stop = stop
+	return result
+}
+
+func (r exchangeAttemptResult) retryable() bool {
+	if r.guardErr != nil || (r.outcome != "" && r.outcome != models.ExchangeOutcomeNotSubmitted) {
+		return false
+	}
+	return isExchangeRetryableFailure(r.message)
+}
+
+func (r exchangeAttemptResult) settlement(status models.ExchangeTaskStatus) repository.ExchangeSettlement {
+	outcome := r.outcome
+	if outcome == "" {
+		outcome = models.ExchangeOutcomeNotSubmitted
+	}
+	return repository.ExchangeSettlement{Outcome: outcome, Message: r.message, Status: status, ExecutionTimeMs: r.execTime}
 }
 
 func taskExchangePrizeID(task *models.ExchangeTask) string {
@@ -63,23 +116,26 @@ func isUsableExchangePrizeID(prizeID string) bool {
 	return !strings.HasPrefix(prizeID, "{") && !strings.Contains(prizeID, "\"actId\"") && !strings.Contains(prizeID, "\"batchID\"")
 }
 
-// performExchange wraps the exchange HTTP request for both manual and scheduled flows.
+// performExchange wraps the legacy no-task request used by monthly exchange.
+// Task execution uses performExchangeWithControlsContext with a durable guard.
 func performExchange(account *models.ExchangeAccount, prizeID string, tokenMgr *TokenManager) (bool, string, int) {
-	return performExchangeContext(context.Background(), account, prizeID, tokenMgr)
+	result := performExchangePreparedContext(context.Background(), account, prizeID, tokenMgr, &exchangePreparedSession{})
+	return result.success, result.message, result.execTime
 }
 
-func performExchangeContext(ctx context.Context, account *models.ExchangeAccount, prizeID string, tokenMgr *TokenManager) (bool, string, int) {
-	return performExchangePreparedContext(ctx, account, prizeID, tokenMgr, &exchangePreparedSession{})
-}
-
-func performExchangePreparedContext(ctx context.Context, account *models.ExchangeAccount, prizeID string, tokenMgr *TokenManager, prepared *exchangePreparedSession) (success bool, message string, elapsed int) {
-	defer func() { message = version.Annotate(message) }()
+func performExchangePreparedContext(ctx context.Context, account *models.ExchangeAccount, prizeID string, tokenMgr *TokenManager, prepared *exchangePreparedSession, guards ...exchangeSubmissionGuard) (result exchangeAttemptResult) {
+	defer func() { result.message = version.Annotate(result.message) }()
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	startTime := time.Now()
+	defer func() {
+		if result.execTime == 0 {
+			result.execTime = int(time.Since(startTime).Milliseconds())
+		}
+	}()
 	if err := ctx.Err(); err != nil {
-		return false, err.Error(), int(time.Since(startTime).Milliseconds())
+		return preflightExchangeResult(err.Error(), false)
 	}
 
 	if prepared == nil {
@@ -98,12 +154,12 @@ func performExchangePreparedContext(ctx context.Context, account *models.Exchang
 		var err error
 		authCtx, err = prepareExchangeAuth(account, tokenMgr)
 		if err != nil {
-			return false, err.Error(), int(time.Since(startTime).Milliseconds())
+			return preflightExchangeResult(err.Error(), false)
 		}
 		prepared.auth = authCtx
 	}
 	if authCtx.jwtToken == "" {
-		return false, "JWT token 为空", int(time.Since(startTime).Milliseconds())
+		return preflightExchangeResult("JWT token 为空", false)
 	}
 
 	session := prepared.http
@@ -112,10 +168,9 @@ func performExchangePreparedContext(ctx context.Context, account *models.Exchang
 		prepared.http = session
 	}
 	if err := ensureExchangeSessionLogin(ctx, session, authCtx); err != nil {
-		return false, err.Error(), int(time.Since(startTime).Milliseconds())
+		return preflightExchangeResult(err.Error(), false)
 	}
-	result := executeExchangeOnceContext(ctx, prizeID, authCtx, session)
-	return result.success, result.message, result.execTime
+	return executeExchangeOnceContext(ctx, prizeID, authCtx, session, guards...)
 }
 
 func prepareExchangeAuth(account *models.ExchangeAccount, tokenMgr *TokenManager) (*exchangeAuthContext, error) {
@@ -174,11 +229,11 @@ func prepareExchangeAuthWithRefresh(account *models.ExchangeAccount, tokenMgr ex
 	return &exchangeAuthContext{jwtToken: jwtToken, ssoToken: ssoToken, authorization: authStr}, nil
 }
 
-func executeExchangeOnce(prizeID string, authCtx *exchangeAuthContext, session *exchangeHTTPSession) exchangeAttemptResult {
-	return executeExchangeOnceContext(context.Background(), prizeID, authCtx, session)
+func executeExchangeOnce(prizeID string, authCtx *exchangeAuthContext, session *exchangeHTTPSession, guards ...exchangeSubmissionGuard) exchangeAttemptResult {
+	return executeExchangeOnceContext(context.Background(), prizeID, authCtx, session, guards...)
 }
 
-func executeExchangeOnceContext(ctx context.Context, prizeID string, authCtx *exchangeAuthContext, session *exchangeHTTPSession) exchangeAttemptResult {
+func executeExchangeOnceContext(ctx context.Context, prizeID string, authCtx *exchangeAuthContext, session *exchangeHTTPSession, guards ...exchangeSubmissionGuard) (result exchangeAttemptResult) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -186,39 +241,39 @@ func executeExchangeOnceContext(ctx context.Context, prizeID string, authCtx *ex
 	if session == nil {
 		session = newExchangeHTTPSessionContext(ctx, nil, authCtx)
 	}
+	result = preflightExchangeResult("", false)
+	defer func() { result.execTime = int(time.Since(startTime).Milliseconds()) }()
 	if _, err := strconv.ParseUint(strings.TrimSpace(prizeID), 10, 64); err != nil {
-		return exchangeAttemptResult{message: "商品 prizeId 格式无效", stop: true}
+		result.message, result.stop = "商品 prizeId 格式无效", true
+		return result
 	}
 	if session.deviceErr != nil {
-		return exchangeAttemptResult{message: session.deviceErr.Error(), stop: true}
+		result.message, result.stop = session.deviceErr.Error(), true
+		return result
 	}
 	if strings.TrimSpace(session.deviceID) == "" {
-		return exchangeAttemptResult{message: "设备认证失败，设备标识为空，未提交兑换", stop: true}
+		result.message, result.stop = "设备认证失败，设备标识为空，未提交兑换", true
+		return result
 	}
 
 	// H5 checks prize eligibility before opening the captcha. Keep known account
 	// restrictions separate from the upstream's generic 610/GK rejection.
 	eligibility, eligibilityErr := fetchExchangeEligibilityContext(ctx, session, authCtx, prizeID)
 	if eligibilityErr != nil {
-		return exchangeAttemptResult{message: fmt.Sprintf("兑换资格查询失败，未提交兑换: %v", eligibilityErr), execTime: int(time.Since(startTime).Milliseconds()), stop: true}
+		result.message, result.stop = fmt.Sprintf("兑换资格查询失败，未提交兑换: %v", eligibilityErr), true
+		return result
 	} else {
 		if reason := exchangeEligibilityBlockReason(eligibility); reason != "" {
-			return exchangeAttemptResult{
-				message:  reason,
-				execTime: int(time.Since(startTime).Milliseconds()),
-				stop:     true,
-			}
+			result.message, result.stop = reason, true
+			return result
 		}
 	}
 
 	visitErr := prepareExchangeVisit(ctx, session, authCtx)
 	offset, solveInfo, err := obtainExchangeSlideOffsetContext(ctx, session, authCtx)
 	if err != nil {
-		return exchangeAttemptResult{
-			success:  false,
-			message:  fmt.Sprintf("滑块验证码识别失败：%v", err),
-			execTime: int(time.Since(startTime).Milliseconds()),
-		}
+		result.message = fmt.Sprintf("滑块验证码识别失败：%v", err)
+		return result
 	}
 	if note := exchangeEligibilityNote(eligibility); note != "" {
 		solveInfo = strings.TrimSpace(solveInfo + " " + note)
@@ -230,52 +285,62 @@ func executeExchangeOnceContext(ctx context.Context, prizeID string, authCtx *ex
 	// makes a correct match fail the upstream challenge.
 	req, err := buildExchangeV3Request(ctx, prizeID, offset, session.deviceID)
 	if err != nil {
-		return exchangeAttemptResult{success: false, message: fmt.Sprintf("创建请求失败：%v", err), execTime: int(time.Since(startTime).Milliseconds()), stop: true}
+		result.message, result.stop = fmt.Sprintf("创建请求失败：%v", err), true
+		return result
 	}
 	req.Host = "m.mcloud.139.com"
 	for key, value := range buildExchangeHeaders(authCtx, session, map[string]string{"isDeviceId": "true", "Origin": "https://m.mcloud.139.com"}) {
 		req.Header.Set(key, value)
 	}
 
+	// Mark only after every preflight step and immediately before the POST. The
+	// callback is fencing-owned: no durable boundary means no upstream request.
+	if len(guards) > 0 && guards[0] != nil {
+		if err := guards[0](ctx); err != nil {
+			result.guardErr = err
+			result.message = fmt.Sprintf("提交边界持久化失败，未提交兑换: %v", err)
+			return result
+		}
+	}
 	resp, err := session.client.Do(req)
 	if err != nil {
-		return exchangeAttemptResult{success: false, message: fmt.Sprintf("请求失败：%v", err), execTime: int(time.Since(startTime).Milliseconds())}
+		return unknownExchangeResult(fmt.Sprintf("请求失败：%v", err), result.execTime)
 	}
 	defer resp.Body.Close()
 
 	bodyBytes, err := utils.ReadLimitedBody(resp.Body, utils.DefaultMaxResponseBodyBytes)
 	if err != nil {
-		return exchangeAttemptResult{success: false, message: fmt.Sprintf("读取响应失败：%v", err), execTime: int(time.Since(startTime).Milliseconds())}
+		return unknownExchangeResult(fmt.Sprintf("读取响应失败：%v", err), result.execTime)
 	}
 	body := string(bodyBytes)
 
-	execTime := int(time.Since(startTime).Milliseconds())
+	execTime := result.execTime
 	statusCode := 0
 	if resp != nil {
 		statusCode = resp.StatusCode
 	}
 
 	if statusCode >= 400 {
-		return exchangeAttemptResult{success: false, message: fmt.Sprintf("请求返回异常 | http_status=%d | body=%s", statusCode, summarizeExchangeBody(body)), execTime: execTime}
+		return unknownExchangeResult(fmt.Sprintf("请求返回异常 | http_status=%d | body=%s", statusCode, summarizeExchangeBody(body)), execTime)
 	}
 
 	var response map[string]interface{}
 	decoder := json.NewDecoder(strings.NewReader(body))
 	decoder.UseNumber()
 	if err := decoder.Decode(&response); err != nil {
-		return exchangeAttemptResult{success: false, message: fmt.Sprintf("解析响应失败：%v | http_status=%d | body=%s", err, statusCode, summarizeExchangeBody(body)), execTime: execTime}
+		return unknownExchangeResult(fmt.Sprintf("解析响应失败：%v | http_status=%d | body=%s", err, statusCode, summarizeExchangeBody(body)), execTime)
 	}
 
 	msg := firstResponseValue(response, "msg", "message")
 	if msg == "" {
-		return exchangeAttemptResult{success: false, message: fmt.Sprintf("响应格式错误 | http_status=%d | body=%s", statusCode, summarizeExchangeBody(body)), execTime: execTime}
+		return unknownExchangeResult(fmt.Sprintf("响应格式错误 | http_status=%d | body=%s", statusCode, summarizeExchangeBody(body)), execTime)
 	}
 	if !strings.EqualFold(strings.TrimSpace(msg), "success") {
 		message := buildExchangeFailureMessage(statusCode, response, body)
 		if solveInfo != "" {
 			message += " | " + solveInfo
 		}
-		return exchangeAttemptResult{success: false, message: message, execTime: execTime, stop: isExchangeTerminalMessage(message)}
+		return rejectedExchangeResult(message, execTime, isExchangeTerminalMessage(message))
 	}
 	if businessFailure := exchangeResponseBusinessFailure(response); businessFailure != "" {
 		normalizedResponse := make(map[string]interface{}, len(response)+1)
@@ -284,14 +349,14 @@ func executeExchangeOnceContext(ctx context.Context, prizeID string, authCtx *ex
 		}
 		normalizedResponse["msg"] = businessFailure
 		message := buildExchangeFailureMessage(statusCode, normalizedResponse, body)
-		return exchangeAttemptResult{success: false, message: message, execTime: execTime, stop: isExchangeTerminalMessage(message)}
+		return rejectedExchangeResult(message, execTime, isExchangeTerminalMessage(message))
 	}
 
 	if firstResponseValue(response, "code") == "" || firstNestedResponseValue(response, []string{"result"}, "oid", "oId") == "" {
-		return exchangeAttemptResult{message: "响应格式错误：兑换结果待确认，成功回包缺少业务码或奖品记录，请先查询领奖专区", execTime: execTime, stop: true}
+		return unknownExchangeResult("响应格式错误：兑换结果待确认，成功回包缺少业务码或奖品记录，请先查询领奖专区", execTime)
 	}
 	if returnedID := firstNestedResponseValue(response, []string{"result"}, "prizeId"); returnedID != "" && returnedID != strings.TrimSpace(prizeID) {
-		return exchangeAttemptResult{message: "响应格式错误：兑换结果待确认，回包商品与请求不一致，请先查询领奖专区", execTime: execTime, stop: true}
+		return unknownExchangeResult("响应格式错误：兑换结果待确认，回包商品与请求不一致，请先查询领奖专区", execTime)
 	}
 
 	prizeName := firstNestedResponseValue(response, []string{"result"}, "prizeName", "name")
@@ -299,9 +364,9 @@ func executeExchangeOnceContext(ctx context.Context, prizeID string, authCtx *ex
 		solveInfo = "，" + solveInfo
 	}
 	if prizeName != "" {
-		return exchangeAttemptResult{success: true, message: "兑换成功：" + prizeName + solveInfo, execTime: execTime, stop: true}
+		return acceptedExchangeResult("兑换成功："+prizeName+solveInfo, execTime)
 	}
-	return exchangeAttemptResult{success: true, message: "兑换成功" + solveInfo, execTime: execTime, stop: true}
+	return acceptedExchangeResult("兑换成功"+solveInfo, execTime)
 }
 
 func buildExchangeV3Request(ctx context.Context, prizeID string, puzzleOffset int, deviceID string) (*http.Request, error) {

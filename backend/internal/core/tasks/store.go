@@ -36,6 +36,7 @@ type MemoryStore struct {
 type ScopedStorage struct {
 	base   Storage
 	prefix string
+	mu     sync.Mutex
 }
 
 // Logger 日志接口
@@ -250,6 +251,12 @@ func (s *ScopedStorage) scopeKey(key string) string {
 	return s.prefix + ":" + key
 }
 
+// Lock serializes list read-modify-write within this account scope.
+func (s *ScopedStorage) Lock() func() {
+	s.mu.Lock()
+	return s.mu.Unlock
+}
+
 // 存储键常量
 const (
 	KeyUserID     = "user_id"
@@ -338,10 +345,7 @@ func SaveStringList(store Storage, key string, list []string) error {
 	}
 
 	if len(uniq) == 0 {
-		if err := store.Delete(key); err != nil {
-			return nil
-		}
-		return nil
+		return store.Delete(key)
 	}
 
 	data, err := json.Marshal(uniq)
@@ -355,6 +359,10 @@ func SaveStringList(store Storage, key string, list []string) error {
 func AppendStringList(store Storage, key string, items ...string) error {
 	if store == nil || len(items) == 0 {
 		return nil
+	}
+	if scoped, ok := store.(interface{ Lock() func() }); ok {
+		unlock := scoped.Lock()
+		defer unlock()
 	}
 
 	list, err := LoadStringList(store, key)

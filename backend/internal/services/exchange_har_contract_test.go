@@ -42,10 +42,16 @@ func TestExchangeCapturedFlowUsesVariablePrizeAndServerCookie(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.Header().Set("Content-Type", "application/json")
 				if r.URL.Path == "/deviceprofile/v4" {
+					if r.Referer() != "https://m.mcloud.139.com/portal/mobilecloud/index.html?path=newsignin" {
+						t.Error("device registration received a private page URL")
+					}
 					_, _ = io.WriteString(w, `{"code":1100,"detail":{"deviceId":"fixture-device"}}`)
 					return
 				}
 				if r.URL.Path == "/portal/mobilecloud/index.html" {
+					if r.URL.Query().Get("token") != "fixture-sso" {
+						t.Error("first-party login lost its page ticket")
+					}
 					_, _ = io.WriteString(w, "<html></html>")
 					return
 				}

@@ -47,6 +47,7 @@ func (t *CloudPhonePartyTask) Run() error {
 		issues = append(issues, err)
 	} else {
 		parts = append(parts, "签到已登记，实际签到奖励仍需云机确认")
+		t.pending = true
 	}
 	list, err := t.api.CloudPhoneTasks(token)
 	if err != nil {
@@ -95,6 +96,7 @@ func (t *CloudPhonePartyTask) Run() error {
 	}
 	parts = append(parts, fmt.Sprintf("协议任务登记%d项、此前已完成%d项", registered, already))
 	if pending > 0 {
+		t.pending = true
 		parts = append(parts, fmt.Sprintf("其余%d项需真实云机或活动资格，仅盘点", pending))
 	}
 	t.lastMessage = strings.Join(parts, "；")

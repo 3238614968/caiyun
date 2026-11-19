@@ -2,6 +2,8 @@ package tasks
 
 import (
 	"fmt"
+	"strconv"
+	"strings"
 	"time"
 
 	"caiyun/internal/core/api"
@@ -9,172 +11,135 @@ import (
 	"caiyun/internal/core/logger"
 )
 
-// WeChatTask 微信任务
+// WeChatTask uses only the first, free daily draw. Every response is checked;
+// an absent code or a nonzero string code can never become a success.
 type WeChatTask struct {
-	client *http.Client
-	logger *logger.Logger
-	api    *api.CaiyunAPI
+	api              *api.CaiyunAPI
+	logger           *logger.Logger
+	message          string
+	pending, skipped bool
 }
 
-// NewWeChatTask 创建微信任务
-func NewWeChatTask(client *http.Client, logger *logger.Logger) *WeChatTask {
-	return &WeChatTask{
-		client: client,
-		logger: logger,
-		api:    api.NewCaiyunAPI(client),
+func NewWeChatTask(client *http.Client, log *logger.Logger) *WeChatTask {
+	return &WeChatTask{api: api.NewCaiyunAPI(client), logger: log}
+}
+func (t *WeChatTask) Message() string { return t.message }
+func (t *WeChatTask) Pending() bool   { return t.pending }
+func (t *WeChatTask) Skipped() bool   { return t.skipped }
+func (t *WeChatTask) reset()          { t.message = ""; t.pending = false; t.skipped = false }
+func (t *WeChatTask) check(operation string, resp *api.CaiyunResponse) error {
+	if responseCodeIs(resp, 0) {
+		return nil
 	}
+	if resp != nil && (responseCodeIs(resp, 602) || strings.Contains(resp.MessageText(), "活动已结束")) {
+		t.skipped = true
+		t.message = operation + "活动已结束"
+		return nil
+	}
+	if resp != nil {
+		for _, phrase := range []string{"未绑定", "未关注", "请先关注", "尚未绑定"} {
+			if strings.Contains(resp.MessageText(), phrase) {
+				t.pending = true
+				t.message = operation + "需绑定微信公众号：中国移动云盘"
+				return nil
+			}
+		}
+	}
+	return rewardResponseError(operation, resp)
 }
-
-// RunSignIn 执行微信签到
 func (t *WeChatTask) RunSignIn() error {
+	t.reset()
 	resp, err := t.api.SignInWx()
 	if err != nil {
-		t.logger.Error("微信签到失败:", err)
 		return err
 	}
-
-	// 检查响应
-	code := 0
-	switch v := resp.Code.(type) {
-	case int:
-		code = v
-	case float64:
-		code = int(v)
-	case string:
-		if v == "0" {
-			code = 0
+	if err = t.check("微信签到", resp); err != nil || t.skipped || t.pending {
+		return err
+	}
+	// The endpoint can acknowledge a request without supplying a completion bit.
+	result, _ := resp.Result.(map[string]interface{})
+	confirmed := false
+	for _, key := range []string{"todaySigned", "isSign", "isSigned"} {
+		if value, exists := result[key]; exists && toBool(value) {
+			confirmed = true
 		}
 	}
-
-	if code == 0 {
-		t.logger.Success("微信签到成功")
+	t.pending = !confirmed
+	if confirmed {
+		t.message = "微信签到完成状态已确认"
+	} else {
+		t.message = "微信签到请求已接受，未返回可核验的完成状态"
+	}
+	return nil
+}
+func (t *WeChatTask) RunDraw(times int) error {
+	return t.RunDrawWithInterval(times, 500*time.Millisecond)
+}
+func wechatRemaining(resp *api.CaiyunResponse) (int, error) {
+	if err := rewardResponseError("微信抽奖次数", resp); err != nil {
+		return 0, err
+	}
+	result, ok := resp.Result.(map[string]interface{})
+	if !ok {
+		return 0, fmt.Errorf("微信抽奖缺少次数记录")
+	}
+	value, ok := result["surplusNumber"]
+	if !ok {
+		return 0, fmt.Errorf("微信抽奖缺少剩余次数")
+	}
+	n, err := strconv.Atoi(fmt.Sprint(value))
+	if err != nil || n < 0 || n > 50 {
+		return 0, fmt.Errorf("微信抽奖次数无效")
+	}
+	return n, nil
+}
+func (t *WeChatTask) RunDrawWithInterval(times int, _ time.Duration) error {
+	t.reset()
+	if times <= 0 {
+		t.skipped = true
+		t.message = "微信抽奖未启用"
 		return nil
 	}
-
-	// 常见错误：账号未绑定微信公众号
-	msg := resp.Message
-	if msg == "" {
-		msg = resp.Msg
-	}
-	if msg == "" {
-		msg = "未知错误"
-	}
-	t.logger.Fail("微信签到失败")
-	t.logger.Fail("当前账号没有绑定微信公众号【中国移动云盘】")
-	return fmt.Errorf("微信签到失败: %s", msg)
-}
-
-// RunDraw 执行微信抽奖（每天只抽一次，因为只有第一次免费）
-func (t *WeChatTask) RunDraw(configTimes int) error {
-	return t.RunDrawWithInterval(configTimes, 500*time.Millisecond)
-}
-
-// RunDrawWithInterval 按配置次数和间隔执行微信抽奖
-func (t *WeChatTask) RunDrawWithInterval(configTimes int, interval time.Duration) error {
-	if configTimes <= 0 {
-		return nil
-	}
-	if interval < 0 {
-		interval = 0
-	}
-
-	// 先获取抽奖信息
-	drawInfo, err := t.api.GetDrawInWx()
+	info, err := t.api.GetDrawInWx()
 	if err != nil {
-		t.logger.Error("获取微信抽奖信息失败:", err)
 		return err
 	}
-
-	// 检查是否可以抽奖
-	code := 0
-	switch v := drawInfo.Code.(type) {
-	case int:
-		code = v
-	case float64:
-		code = int(v)
-	case string:
-		if v == "0" {
-			code = 0
-		}
+	if err = t.check("微信抽奖", info); err != nil || t.skipped || t.pending {
+		return err
 	}
-
-	if code != 0 {
-		msg := drawInfo.Message
-		if msg == "" {
-			msg = drawInfo.Msg
-		}
-		t.logger.Info(fmt.Sprintf("无法抽奖: %s", msg))
+	count, err := wechatRemaining(info)
+	if err != nil {
+		return err
+	}
+	if count < 50 {
+		t.message = "今日微信免费抽奖机会已使用，不消耗云朵继续抽奖"
 		return nil
 	}
-
-	// 解析剩余次数
-	surplusNumber := 0
-	if drawInfo.Result != nil {
-		if resultMap, ok := drawInfo.Result.(map[string]interface{}); ok {
-			if surplus, ok := resultMap["surplusNumber"].(float64); ok {
-				surplusNumber = int(surplus)
-			}
-		}
+	resp, err := t.api.WxDraw()
+	if err != nil {
+		return fmt.Errorf("微信抽奖提交异常（未自动重提）: %w", err)
 	}
-
-	// JS 逻辑：need = configTimes - (50 - surplusNumber)
-	alreadyDrawn := 50 - surplusNumber
-	needDrawTimes := configTimes - alreadyDrawn
-
-	if needDrawTimes < 1 {
-		t.logger.Info(fmt.Sprintf("剩余微信抽奖次数%d，已完成", surplusNumber))
+	if err = t.check("微信抽奖", resp); err != nil || t.skipped || t.pending {
+		return err
+	}
+	after, err := t.api.GetDrawInWx()
+	if err != nil {
+		return fmt.Errorf("微信抽奖结果复查: %w", err)
+	}
+	remaining, err := wechatRemaining(after)
+	if err != nil {
+		return err
+	}
+	if remaining >= count {
+		t.pending = true
+		t.message = "微信抽奖已提交，剩余次数未减少，结果待确认（未自动重提）"
 		return nil
 	}
-
-	t.logger.Info(fmt.Sprintf("剩余微信抽奖次数%d", surplusNumber))
-
-	// 执行抽奖
-	for i := 0; i < needDrawTimes; i++ {
-		resp, err := t.api.WxDraw()
-		if err != nil {
-			t.logger.Error("微信抽奖失败:", err)
-			continue
-		}
-
-		code := 0
-		switch v := resp.Code.(type) {
-		case int:
-			code = v
-		case float64:
-			code = int(v)
-		case string:
-			if v == "0" {
-				code = 0
-			}
-		}
-
-		if code == 0 {
-			// 解析奖励信息
-			prizeName := ""
-			if resp.Result != nil {
-				if resultMap, ok := resp.Result.(map[string]interface{}); ok {
-					if name, ok := resultMap["prizeName"].(string); ok {
-						prizeName = name
-					}
-				}
-			}
-			if prizeName != "" {
-				t.logger.Success(fmt.Sprintf("微信抽奖成功，获得【%s】", prizeName))
-			} else {
-				t.logger.Success("微信抽奖成功")
-			}
-		} else {
-			msg := resp.Message
-			if msg == "" {
-				msg = resp.Msg
-			}
-			t.logger.Fail(fmt.Sprintf("微信抽奖失败: %s", msg))
-		}
-
-		if i < needDrawTimes-1 && interval > 0 {
-			time.Sleep(interval)
+	t.message = fmt.Sprintf("微信免费抽奖确认1次，次数%d→%d", count, remaining)
+	if result, ok := resp.Result.(map[string]interface{}); ok {
+		if name, ok := result["prizeName"].(string); ok && name != "" {
+			t.message += "：" + name
 		}
 	}
-
 	return nil
 }

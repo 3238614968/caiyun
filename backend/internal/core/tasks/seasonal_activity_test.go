@@ -8,11 +8,37 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"caiyun/internal/core/api"
 	corehttp "caiyun/internal/core/http"
 	"caiyun/internal/core/logger"
 )
+
+// freezeActivityClock 把到期守卫的时钟固定在活动有效期内，保留旧逻辑覆盖。
+func freezeActivityClock(t *testing.T) {
+	t.Helper()
+	orig := activityNow
+	activityNow = func() time.Time { return time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC) }
+	t.Cleanup(func() { activityNow = orig })
+}
+
+func TestLanternExpiredGuardSkipsWithoutRequests(t *testing.T) {
+	orig := activityNow
+	activityNow = func() time.Time { return time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC) }
+	t.Cleanup(func() { activityNow = orig })
+	client := corehttp.NewClient(corehttp.WithTransport(hiddenRewardRoundTrip(func(req *http.Request) (*http.Response, error) {
+		t.Fatalf("expired lantern must not send requests: %s", req.URL)
+		return nil, nil
+	})))
+	task := NewLanternTask(client, logger.NewLogger(logger.LevelError))
+	if err := task.Run(); err != nil {
+		t.Fatalf("expired activity must not fail: %v", err)
+	}
+	if !strings.Contains(task.Message(), "到期") {
+		t.Fatalf("message=%s", task.Message())
+	}
+}
 
 func seasonalPayload(t *testing.T, req *http.Request) map[string]interface{} {
 	t.Helper()
@@ -34,8 +60,8 @@ func TestCloudPhoneRegistersOnlyProtocolTasksAndChecksBalance(t *testing.T) {
 		after   int
 		pending bool
 	}{
-		{"credited", false, 100, false},
-		{"already completed", true, 50, false},
+		{"credited but real-instance sign unconfirmed", false, 100, true},
+		{"already completed but real-instance sign unconfirmed", true, 50, true},
 		{"not credited", false, 50, true},
 		{"partly credited", false, 80, true},
 	} {
@@ -97,6 +123,7 @@ func TestCloudPhoneRegistersOnlyProtocolTasksAndChecksBalance(t *testing.T) {
 }
 
 func TestLanternStopsOnLimitAndNeverDrawsWrongAnswers(t *testing.T) {
+	freezeActivityClock(t)
 	for _, tc := range []struct {
 		name, submit, draw     string
 		wantSubmits, wantDraws int
@@ -149,6 +176,7 @@ func TestLanternStopsOnLimitAndNeverDrawsWrongAnswers(t *testing.T) {
 }
 
 func TestLanternDrawsAtMostFourTimesAndSkipsUnknownClues(t *testing.T) {
+	freezeActivityClock(t)
 	submits, draws := 0, 0
 	client := corehttp.NewClient(corehttp.WithTransport(hiddenRewardRoundTrip(func(req *http.Request) (*http.Response, error) {
 		switch {

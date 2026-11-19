@@ -16,11 +16,15 @@ func TestSeasonalActivitiesAreRegisteredForBatchExecution(t *testing.T) {
 	for _, code := range catalog.DefaultBatchCodes() {
 		batch[code] = true
 	}
-	for _, code := range []string{"shake", "lantern", "liveflower"} {
+	for _, code := range []string{"shake", "liveflower"} {
 		def, ok := catalog.Get(code)
 		if !ok || def.execute == nil || !def.DefaultEnabled || !def.RunInBatch || !batch[code] {
 			t.Fatalf("activity %s not ready for batch execution: %+v", code, def)
 		}
+	}
+	// ★ 第 77 轮：lantern 活动 2026-10-07 到期，保留注册但默认停用、不进批次。
+	if def, ok := catalog.Get("lantern"); !ok || def.execute == nil || def.DefaultEnabled || def.RunInBatch || batch["lantern"] {
+		t.Fatalf("expired lantern must stay registered but disabled: %+v", def)
 	}
 	for alias, code := range map[string]string{"cloud_phone_redpack": "cloudphone", "shake_shake": "shake", "lantern_riddles": "lantern", "live_flower": "liveflower"} {
 		if catalog.Normalize(alias) != code {
@@ -34,7 +38,8 @@ type seasonalRunnerTransport func(*http.Request) (*http.Response, error)
 func (f seasonalRunnerTransport) RoundTrip(req *http.Request) (*http.Response, error) { return f(req) }
 
 func TestSeasonalRunnerKeepsUnconfirmedRewardsPending(t *testing.T) {
-	for _, code := range []string{"lantern", "liveflower"} {
+	// lantern 已到期停用（Run 内日期守卫直接跳过），不再参与 pending 语义测试。
+	for _, code := range []string{"liveflower"} {
 		client := corehttp.NewClient(corehttp.WithTransport(seasonalRunnerTransport(func(req *http.Request) (*http.Response, error) {
 			body := `{"code":0,"result":{}}`
 			switch {

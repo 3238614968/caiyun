@@ -67,33 +67,31 @@ var (
 )
 
 func performExchangeWithControls(account *models.ExchangeAccount, prizeID string, tokenMgr *TokenManager, lockStore exchangeLockStore) (bool, string, int) {
-	return performExchangeWithControlsContext(context.Background(), account, prizeID, tokenMgr, lockStore)
+	result := performExchangeWithControlsContext(context.Background(), account, prizeID, tokenMgr, lockStore, &exchangePreparedSession{})
+	return result.success, result.message, result.execTime
 }
 
-func performExchangeWithControlsContext(ctx context.Context, account *models.ExchangeAccount, prizeID string, tokenMgr *TokenManager, lockStore exchangeLockStore, prepared ...*exchangePreparedSession) (bool, string, int) {
+func performExchangeWithControlsContext(ctx context.Context, account *models.ExchangeAccount, prizeID string, tokenMgr *TokenManager, lockStore exchangeLockStore, prepared *exchangePreparedSession, guards ...exchangeSubmissionGuard) exchangeAttemptResult {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	if err := ctx.Err(); err != nil {
-		return false, err.Error(), 0
+		return preflightExchangeResult(err.Error(), false)
 	}
 	release, err := acquireExchangeChallengeGate(lockStore, account)
 	if err != nil {
-		return false, err.Error(), 0
+		return preflightExchangeResult(err.Error(), false)
 	}
 	defer release()
 	ctx, cancel := context.WithTimeout(ctx, exchangeAttemptWindow)
 	defer cancel()
 	if locked, reason := acquireExchangeSubmitProtection(lockStore, account, prizeID); !locked {
-		return false, reason, 0
+		return preflightExchangeResult(reason, false)
 	}
 	if err := getExchangeRequestController().WaitContext(ctx); err != nil {
-		return false, err.Error(), 0
+		return preflightExchangeResult(err.Error(), false)
 	}
-	if len(prepared) > 0 {
-		return performExchangePreparedContext(ctx, account, prizeID, tokenMgr, prepared[0])
-	}
-	return performExchangeContext(ctx, account, prizeID, tokenMgr)
+	return performExchangePreparedContext(ctx, account, prizeID, tokenMgr, prepared, guards...)
 }
 
 func getExchangeRequestController() *exchangeRequestController {

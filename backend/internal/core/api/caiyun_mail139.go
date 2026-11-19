@@ -399,7 +399,10 @@ func (api *CaiyunAPI) Read139MailMessage(session *Mail139Session, mid string) er
 	var result struct {
 		Code string `json:"code"`
 	}
-	if err := decode139MailResponse(body, &result); err == nil && result.Code != "" && result.Code != "S_OK" {
+	if err := decode139MailResponse(body, &result); err != nil {
+		return fmt.Errorf("解析邮件已读结果失败: %w", err)
+	}
+	if result.Code != "S_OK" {
 		return fmt.Errorf("邮件已读上报未成功: code=%s", result.Code)
 	}
 	return nil

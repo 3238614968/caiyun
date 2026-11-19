@@ -9,6 +9,11 @@ import (
 	"gorm.io/gorm"
 )
 
+// Daily cumulative snapshots are observations, including historical rows written
+// before this distinction existed. Keep the original logs and exclude snapshots
+// from every revenue sum instead of rewriting user history.
+const effectiveCloudGainSum = "COALESCE(SUM(CASE WHEN task_type IN ('todaycloud', 'today_cloud') THEN 0 ELSE cloud_gained END), 0)"
+
 type TaskLogRepository struct {
 	db *gorm.DB
 }
@@ -111,19 +116,51 @@ func (r *TaskLogRepository) FindByUserID(userID uint, offset, limit int) ([]*mod
 
 // FindByFilter 根据用户、账号、任务类型和状态组合过滤任务日志。
 func (r *TaskLogRepository) FindByFilter(userID uint, accountID *uint, taskType, status string, offset, limit int) ([]*models.TaskLog, int64, error) {
+	return r.FindByFilterWithContext(context.Background(), userID, accountID, taskType, status, false, offset, limit)
+}
+
+// FindByFilterWithContext 按组合条件过滤任务日志；hasReward 时只返回
+// 实际获得云朵或咪咕音符奖励的记录。
+func (r *TaskLogRepository) FindByFilterWithContext(ctx context.Context, userID uint, accountID *uint, taskType, status string, hasReward bool, offset, limit int) ([]*models.TaskLog, int64, error) {
+	return r.FindByFilterInRange(ctx, userID, accountID, taskType, status, hasReward, time.Time{}, time.Time{}, false, offset, limit)
+}
+
+func (r *TaskLogRepository) FindByFilterInRange(ctx context.Context, userID uint, accountID *uint, taskType, status string, hasReward bool, start, end time.Time, latestOnly bool, offset, limit int) ([]*models.TaskLog, int64, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	var logs []*models.TaskLog
 	var total int64
 	offset, limit = normalizeTaskLogPage(offset, limit)
 
-	query := r.db.Model(&models.TaskLog{}).Where("user_id = ?", userID)
+	query := r.db.WithContext(ctx).Model(&models.TaskLog{}).Where("user_id = ?", userID)
+	if !start.IsZero() && !end.IsZero() {
+		query = query.Where("created_at >= ? AND created_at < ?", start, end)
+	}
 	if accountID != nil {
 		query = query.Where("account_id = ?", *accountID)
 	}
 	if taskType != "" {
 		query = query.Where("task_type = ?", taskType)
 	}
-	if status != "" {
+	if latestOnly {
+		latest := r.db.WithContext(ctx).Model(&models.TaskLog{}).Select("MAX(id)").Where("user_id = ?", userID).
+			Where("task_type NOT IN ?", []string{"exchange"}).Group("account_id, task_type")
+		if !start.IsZero() && !end.IsZero() {
+			latest = latest.Where("created_at >= ? AND created_at < ?", start, end)
+		}
+		if accountID != nil {
+			latest = latest.Where("account_id = ?", *accountID)
+		}
+		query = query.Where("id IN (?)", latest)
+	}
+	if status == "pending" {
+		query = query.Where("status IN ?", []string{"pending", "running", "processing", "queued"})
+	} else if status != "" {
 		query = query.Where("status = ?", status)
+	}
+	if hasReward {
+		query = query.Where("(cloud_gained > 0 OR migu_notes_gained > 0) AND COALESCE(task_type, '') NOT IN ?", []string{"todaycloud", "today_cloud"})
 	}
 
 	if err := query.Count(&total).Error; err != nil {
@@ -200,7 +237,7 @@ func (r *TaskLogRepository) GetTotalCloudGainedByAccountID(accountID uint) (int,
 	var total int
 	err := r.db.Model(&models.TaskLog{}).
 		Where("account_id = ?", accountID).
-		Select("COALESCE(SUM(cloud_gained), 0)").
+		Select(effectiveCloudGainSum).
 		Scan(&total).Error
 	return total, err
 }
@@ -210,7 +247,7 @@ func (r *TaskLogRepository) GetTotalCloudGainedByUserID(userID uint) (int, error
 	var total int
 	err := r.db.Model(&models.TaskLog{}).
 		Where("user_id = ?", userID).
-		Select("COALESCE(SUM(cloud_gained), 0)").
+		Select(effectiveCloudGainSum).
 		Scan(&total).Error
 	return total, err
 }
@@ -223,7 +260,7 @@ func (r *TaskLogRepository) GetTodayCloudGainedByUserID(userID uint) (int, error
 
 	err := r.db.Model(&models.TaskLog{}).
 		Where("user_id = ? AND created_at >= ? AND created_at < ?", userID, today, tomorrow).
-		Select("COALESCE(SUM(cloud_gained), 0)").
+		Select(effectiveCloudGainSum).
 		Scan(&total).Error
 	return total, err
 }
@@ -308,7 +345,7 @@ func (r *TaskLogRepository) GetCloudGainedByAccountAndRange(accountID uint, star
 	var total int
 	r.db.Model(&models.TaskLog{}).
 		Where("account_id = ? AND created_at >= ? AND created_at < ?", accountID, start, end).
-		Select("COALESCE(SUM(cloud_gained), 0)").
+		Select(effectiveCloudGainSum).
 		Scan(&total)
 	return total
 }
@@ -324,8 +361,8 @@ func (r *TaskLogRepository) GetAccountSummariesByIDs(ids []uint, today, tomorrow
 	err := r.db.Model(&models.TaskLog{}).
 		Select(`
 			account_id,
-			COALESCE(SUM(CASE WHEN created_at >= ? AND created_at < ? THEN cloud_gained ELSE 0 END), 0) AS today_gained,
-			COALESCE(SUM(CASE WHEN created_at >= ? AND created_at < ? THEN cloud_gained ELSE 0 END), 0) AS yesterday_gained,
+			COALESCE(SUM(CASE WHEN created_at >= ? AND created_at < ? THEN CASE WHEN task_type IN ('todaycloud', 'today_cloud') THEN 0 ELSE cloud_gained END ELSE 0 END), 0) AS today_gained,
+			COALESCE(SUM(CASE WHEN created_at >= ? AND created_at < ? THEN CASE WHEN task_type IN ('todaycloud', 'today_cloud') THEN 0 ELSE cloud_gained END ELSE 0 END), 0) AS yesterday_gained,
 			COALESCE(SUM(CASE WHEN created_at >= ? AND created_at < ? AND status = ? THEN 1 ELSE 0 END), 0) AS success_count,
 			COALESCE(SUM(CASE WHEN created_at >= ? AND created_at < ? AND status = ? THEN 1 ELSE 0 END), 0) AS failed_count,
 			MAX(created_at) AS last_executed_at`,
@@ -352,7 +389,7 @@ func (r *TaskLogRepository) GetCloudGainedByUserAndRange(userID uint, start, end
 	var total int
 	r.db.Model(&models.TaskLog{}).
 		Where("user_id = ? AND created_at >= ? AND created_at < ?", userID, start, end).
-		Select("COALESCE(SUM(cloud_gained), 0)").
+		Select(effectiveCloudGainSum).
 		Scan(&total)
 	return total
 }
@@ -392,7 +429,7 @@ func (r *TaskLogRepository) GetCloudGainedGlobal(start, end time.Time) int {
 	var total int
 	r.db.Model(&models.TaskLog{}).
 		Where("created_at >= ? AND created_at < ?", start, end).
-		Select("COALESCE(SUM(cloud_gained), 0)").
+		Select(effectiveCloudGainSum).
 		Scan(&total)
 	return total
 }

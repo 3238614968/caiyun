@@ -67,7 +67,7 @@ func newExchangeHTTPSessionContext(ctx context.Context, account *models.Exchange
 	deviceID := ""
 	var deviceErr error
 	deviceCtx, cancel := context.WithTimeout(ctx, 12*time.Second)
-	if fetchedDeviceID, err := shumei.FetchDeviceIDForPage(deviceCtx, client, "", userAgent, referer); err == nil && strings.TrimSpace(fetchedDeviceID) != "" {
+	if fetchedDeviceID, err := shumei.FetchDeviceIDWithUserAgent(deviceCtx, client, "", userAgent); err == nil && strings.TrimSpace(fetchedDeviceID) != "" {
 		deviceID = fetchedDeviceID
 	} else {
 		if err != nil {

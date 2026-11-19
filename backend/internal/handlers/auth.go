@@ -281,22 +281,22 @@ func (h *AuthHandler) RefreshToken(c *gin.Context) {
 func (h *AuthHandler) Logout(c *gin.Context) {
 	userID := c.GetUint("user_id")
 	sessionID := c.GetString("session_id")
-	clearAuthCookie(c)
 	if err := h.authService.RevokeSession(c.Request.Context(), userID, sessionID); err != nil {
 		respondInternalServer(c)
 		return
 	}
+	clearAuthCookie(c)
 	apiresponse.Message(c, "退出成功")
 }
 
 // LogoutAll revokes every active browser/device session for the current user.
 func (h *AuthHandler) LogoutAll(c *gin.Context) {
 	userID := c.GetUint("user_id")
-	clearAuthCookie(c)
 	if err := h.authService.RevokeAllSessions(c.Request.Context(), userID); err != nil {
 		respondInternalServer(c)
 		return
 	}
+	clearAuthCookie(c)
 	apiresponse.Message(c, "所有会话已退出")
 }
 

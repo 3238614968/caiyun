@@ -1,6 +1,7 @@
 package services
 
 import (
+	"encoding/json"
 	"io"
 	"net/http"
 	"strings"
@@ -18,6 +19,12 @@ func TestTaskListRunnerPersistsUnfinishedTasksAsPending(t *testing.T) {
 			client := corehttp.NewClient(corehttp.WithTransport(seasonalRunnerTransport(func(req *http.Request) (*http.Response, error) {
 				body := `{"code":0}`
 				switch req.URL.Path {
+				case "/ycloud/signin/task/taskListV2":
+					var payload struct{ Group, Marketname string }
+					if err := json.NewDecoder(req.Body).Decode(&payload); err != nil || payload.Group != "beiyong1" || payload.Marketname != "sign_in_3" {
+						t.Fatalf("unexpected temporary group query: %+v err=%v", payload, err)
+					}
+					body = `{"code":0,"result":{"beiyong1":[]}}`
 				case "/ycloud/signin/task/taskListV3":
 					body = `{"code":0,"result":[{"id":9999,"name":"等待外部回调","state":"` + state + `","currstep":1,"stepTypeSet":["interfacecallback"]}]}`
 				case "/ycloud/signin/page/infoV3":

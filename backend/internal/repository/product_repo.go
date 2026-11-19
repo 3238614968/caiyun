@@ -386,7 +386,7 @@ func syncExchangeTasksToLatestProducts(tx *gorm.DB, products []*models.Product, 
 		if strings.TrimSpace(product.Memo) != "" {
 			result := tx.Model(&models.ExchangeTask{}).
 				Where("deleted_at IS NULL").
-				Where("status IN ?", []string{string(models.ExchangeTaskPending), string(models.ExchangeTaskRunning)}).
+				Where("status = ?", string(models.ExchangeTaskPending)).
 				Where("prize_id = ?", product.Memo).
 				Updates(map[string]interface{}{
 					"product_id": product.ID,
@@ -407,7 +407,7 @@ func syncExchangeTasksToLatestProducts(tx *gorm.DB, products []*models.Product, 
 
 		result := tx.Model(&models.ExchangeTask{}).
 			Where("deleted_at IS NULL").
-			Where("status IN ?", []string{string(models.ExchangeTaskPending), string(models.ExchangeTaskRunning)}).
+			Where("status = ?", string(models.ExchangeTaskPending)).
 			Where("prize_name = ?", product.PrizeName).
 			Updates(map[string]interface{}{
 				"product_id": product.ID,
@@ -432,9 +432,9 @@ SET t.status = ?,
     t.last_result = ?,
     t.updated_at = ?
 WHERE t.deleted_at IS NULL
-  AND t.status IN ?
+  AND t.status = ?
   AND p.id IS NULL
-`, string(models.ExchangeTaskCompleted), "商品已下架或不存在，已根据最新商品列表停止任务", now, []string{string(models.ExchangeTaskPending), string(models.ExchangeTaskRunning)})
+`, string(models.ExchangeTaskCompleted), "商品已下架或不存在，已根据最新商品列表停止任务", now, string(models.ExchangeTaskPending))
 	if result.Error != nil {
 		return synced, stopped, result.Error
 	}

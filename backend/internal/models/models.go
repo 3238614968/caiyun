@@ -45,17 +45,18 @@ type Account struct {
 
 // TaskLog 任务日志模型
 type TaskLog struct {
-	ID            uint           `gorm:"primarykey" json:"id"`
-	UserID        uint           `gorm:"not null;index" json:"user_id"`
-	AccountID     uint           `gorm:"not null;index" json:"account_id"`
-	TaskType      string         `gorm:"size:50;not null" json:"task_type"`       // signin, wechat, shake, etc.
-	Status        string         `gorm:"default:'pending';size:20" json:"status"` // success, failed, pending
-	Message       string         `gorm:"type:text" json:"message"`
-	CloudGained   int            `gorm:"default:0" json:"cloud_gained"`
-	ExecutionTime int            `gorm:"default:0" json:"execution_time"` // 毫秒
-	CreatedAt     time.Time      `gorm:"index" json:"created_at"`
-	DeletedAt     gorm.DeletedAt `gorm:"index" json:"-"`
-	Account       Account        `gorm:"foreignKey:AccountID" json:"account,omitempty"`
+	ID              uint           `gorm:"primarykey" json:"id"`
+	UserID          uint           `gorm:"not null;index" json:"user_id"`
+	AccountID       uint           `gorm:"not null;index" json:"account_id"`
+	TaskType        string         `gorm:"size:50;not null" json:"task_type"`       // signin, wechat, shake, etc.
+	Status          string         `gorm:"default:'pending';size:20" json:"status"` // success, failed, pending
+	Message         string         `gorm:"type:text" json:"message"`
+	CloudGained     int            `gorm:"default:0" json:"cloud_gained"`
+	MiguNotesGained int            `gorm:"not null;default:0" json:"migu_notes_gained"`
+	ExecutionTime   int            `gorm:"default:0" json:"execution_time"` // 毫秒
+	CreatedAt       time.Time      `gorm:"index" json:"created_at"`
+	DeletedAt       gorm.DeletedAt `gorm:"index" json:"-"`
+	Account         Account        `gorm:"foreignKey:AccountID" json:"account,omitempty"`
 }
 
 // CloudStats 云朵统计模型

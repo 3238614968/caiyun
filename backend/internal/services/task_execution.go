@@ -104,7 +104,7 @@ func (r *TaskRunner) RunSelectedContext(ctx context.Context, taskCodes []string)
 	if len(taskCodes) == 0 {
 		return results
 	}
-	r.initialCloudCount = r.getCurrentCloudCount()
+	r.initialCloudCount, r.initialCloudKnown = r.getCurrentCloudCount()
 
 	for _, code := range taskCodes {
 		if err := ctx.Err(); err != nil {
@@ -157,7 +157,7 @@ func (r *TaskRunner) RunSelectedContext(ctx context.Context, taskCodes []string)
 		results = append(results, *result)
 	}
 
-	r.finalCloudCount = r.getCurrentCloudCount()
+	r.finalCloudCount, r.finalCloudKnown = r.getCurrentCloudCount()
 	return results
 }
 

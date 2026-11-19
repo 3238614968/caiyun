@@ -6,7 +6,10 @@ import (
 )
 
 // A persisted batch failure must not replay its successful mutations.
-type TaskBatchFailure struct{ Tasks []string }
+type TaskBatchFailure struct {
+	Tasks   []string
+	Summary taskResultSummary
+}
 
 func (e *TaskBatchFailure) Error() string {
 	return "任务批次存在失败项: " + strings.Join(e.Tasks, "、") + "；可单独重试失败任务"
@@ -21,7 +24,7 @@ func taskBatchOutcome(results []TaskResult) error {
 		}
 	}
 	if len(failed) > 0 {
-		return &TaskBatchFailure{Tasks: failed}
+		return &TaskBatchFailure{Tasks: failed, Summary: summarizeTaskResults(results)}
 	}
 	return nil
 }
@@ -52,7 +55,7 @@ func remainingBatchTaskCodes(codes, done []string) []string {
 	for _, code := range codes {
 		normalized := defaultTaskCatalog.Normalize(code)
 		switch normalized {
-		case "receive", "todaycloud", "after_task", "prize_center", "hidden_rewards", "tasklist":
+		case "receive", "todaycloud", "after_task", "prize_center", "hidden_rewards", "tasklist", "migu_assets":
 			out = append(out, code)
 		default:
 			if !completed[normalized] {

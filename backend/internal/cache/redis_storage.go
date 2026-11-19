@@ -1,8 +1,11 @@
 package cache
 
 import (
+	"errors"
 	"fmt"
 	"time"
+
+	"github.com/go-redis/redis/v8"
 )
 
 // RedisStorage Redis存储实现（实现tasks.Storage接口）
@@ -24,7 +27,10 @@ func (rs *RedisStorage) Get(key string) (string, error) {
 	var value string
 	fullKey := rs.getKey(key)
 	if err := rs.cache.Get(fullKey, &value); err != nil {
-		return "", fmt.Errorf("key not found: %s", key)
+		if errors.Is(err, redis.Nil) {
+			return "", nil
+		}
+		return "", fmt.Errorf("读取任务存储失败: %w", err)
 	}
 	return value, nil
 }

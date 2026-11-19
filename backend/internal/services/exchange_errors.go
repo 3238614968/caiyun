@@ -18,9 +18,26 @@ var (
 	ErrExchangeTaskAlreadyExists   = errors.New("exchange task already exists")
 	ErrExchangeMonthlyLimitReached = errors.New("exchange monthly limit reached")
 	ErrExchangeExecutionFailed     = errors.New("exchange execution failed")
+	ErrExchangeOutcomeUnknown      = errors.New("exchange outcome requires reconciliation")
 	ErrExchangeBatchPartialFailure = errors.New("exchange batch partially failed")
 	ErrExchangeBatchFailed         = errors.New("exchange batch failed")
 )
+
+type exchangeOutcomeUnknownError struct{ message string }
+
+func (e *exchangeOutcomeUnknownError) Error() string {
+	return e.message
+}
+func (e *exchangeOutcomeUnknownError) PublicMessage() string {
+	return "兑换结果待确认，请核对领奖专区及兑换记录，暂勿重复兑换"
+}
+func (e *exchangeOutcomeUnknownError) Is(target error) bool {
+	return target == ErrExchangeOutcomeUnknown
+}
+
+func newExchangeOutcomeUnknownError(message string) error {
+	return &exchangeOutcomeUnknownError{message: message}
+}
 
 // exchangeErrorPublicMessage is used in per-item batch results. It must never
 // return err.Error(), because unknown errors may contain SQL or upstream data.
@@ -50,6 +67,8 @@ func exchangeErrorPublicMessage(err error) string {
 		return "本月已兑换同系列商品，已触发月度保护"
 	case errors.Is(err, ErrExchangeTaskConflict):
 		return "抢兑任务冲突，请刷新后重试"
+	case errors.Is(err, ErrExchangeOutcomeUnknown):
+		return "兑换结果待确认，请核对领奖专区及兑换记录，暂勿重复兑换"
 	case errors.Is(err, ErrExchangeExecutionFailed):
 		return "抢兑失败，请查看执行结果"
 	case errors.Is(err, ErrExchangeBatchPartialFailure):

@@ -2,6 +2,7 @@ package dto
 
 import (
 	"caiyun/internal/models"
+	"caiyun/internal/presentation"
 	"time"
 )
 
@@ -80,23 +81,24 @@ func ToExchangeRuleResponses(rules []*models.ExchangeRule) []*ExchangeRuleRespon
 // TaskLogResponse contains task history without serializing an entire GORM
 // association graph.
 type TaskLogResponse struct {
-	ID            uint             `json:"id"`
-	UserID        uint             `json:"user_id"`
-	AccountID     uint             `json:"account_id"`
-	TaskType      string           `json:"task_type"`
-	Status        string           `json:"status"`
-	Message       string           `json:"message"`
-	CloudGained   int              `json:"cloud_gained"`
-	ExecutionTime int              `json:"execution_time"`
-	CreatedAt     time.Time        `json:"created_at"`
-	Account       *AccountResponse `json:"account,omitempty"`
+	ID              uint             `json:"id"`
+	UserID          uint             `json:"user_id"`
+	AccountID       uint             `json:"account_id"`
+	TaskType        string           `json:"task_type"`
+	Status          string           `json:"status"`
+	Message         string           `json:"message"`
+	CloudGained     int              `json:"cloud_gained"`
+	MiguNotesGained int              `json:"migu_notes_gained"`
+	ExecutionTime   int              `json:"execution_time"`
+	CreatedAt       time.Time        `json:"created_at"`
+	Account         *AccountResponse `json:"account,omitempty"`
 }
 
 func ToTaskLogResponse(log *models.TaskLog) *TaskLogResponse {
 	if log == nil {
 		return nil
 	}
-	return &TaskLogResponse{ID: log.ID, UserID: log.UserID, AccountID: log.AccountID, TaskType: log.TaskType, Status: log.Status, Message: log.Message, CloudGained: log.CloudGained, ExecutionTime: log.ExecutionTime, CreatedAt: log.CreatedAt, Account: ToAccountResponse(&log.Account)}
+	return &TaskLogResponse{ID: log.ID, UserID: log.UserID, AccountID: log.AccountID, TaskType: log.TaskType, Status: presentation.TaskLogStatus(log.Status), Message: presentation.TaskLogMessage(log.TaskType, log.Status, log.Message), CloudGained: log.CloudGained, MiguNotesGained: log.MiguNotesGained, ExecutionTime: log.ExecutionTime, CreatedAt: log.CreatedAt, Account: ToAccountResponse(&log.Account)}
 }
 func ToTaskLogResponses(logs []*models.TaskLog) []*TaskLogResponse {
 	result := make([]*TaskLogResponse, len(logs))
@@ -157,6 +159,7 @@ type ExchangeTaskResponse struct {
 	SkipReason            string                `json:"skip_reason,omitempty"`
 	AttemptedCount        int                   `json:"attempted_count"`
 	Status                string                `json:"status"`
+	Outcome               string                `json:"outcome,omitempty"`
 	LastAttemptAt         *time.Time            `json:"last_attempt_at,omitempty"`
 	LastResult            string                `json:"last_result"`
 	NextRunAt             *time.Time            `json:"next_run_at,omitempty"`
@@ -179,10 +182,12 @@ func ToExchangeTaskResponse(task *models.ExchangeTask) *ExchangeTaskResponse {
 	if task == nil {
 		return nil
 	}
-	result := &ExchangeTaskResponse{ID: task.ID, UserID: task.UserID, ExchangeAccountID: task.ExchangeAccountID, ProductID: task.ProductID, PrizeID: task.PrizeID, PrizeName: task.PrizeName, TaskType: task.TaskType, MaxAttempts: task.MaxAttempts, ScheduledExchangeTime: task.ScheduledExchangeTime, RestockCycle: "daily", RestockTimes: task.RestockTimes, CalendarPolicy: "all", SkipReason: task.SkipReason, AttemptedCount: task.AttemptedCount, Status: task.Status, LastAttemptAt: task.LastAttemptAt, LastResult: task.LastResult, NextRunAt: task.NextRunAt, Priority: task.Priority, TaskGroup: task.TaskGroup, TimeoutSeconds: task.TimeoutSeconds, MaxRetries: task.MaxRetries, RetryCount: task.RetryCount, LastRetryAt: task.LastRetryAt, SuccessCount: task.SuccessCount, FailCount: task.FailCount, UpdatedAt: task.UpdatedAt, CreatedAt: task.CreatedAt, ExchangeAccount: ToExchangeRuleResponse(&task.ExchangeAccount), Product: ToProductResponse(&task.Product)}
+	result := &ExchangeTaskResponse{ID: task.ID, UserID: task.UserID, ExchangeAccountID: task.ExchangeAccountID, ProductID: task.ProductID, PrizeID: task.PrizeID, PrizeName: task.PrizeName, TaskType: task.TaskType, MaxAttempts: task.MaxAttempts, ScheduledExchangeTime: task.ScheduledExchangeTime, RestockCycle: "daily", RestockTimes: task.RestockTimes, CalendarPolicy: "all", SkipReason: task.SkipReason, AttemptedCount: task.AttemptedCount, Status: task.Status, Outcome: task.Outcome, LastAttemptAt: task.LastAttemptAt, LastResult: task.LastResult, NextRunAt: task.NextRunAt, Priority: task.Priority, TaskGroup: task.TaskGroup, TimeoutSeconds: task.TimeoutSeconds, MaxRetries: task.MaxRetries, RetryCount: task.RetryCount, LastRetryAt: task.LastRetryAt, SuccessCount: task.SuccessCount, FailCount: task.FailCount, UpdatedAt: task.UpdatedAt, CreatedAt: task.CreatedAt, ExchangeAccount: ToExchangeRuleResponse(&task.ExchangeAccount), Product: ToProductResponse(&task.Product)}
 	if task.User.ID != 0 {
 		result.User = &UserSummary{ID: task.User.ID, Username: task.User.Username, Email: task.User.Email, Role: task.User.Role}
 	}
+	result.LastResult = presentation.Message("exchange", task.LastResult)
+	result.SkipReason = presentation.Message("exchange", task.SkipReason)
 	return result
 }
 func ToExchangeTaskResponses(tasks []*models.ExchangeTask) []*ExchangeTaskResponse {
@@ -203,6 +208,7 @@ type ExchangeRecordResponse struct {
 	PrizeID           string                `json:"prize_id"`
 	PrizeName         string                `json:"prize_name"`
 	Status            string                `json:"status"`
+	Outcome           string                `json:"outcome,omitempty"`
 	Message           string                `json:"message"`
 	ExecutionTimeMs   int                   `json:"execution_time_ms"`
 	CreatedAt         time.Time             `json:"created_at"`
@@ -214,7 +220,7 @@ func ToExchangeRecordResponse(record *models.ExchangeRecord) *ExchangeRecordResp
 	if record == nil {
 		return nil
 	}
-	return &ExchangeRecordResponse{ID: record.ID, UserID: record.UserID, ExchangeAccountID: record.ExchangeAccountID, ExchangeTaskID: record.ExchangeTaskID, ProductID: record.ProductID, PrizeID: record.PrizeID, PrizeName: record.PrizeName, Status: record.Status, Message: record.Message, ExecutionTimeMs: record.ExecutionTimeMs, CreatedAt: record.CreatedAt, ExchangeAccount: ToExchangeRuleResponse(record.ExchangeAccount), Product: ToProductResponse(record.Product)}
+	return &ExchangeRecordResponse{ID: record.ID, UserID: record.UserID, ExchangeAccountID: record.ExchangeAccountID, ExchangeTaskID: record.ExchangeTaskID, ProductID: record.ProductID, PrizeID: record.PrizeID, PrizeName: record.PrizeName, Status: record.Status, Outcome: record.Outcome, Message: presentation.Message("exchange", record.Message), ExecutionTimeMs: record.ExecutionTimeMs, CreatedAt: record.CreatedAt, ExchangeAccount: ToExchangeRuleResponse(record.ExchangeAccount), Product: ToProductResponse(record.Product)}
 }
 func ToExchangeRecordResponses(records []*models.ExchangeRecord) []*ExchangeRecordResponse {
 	result := make([]*ExchangeRecordResponse, len(records))

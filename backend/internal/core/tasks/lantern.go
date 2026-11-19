@@ -32,6 +32,12 @@ func (t *LanternTask) Pending() bool   { return t.pending }
 
 func (t *LanternTask) Run() error {
 	t.lastMessage, t.pending = "", false
+	// ★ 到期守卫：National_LanternRiddles 2026-10-07 下线（活动配置实测），停止每日空跑。
+	if activityNow().After(time.Date(2026, 10, 7, 16, 0, 0, 0, time.UTC)) {
+		t.lastMessage = "猜谜活动已于 2026-10-07 到期，跳过"
+		t.logger.Info(t.lastMessage)
+		return nil
+	}
 	puzzles, err := t.api.LanternPuzzles()
 	if err != nil {
 		return err

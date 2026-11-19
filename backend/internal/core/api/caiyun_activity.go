@@ -25,10 +25,10 @@ type activityPortalConfig struct {
 var activityPortals = map[string]activityPortalConfig{
 	TokenPKMarketName:  {pagePath: "yunClound", sourceID: "1073"},
 	MakeWishMarketName: {pagePath: "hcyview", sourceID: "1075"},
-	FunAIMarketName:    {pagePath: "huiyuanri", sourceID: "1170"},
+	FunAIMarketName:    {pagePath: "cloudCircle", sourceID: "1170"},
 	PosterMarketName:   {pagePath: "yunpanpage", sourceID: "2073"},
 	// 邮箱版趣玩AI 与云盘版共用同一套 H5 容器。
-	FunAIMailMarketName: {pagePath: "huiyuanri", sourceID: "1170"},
+	FunAIMailMarketName: {pagePath: "cloudCircle", sourceID: "1170"},
 }
 
 func (api *CaiyunAPI) buildActivityPageURL(marketName, extraQuery string) string {

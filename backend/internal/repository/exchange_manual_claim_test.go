@@ -39,7 +39,8 @@ func (d exchangeClaimDriver) Open(string) (driver.Conn, error) {
 	return exchangeClaimConn{fixture: d.fixture}, nil
 }
 
-var exchangeClaimSQLPredicate = regexp.MustCompile("`?([a-z_]+)`?\\s*=\\s*\\?")
+var exchangeClaimSQLPredicate = regexp.MustCompile("`?([a-z_]+)`?(?:\\s*=\\s*\\?|\\s*<>\\s*\\?|\\s+NOT LIKE\\s+\\?)")
+var exchangeClaimSQLGuard = regexp.MustCompile("([a-z_]+)(?:\\s*=\\s*\\?|\\s*<>\\s*\\?|\\s+NOT LIKE\\s+\\?)")
 
 func (c exchangeClaimConn) ExecContext(_ context.Context, query string, args []driver.NamedValue) (driver.Result, error) {
 	c.fixture.mu.Lock()
@@ -49,7 +50,7 @@ func (c exchangeClaimConn) ExecContext(_ context.Context, query string, args []d
 		return nil, fmt.Errorf("unexpected fixture write: %s", query)
 	}
 	setFields := exchangeClaimSQLPredicate.FindAllStringSubmatch(query[setAt:whereAt], -1)
-	guards := exchangeClaimSQLPredicate.FindAllStringSubmatch(query[whereAt:], -1)
+	guards := exchangeClaimSQLGuard.FindAllStringSubmatch(query[whereAt:], -1)
 	if len(setFields)+len(guards) != len(args) {
 		return nil, fmt.Errorf("unparsed fixture bindings: %s", query)
 	}
@@ -58,7 +59,36 @@ func (c exchangeClaimConn) ExecContext(_ context.Context, query string, args []d
 	}
 	for i, guard := range guards {
 		stored, requested := c.fixture.row[guard[1]], args[len(setFields)+i].Value
+		expression := strings.TrimSpace(query[whereAt:])
+		if index := strings.Index(expression, guard[0]); index >= 0 {
+			expression = expression[index:]
+		}
+		if index := strings.Index(expression, " AND "); index >= 0 {
+			expression = expression[:index]
+		}
+		expression = strings.Trim(expression, "() ")
+		switch {
+		case strings.HasPrefix(expression, guard[1]+" <>"):
+			storedText, storedOK := stored.(string)
+			requestedText, requestedOK := requested.(string)
+			if storedOK && requestedOK && storedText == requestedText {
+				return driver.RowsAffected(0), nil
+			}
+			continue
+		case strings.Contains(expression, "NOT LIKE"):
+			text, textOK := stored.(string)
+			requestedText, requestedOK := requested.(string)
+			if textOK && requestedOK && strings.Contains(text, strings.Trim(requestedText, "%")) {
+				return driver.RowsAffected(0), nil
+			}
+			continue
+		}
 		matches := reflect.DeepEqual(stored, requested)
+		if storedText, ok := stored.(string); ok {
+			if requestedText, valid := requested.(string); valid {
+				matches = storedText == requestedText
+			}
+		}
 		if at, ok := stored.(time.Time); ok {
 			other, valid := requested.(time.Time)
 			matches = valid && at.Equal(other)
@@ -77,7 +107,7 @@ func newExchangeClaimSQLRepository(t *testing.T, status string) (*ExchangeTaskRe
 	t.Helper()
 	now := time.Date(2026, 10, 1, 10, 8, 41, 0, time.UTC)
 	fixture := &exchangeClaimSQLFixture{row: map[string]driver.Value{
-		"id": int64(156), "user_id": int64(7), "status": status, "updated_at": now,
+		"id": int64(156), "user_id": int64(7), "status": status, "updated_at": now, "outcome": "",
 		"retry_count": int64(3), "last_result": "历史 GK", "attempted_count": int64(4), "fail_count": int64(4),
 	}}
 	conn := sql.OpenDB(exchangeClaimConnector{fixture})
@@ -93,7 +123,7 @@ func newExchangeClaimSQLRepository(t *testing.T, status string) (*ExchangeTaskRe
 
 func TestManualClaimSQLRestartsFailedTaskWithoutErasingAttemptHistory(t *testing.T) {
 	repo, fixture, now := newExchangeClaimSQLRepository(t, "failed")
-	claimed, token, err := repo.TryMarkForManualExecution(156, 7, "failed", now)
+	claimed, token, err := repo.TryMarkForManualExecution(156, 7, "failed", now, "")
 	if err != nil || !claimed || token == "" || fixture.row["status"] != "running" || fixture.row["execution_token"] != token || fixture.row["retry_count"] != int64(0) || fixture.row["last_result"] != "" {
 		t.Fatalf("failed task was not atomically restarted: claimed=%t token=%q err=%v row=%v", claimed, token, err, fixture.row)
 	}
@@ -115,7 +145,7 @@ func TestManualClaimSQLFencesOwnerSnapshotAndTerminalStates(t *testing.T) {
 		if tc.stale {
 			at = at.Add(-time.Second)
 		}
-		claimed, _, err := repo.TryMarkForManualExecution(156, tc.userID, "failed", at)
+		claimed, _, err := repo.TryMarkForManualExecution(156, tc.userID, "failed", at, "")
 		if err != nil || claimed || fixture.row["status"] != tc.status || fixture.row["retry_count"] != int64(3) {
 			t.Fatalf("fencing failed for %+v: claimed=%t err=%v row=%v", tc, claimed, err, fixture.row)
 		}
@@ -130,7 +160,7 @@ func TestManualClaimSQLConcurrentRetriesAcquireOneFencingToken(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			claimed, _, err := repo.TryMarkForManualExecution(156, 7, "failed", at)
+			claimed, _, err := repo.TryMarkForManualExecution(156, 7, "failed", at, "")
 			if err != nil {
 				t.Errorf("claim error: %v", err)
 			}

@@ -222,6 +222,55 @@ func (api *CaiyunAPI) TokenPKAutoReceiveLotteryChance() (int, error) {
 	return result.RewardCount, nil
 }
 
+// TokenPKLotteryResult 榜单抽奖结果。
+type TokenPKLotteryResult struct {
+	Win          bool   `json:"win"`
+	PrizeName    string `json:"prizeName"`
+	RemainChance int    `json:"remainChance"`
+}
+
+// TokenPKQueryRemainChance 查询榜单抽奖剩余次数（result 直接是数字）。
+func (api *CaiyunAPI) TokenPKQueryRemainChance() (int, error) {
+	resp, err := api.marketJSONRequest("GET", MobileMarketURL+"/tokenpk/toplist/progress/queryRemainChance", nil, api.buildActivityHeaders(TokenPKMarketName, "", nil))
+	if err != nil {
+		return 0, err
+	}
+	if !resp.IsSuccess() {
+		return 0, fmt.Errorf("查询榜单抽奖次数失败: code=%v %s", resp.Code, resp.MessageText())
+	}
+	data, err := json.Marshal(resp.Result)
+	if err != nil {
+		return 0, fmt.Errorf("解析榜单抽奖次数失败: %w", err)
+	}
+	var remain int
+	if err := json.Unmarshal(data, &remain); err != nil {
+		return 0, fmt.Errorf("解析榜单抽奖次数失败: %w", err)
+	}
+	return remain, nil
+}
+
+// TokenPKLottery 榜单抽奖（无请求体，payload 传 nil）。
+func (api *CaiyunAPI) TokenPKLottery() (*TokenPKLotteryResult, error) {
+	resp, err := api.marketJSONRequest("POST", MobileMarketURL+"/tokenpk/toplist/progress/lottery", nil, api.buildActivityHeaders(TokenPKMarketName, "", nil))
+	if err != nil {
+		return nil, err
+	}
+	if !resp.IsSuccess() {
+		return nil, fmt.Errorf("榜单抽奖失败: code=%v %s", resp.Code, resp.MessageText())
+	}
+	result := &TokenPKLotteryResult{}
+	if resp.Result != nil {
+		data, err := json.Marshal(resp.Result)
+		if err != nil {
+			return nil, fmt.Errorf("解析榜单抽奖结果失败: %w", err)
+		}
+		if err := json.Unmarshal(data, result); err != nil {
+			return nil, fmt.Errorf("解析榜单抽奖结果失败: %w", err)
+		}
+	}
+	return result, nil
+}
+
 // TokenPKGenerateInviteCode 生成活动邀请码（分享类任务的辅助信息）。
 func (api *CaiyunAPI) TokenPKGenerateInviteCode() (string, error) {
 	body, err := api.activityGetBody(TokenPKMarketName, MobileMarketURL+"/tokenpk/invite/generateInviteCode")

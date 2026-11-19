@@ -31,11 +31,11 @@ func TestMalformedEligibilityNeverReachesCaptchaOrExchange(t *testing.T) {
 func TestGKStopsRetriesWithoutPreventingANewScheduledRun(t *testing.T) {
 	calls := 0
 	for run := 0; run < 2; run++ {
-		ok, _, _, retries, err := runExchangeWithRetries(context.Background(), 3, nil, func() (bool, string, int) {
+		result, retries, err := runExchangeWithRetries(context.Background(), 3, nil, func() exchangeAttemptResult {
 			calls++
-			return false, "活动异常，请稍后重试！Error Code：GK | code=610", 20
+			return rejectedExchangeResult("活动异常，请稍后重试！Error Code：GK | code=610", 20, true)
 		})
-		if ok || err != nil || retries != 0 {
+		if result.success || err != nil || retries != 0 {
 			t.Fatalf("same rejected session retried: %v %d", err, retries)
 		}
 	}

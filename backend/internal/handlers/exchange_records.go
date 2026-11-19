@@ -134,18 +134,22 @@ func (h *ExchangeHandler) ExportExchangeRecords(c *gin.Context) {
 	_ = writer.Write([]string{"记录ID", "用户ID", "账号ID", "商品ID", "商品名称", "状态", "消息", "执行时长(ms)", "创建时间"})
 
 	// 写入数据
-	for _, record := range records {
-		_ = writer.Write([]string{
-			strconv.FormatUint(uint64(record.ID), 10),
-			strconv.FormatUint(uint64(record.UserID), 10),
-			strconv.FormatUint(uint64(record.ExchangeAccountID), 10),
-			strconv.FormatUint(uint64(record.ProductID), 10),
-			escapeCSVFormula(record.PrizeName),
-			escapeCSVFormula(record.Status),
-			escapeCSVFormula(record.Message),
-			strconv.Itoa(record.ExecutionTimeMs),
-			record.CreatedAt.Format("2006-01-02 15:04:05"),
-		})
+	for _, record := range dto.ToExchangeRecordResponses(records) {
+		_ = writer.Write(exchangeRecordCSVRow(record))
+	}
+}
+
+func exchangeRecordCSVRow(record *dto.ExchangeRecordResponse) []string {
+	return []string{
+		strconv.FormatUint(uint64(record.ID), 10),
+		strconv.FormatUint(uint64(record.UserID), 10),
+		strconv.FormatUint(uint64(record.ExchangeAccountID), 10),
+		strconv.FormatUint(uint64(record.ProductID), 10),
+		escapeCSVFormula(record.PrizeName),
+		escapeCSVFormula(record.Status),
+		escapeCSVFormula(record.Message),
+		strconv.Itoa(record.ExecutionTimeMs),
+		record.CreatedAt.Format("2006-01-02 15:04:05"),
 	}
 }
 

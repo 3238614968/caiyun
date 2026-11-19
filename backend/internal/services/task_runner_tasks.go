@@ -23,20 +23,20 @@ func taskResultFromErr(taskType string, startTime time.Time, err error, successM
 }
 
 // getCurrentCloudCount 获取当前云朵总数（通过签到API）
-func (r *TaskRunner) getCurrentCloudCount() int {
+func (r *TaskRunner) getCurrentCloudCount() (int, bool) {
 	cloudInfo, err := r.api.GetCloudInfo()
 	if err != nil {
-		return 0
+		return 0, false
 	}
-	if !cloudInfo.IsSuccess() {
-		return 0
+	if cloudInfo == nil || !cloudInfo.IsSuccess() || cloudInfo.Result.Total < 0 {
+		return 0, false
 	}
-	return cloudInfo.Result.Total
+	return cloudInfo.Result.Total, true
 }
 
 // GetCloudGained 获取本次执行获得的云朵数
 func (r *TaskRunner) GetCloudGained() int {
-	if r.finalCloudCount > r.initialCloudCount {
+	if r.initialCloudKnown && r.finalCloudKnown && r.finalCloudCount > r.initialCloudCount {
 		return r.finalCloudCount - r.initialCloudCount
 	}
 	return 0

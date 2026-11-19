@@ -105,7 +105,7 @@ func (s *TaskService) executeTaskCodesForAccount(ctx context.Context, account *m
 	finalCloudCount := runner.GetFinalCloudCount()
 
 	// 更新账号的云朵数
-	if finalCloudCount > 0 {
+	if runner.finalCloudKnown {
 		s.accountRepo.UpdateCloudCount(account.ID, finalCloudCount)
 	}
 
@@ -138,13 +138,14 @@ func (s *TaskService) executeTaskCodesForAccount(ctx context.Context, account *m
 		}
 
 		logEntry := &models.TaskLog{
-			UserID:        account.UserID,
-			AccountID:     account.ID,
-			TaskType:      result.TaskType,
-			Status:        result.Status,
-			Message:       result.Message,
-			CloudGained:   cloudGained,
-			ExecutionTime: result.ExecutionTime,
+			UserID:          account.UserID,
+			AccountID:       account.ID,
+			TaskType:        result.TaskType,
+			Status:          result.Status,
+			Message:         result.Message,
+			CloudGained:     cloudGained,
+			MiguNotesGained: result.MiguNotesGained,
+			ExecutionTime:   result.ExecutionTime,
 		}
 
 		if err := s.taskLogRepo.Create(logEntry); err != nil {
@@ -181,27 +182,36 @@ func (s *TaskService) executeTaskCodesForAccount(ctx context.Context, account *m
 		s.sendToUser(account.UserID, ws.Message{
 			Type: "task_complete",
 			Data: map[string]interface{}{
-				"account_id":     account.ID,
-				"phone":          account.Phone,
-				"task_type":      result.TaskType,
-				"status":         result.Status,
-				"message":        result.Message,
-				"cloud_gained":   result.CloudGained,
-				"execution_time": result.ExecutionTime,
+				"account_id":        account.ID,
+				"phone":             account.Phone,
+				"task_type":         result.TaskType,
+				"status":            result.Status,
+				"message":           result.Message,
+				"cloud_gained":      result.CloudGained,
+				"migu_notes_gained": result.MiguNotesGained,
+				"execution_time":    result.ExecutionTime,
 			},
 		})
 	}
 
 	// 推送汇总信息
+	summary := summarizeTaskResults(results)
+	operation, _ := ctx.Value(taskOperationKey{}).(taskOperation)
 	s.sendToUser(account.UserID, ws.Message{
 		Type: "task_summary",
 		Data: map[string]interface{}{
-			"account_id":   account.ID,
-			"phone":        account.Phone,
-			"total_gained": totalGained,
-			"cloud_count":  finalCloudCount,
-			"task_count":   len(results),
-			"completed_at": nowCST().Format("2006-01-02 15:04:05"),
+			"account_id":              account.ID,
+			"phone":                   account.Phone,
+			"total_gained":            summary.Gained,
+			"total_migu_notes_gained": summary.MiguNotesGained,
+			"cloud_count":             finalCloudCount,
+			"task_count":              len(results),
+			"success_count":           summary.Success,
+			"failed_count":            summary.Failed,
+			"pending_count":           summary.Pending,
+			"operation_id":            operation.id,
+			"operation_attempt":       operation.attempt,
+			"completed_at":            nowCST().Format(time.RFC3339Nano),
 		},
 	})
 

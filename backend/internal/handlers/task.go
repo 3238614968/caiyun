@@ -3,6 +3,7 @@ package handlers
 import (
 	"caiyun/internal/dto"
 	"caiyun/internal/models"
+	"caiyun/internal/presentation"
 	"caiyun/internal/queue"
 	"caiyun/internal/services"
 	appErrors "caiyun/pkg/errors"
@@ -56,6 +57,8 @@ type TaskLogsResponse struct {
 // @Param account_id query int false "账号ID"
 // @Param task_type query string false "任务类型"
 // @Param status query string false "状态"
+// @Param date query string false "日期 YYYY-MM-DD"
+// @Param latest query bool false "各任务最近结果"
 // @Param page query int false "页码" default(1)
 // @Param page_size query int false "每页数量" default(20)
 // @Success 200 {object} TaskLogsResponse
@@ -94,8 +97,18 @@ func (h *TaskHandler) GetTaskLogs(c *gin.Context) {
 
 	taskType := c.Query("task_type")
 	status := c.Query("status")
+	// has_reward=1 时仅返回实际获得云朵奖励的日志（前端默认开启该过滤）。
+	hasReward := c.Query("has_reward") == "1" || c.Query("has_reward") == "true"
 
-	taskLogs, total, err := h.taskService.GetTaskLogsContext(c.Request.Context(), userID.(uint), accountID, taskType, status, page, pageSize)
+	date := c.Query("date")
+	if date != "" {
+		if _, _, err := services.TaskLogDayRange(date); err != nil {
+			respondError(c, http.StatusBadRequest, err.Error())
+			return
+		}
+	}
+	latestOnly := c.Query("latest") == "1" || c.Query("latest") == "true"
+	taskLogs, total, err := h.taskService.GetTaskLogsForDateContext(c.Request.Context(), userID.(uint), accountID, taskType, status, hasReward, date, latestOnly, page, pageSize)
 	if err != nil {
 		respondTaskHandlerError(c, err)
 		return
@@ -485,7 +498,7 @@ func (h *TaskHandler) GetTaskStatus(c *gin.Context) {
 	}
 
 	// 获取最近的任务日志作为任务状态
-	logs, _, err := h.taskService.GetTaskLogsContext(c.Request.Context(), userID.(uint), nil, "", "", 1, 20)
+	logs, _, err := h.taskService.GetTaskLogsContext(c.Request.Context(), userID.(uint), nil, "", "", false, 1, 20)
 	if err != nil {
 		respondTaskHandlerError(c, err)
 		return
@@ -493,19 +506,14 @@ func (h *TaskHandler) GetTaskStatus(c *gin.Context) {
 
 	var items []TaskStatusItem
 	for _, log := range logs {
-		progress := 0.0
-		if log.Status == "success" {
-			progress = 1.0
-		} else if log.Status == "failed" {
-			progress = 1.0
-		}
 		items = append(items, TaskStatusItem{
 			AccountID: log.AccountID,
 			TaskType:  log.TaskType,
-			Status:    log.Status,
-			Progress:  progress,
-			Message:   log.Message,
-			StartTime: log.CreatedAt.Format("2006-01-02 15:04:05"),
+			Status:    presentation.TaskLogStatus(log.Status),
+			Progress:  1.0,
+			Message:   presentation.TaskLogMessage(log.TaskType, log.Status, log.Message),
+			StartTime: log.CreatedAt.Add(-time.Duration(log.ExecutionTime) * time.Millisecond).Format("2006-01-02 15:04:05"),
+			EndTime:   log.CreatedAt.Format("2006-01-02 15:04:05"),
 		})
 	}
 

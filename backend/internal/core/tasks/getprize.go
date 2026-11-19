@@ -93,11 +93,13 @@ func (t *PrizeCenterTask) Run() error {
 	return errors.Join(issues...)
 }
 
-// prizeSpaceGiftResendLimit 与参考实现的首屏 pageSize 一致，避免每轮对全部
-// 历史记录重复请求。
-const prizeSpaceGiftResendLimit = 50
+// prizeSpaceGiftResendLimit 补发扫描的防御上限。拉取侧 PrizeCenterAllEntries
+// 是全分页的，补发也应覆盖全部 flag=2 记录——旧版 50 条上限会漏掉长历史
+// 账号后面的空间卡（实测 218 条记录补出 110 张）。500 与拉取侧的页数上限
+// 对齐，仅作为异常数据的最后防线。
+const prizeSpaceGiftResendLimit = 500
 
-// prizeSpaceGiftResendDelay 控制补发请求的节流，避免一次性打出 50 个 POST。
+// prizeSpaceGiftResendDelay 控制补发请求的节流，避免一次性打出数百个 POST。
 var prizeSpaceGiftResendDelay = 300 * time.Millisecond
 
 // resendSpaceGiftPrizes 对 flag=2（已领取）的奖品重放一次 sendSpaceGiftPrize。

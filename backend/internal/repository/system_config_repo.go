@@ -1,8 +1,10 @@
 package repository
 
 import (
+	"caiyun/internal/constants"
 	"caiyun/internal/models"
 	"context"
+	"errors"
 	"time"
 
 	"gorm.io/gorm"
@@ -39,6 +41,25 @@ func (r *SystemConfigRepository) GetByKey(key string) (*models.SystemConfig, err
 		return nil, err
 	}
 	return &config, nil
+}
+
+func (r *SystemConfigRepository) ExchangeEnabled() (bool, error) {
+	return r.enabledFlag(constants.ConfigKeyExchangeEnabled, true)
+}
+
+func (r *SystemConfigRepository) MonthlyExchangeEnabled() (bool, error) {
+	return r.enabledFlag(constants.ConfigKeyExchangeMonthlyEnabled, false)
+}
+
+func (r *SystemConfigRepository) enabledFlag(key string, missingDefault bool) (bool, error) {
+	config, err := r.GetByKey(key)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return missingDefault, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return config.KeyValue == "true" || config.KeyValue == "1" || config.KeyValue == "yes", nil
 }
 
 // Set 设置配置值

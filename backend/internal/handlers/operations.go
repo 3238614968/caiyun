@@ -58,10 +58,7 @@ func operationResponse(operation *models.Operation) OperationResponse {
 }
 
 func publicOperationError(operation *models.Operation) string {
-	if operation == nil || operation.Status != models.OperationFailed {
-		return ""
-	}
-	return "操作执行失败，请稍后重试"
+	return services.PublicOperationError(operation)
 }
 
 func requestIdempotencyKey(c *gin.Context, fallback string) (string, error) {

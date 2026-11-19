@@ -12,19 +12,19 @@ func effectiveExchangeMaxRetries(configured int) int {
 	return constants.DefaultMaxRetries
 }
 
-// exchangeAttempt is one upstream exchange invocation.  The callback returns
-// success, a user-facing result, and execution duration in milliseconds.
-type exchangeAttempt func() (bool, string, int)
+// exchangeAttempt is one upstream exchange invocation. The same structured
+// result is returned to the caller; unknown submissions are never flattened
+// into an ordinary retryable failure.
+type exchangeAttempt func() exchangeAttemptResult
 
-// runExchangeWithRetries is the shared retry state machine used by manual and
-// scheduled exchange execution.  It deliberately owns only retry policy;
-// callers retain persistence and their fenced-token updates in beforeRetry.
+// runExchangeWithRetries retries only pre-submission failures. Once an attempt
+// has a durable outcome, this function returns it without another upstream call.
 func runExchangeWithRetries(
 	ctx context.Context,
 	maxRetries int,
 	beforeRetry func(attempt int) error,
 	attemptExchange exchangeAttempt,
-) (success bool, message string, execTime int, attemptsUsed int, err error) {
+) (result exchangeAttemptResult, attemptsUsed int, err error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -34,20 +34,20 @@ func runExchangeWithRetries(
 	for attempt := 0; attempt <= maxRetries; attempt++ {
 		attemptsUsed = attempt
 		if err := ctx.Err(); err != nil {
-			return false, err.Error(), 0, attemptsUsed, err
+			return preflightExchangeResult(err.Error(), false), attemptsUsed, err
 		}
 		if attempt > 0 && beforeRetry != nil {
 			if err := beforeRetry(attempt); err != nil {
-				return false, err.Error(), 0, attemptsUsed, err
+				return preflightExchangeResult(err.Error(), false), attemptsUsed, err
 			}
 		}
 		if attemptExchange == nil {
-			return false, "抢兑执行器未配置", 0, attemptsUsed, nil
+			return preflightExchangeResult("抢兑执行器未配置", false), attemptsUsed, nil
 		}
-		success, message, execTime = attemptExchange()
-		if success || !isExchangeRetryableFailure(message) {
-			return success, message, execTime, attemptsUsed, nil
+		result = attemptExchange()
+		if !result.retryable() {
+			return result, attemptsUsed, nil
 		}
 	}
-	return success, message, execTime, attemptsUsed, nil
+	return result, attemptsUsed, nil
 }

@@ -109,6 +109,52 @@ func TestBillSubmitsDefaultFeedbackButNotInvitations(t *testing.T) {
 		t.Fatal("unfinished bill task must stay pending")
 	}
 }
+func TestBillQuestionnaireSharesFeedbackParamAndAIVideoOnlyRegisters(t *testing.T) {
+	executed := map[string]map[string]interface{}{}
+	task := autumnFixture(t, "annual_bill", func(req *http.Request) string {
+		switch req.URL.Path {
+		case "/ycloud/bill/toDoTask/taskInfos":
+			return `{"code":0,"result":[{"taskCode":"QUESTIONNAIRE","totalCount":1},{"taskCode":"AI_VIDEO","totalCount":1},{"taskCode":"SHARE_BINDING","totalCount":1}]}`
+		case "/ycloud/bill/toDoTask/executeTask":
+			var body map[string]interface{}
+			_ = json.NewDecoder(req.Body).Decode(&body)
+			code, _ := body["taskCode"].(string)
+			executed[code] = body
+			if code == "AI_VIDEO" {
+				// 活动上线前服务端回 10005（未登记），任务应视为正常跳过。
+				return `{"code":10005,"msg":"未登记"}`
+			}
+			return `{"code":0}`
+		case "/ycloud/bill/taskLottery/queryCount":
+			return `{"code":0,"result":0}`
+		default:
+			t.Fatalf("unexpected %s", req.URL.Path)
+		}
+		return ""
+	})
+	if err := task.Run(); err != nil {
+		t.Fatal(err)
+	}
+	questionnaire, ok := executed["QUESTIONNAIRE"]
+	if !ok {
+		t.Fatal("QUESTIONNAIRE must be executed")
+	}
+	param, ok := questionnaire["param"].(map[string]interface{})
+	if !ok || param["reasonChoice"] != "A" || param["reasonDesc"] != "" || param["suggestChoice"] != "A" || param["suggestDesc"] != "" {
+		t.Fatalf("QUESTIONNAIRE param = %v, want FEEDBACK-shaped default answers", questionnaire["param"])
+	}
+	video, ok := executed["AI_VIDEO"]
+	if !ok {
+		t.Fatal("AI_VIDEO must be registered")
+	}
+	if len(video) != 1 || video["taskCode"] != "AI_VIDEO" {
+		t.Fatalf("AI_VIDEO body must contain only taskCode: %v", video)
+	}
+	if _, ok := executed["SHARE_BINDING"]; ok {
+		t.Fatal("SHARE_BINDING has no self-service path and must be skipped")
+	}
+}
+
 func TestLuckybagEligibilityCountsAndFailure(t *testing.T) {
 	for _, mode := range []string{"eligible", "ineligible", "malformed", "failure", "capped"} {
 		t.Run(mode, func(t *testing.T) {

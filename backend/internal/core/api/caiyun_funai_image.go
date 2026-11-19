@@ -266,7 +266,7 @@ func (api *CaiyunAPI) CompleteFunAIImageTask(taskID string) error {
 	default:
 		return fmt.Errorf("不支持的趣玩 AI 图像任务: %s", taskID)
 	}
-	resp, err := api.client.PostWithTimeout(AIYunURL+endpoint, api.funaiImageHeaders(), payload, 60*time.Second)
+	resp, err := api.client.PostWithTimeout(AIYunURL+endpoint, api.funaiImageHeaders(), payload, 90*time.Second)
 	if err != nil {
 		return err
 	}
@@ -275,16 +275,20 @@ func (api *CaiyunAPI) CompleteFunAIImageTask(taskID string) error {
 		return err
 	}
 	var result struct {
-		Code interface{} `json:"code"`
-		Data struct {
+		Code    interface{} `json:"code"`
+		Msg     string      `json:"msg"`
+		Message string      `json:"message"`
+		Data    struct {
 			TaskID json.RawMessage `json:"taskId"`
 		} `json:"data"`
 	}
-	if err := json.Unmarshal([]byte(body), &result); err != nil {
+	decoder := json.NewDecoder(strings.NewReader(body))
+	decoder.UseNumber()
+	if err := decoder.Decode(&result); err != nil {
 		return err
 	}
 	if fmt.Sprint(result.Code) != "0000" && fmt.Sprint(result.Code) != "0" {
-		return fmt.Errorf("趣玩 AI 图像任务 %s 创建失败: code=%v", taskID, result.Code)
+		return &ActivityBusinessError{Operation: "趣玩 AI 图像任务 " + taskID + " 创建", Code: fmt.Sprint(result.Code), Message: normalizeMessageText(result.Msg, result.Message)}
 	}
 	asyncID := strings.Trim(strings.TrimSpace(string(result.Data.TaskID)), `"`)
 	if asyncID == "" || asyncID == "null" {

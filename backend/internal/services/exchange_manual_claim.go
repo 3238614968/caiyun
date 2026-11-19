@@ -13,7 +13,7 @@ import (
 
 type exchangeManualClaimRepository interface {
 	GetByID(uint) (*models.ExchangeTask, error)
-	TryMarkForManualExecution(uint, uint, string, time.Time) (bool, string, error)
+	TryMarkForManualExecution(uint, uint, string, time.Time, string) (bool, string, error)
 	RecoverStaleRunningTask(uint, time.Time, string) (bool, error)
 }
 
@@ -24,7 +24,7 @@ type exchangeManualClaim struct {
 	reason  string
 }
 
-func claimExchangeTaskManually(repo exchangeManualClaimRepository, task *models.ExchangeTask, now time.Time, timeout time.Duration) (exchangeManualClaim, error) {
+func claimExchangeTaskManually(repo exchangeManualClaimRepository, task *models.ExchangeTask, now time.Time, timeout time.Duration, operationID string) (exchangeManualClaim, error) {
 	claim := exchangeManualClaim{task: task}
 	if task == nil || task.ID == 0 || task.UserID == 0 {
 		return claim, ErrExchangeInvalidInput
@@ -38,13 +38,13 @@ func claimExchangeTaskManually(repo exchangeManualClaimRepository, task *models.
 		}
 		switch current.Status {
 		case string(models.ExchangeTaskFailed):
-			if strings.Contains(current.LastResult, "兑换结果待确认") || strings.Contains(current.LastResult, "任务执行异常") {
+			if current.Outcome == string(models.ExchangeOutcomeUnknown) || strings.Contains(current.LastResult, "兑换结果待确认") || strings.Contains(current.LastResult, "任务执行异常") {
 				claim.reason = "上次兑换结果待确认，请先核对领奖专区及兑换记录，不能直接重复抢兑"
 				return claim, nil
 			}
 			fallthrough
 		case string(models.ExchangeTaskPending):
-			started, token, err := repo.TryMarkForManualExecution(current.ID, current.UserID, current.Status, current.UpdatedAt)
+			started, token, err := repo.TryMarkForManualExecution(current.ID, current.UserID, current.Status, current.UpdatedAt, operationID)
 			if errors.Is(err, repository.ErrDuplicateActiveExchangeTask) {
 				return claim, ErrExchangeTaskAlreadyExists
 			}
@@ -62,6 +62,10 @@ func claimExchangeTaskManually(repo exchangeManualClaimRepository, task *models.
 				return claim, nil
 			}
 		case string(models.ExchangeTaskRunning):
+			if current.Outcome == string(models.ExchangeOutcomeUnknown) {
+				claim.reason = "上次兑换结果待确认，请先核对领奖专区及兑换记录，不能直接重复抢兑"
+				return claim, nil
+			}
 			if !current.UpdatedAt.Before(now.Add(-timeout)) {
 				claim.reason = exchangeTaskClaimConflictReason(current.Status)
 				return claim, nil

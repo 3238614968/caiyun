@@ -117,12 +117,18 @@ func (tm *TokenManager) refreshAccountToken(accountID uint) (*TokenInfo, error) 
 		return failed, err
 	}
 	if session.jwtToken == "" && !credentialWasExpired {
+		if current, currentErr := tm.accountRepo.GetByID(account.ID); currentErr == nil && current.Auth != session.authStr {
+			tm.tokenCache.CompareAndDelete(account.ID, nil)
+			return nil, fmt.Errorf("凭据已轮换但 JWT 尚未恢复: %w", session.authErr)
+		}
 		if previous := tm.usablePreviousJWT(account, now); previous != nil {
 			if previous.SSOToken == "" {
 				if sso, err := session.authForJWT.QuerySpecTokenForJWT(account.Phone); err == nil {
 					previous.SSOToken = sso
 				}
 			}
+			// Do not mix a rotated Authorization with an older JWT or consumed SSO.
+			// The old credential grace path is valid only before replacement.
 			previous.Auth = session.authStr
 			previous.LastRefresh = now
 			previous.HealthStatus = "healthy"
@@ -210,9 +216,20 @@ func (s *tokenRefreshSession) refreshJWT(phone string) {
 }
 
 func (tm *TokenManager) refreshAuthorizationIfNeeded(account *models.Account, session *tokenRefreshSession, now time.Time) error {
-	// A successful JWT exchange proves the current credential is still usable.
-	// Never rotate it proactively: RCS permits only one live credential.
-	if session.jwtToken != "" || (!errors.Is(session.authErr, auth.ErrCredentialExpired) && !authorizationShouldRefresh(accountAuthorizationExpireAt(account), now)) {
+	// 提前续期（2026-11）：凭据进入 lead 窗口（默认到期前 72h，可配
+	// CAIYUN_AUTH_REFRESH_LEAD_HOURS，0 关闭）时主动轮换。硬过期后 refreshToken
+	// 必被拒绝，只能重登；旧策略「JWT 兑换成功就绝不轮换」导致凭据每月到期日
+	// 连续失败并自动停用账号。轮换会使手机端旧凭据失效（RCS 单活凭据），
+	// 自动化账号可接受；需要保留手机登录时把 lead 设为 0。
+	if errors.Is(session.authErr, auth.ErrCredentialExpired) || session.jwtToken == "" {
+		// JWT 兑换失败：凭据明示过期，或按（元数据）到期判断需要轮换时才动凭据。
+		if !errors.Is(session.authErr, auth.ErrCredentialExpired) &&
+			!authorizationShouldRefresh(accountAuthorizationExpireAt(account), now) {
+			return nil
+		}
+	} else if !authorizationShouldRotateEarly(accountAuthorizationExpireAt(account), now) {
+		// JWT 兑换成功 = 凭据本身可用（库内 ExpireAt 可能陈旧）；
+		// 仅当真实到期时间落在未来 lead 窗口内才主动轮换。
 		return nil
 	}
 	ctx, cancel := context.WithTimeout(accountServiceContext(tm.ctx), 2*time.Minute)
@@ -247,8 +264,11 @@ func (tm *TokenManager) refreshAuthorizationIfNeeded(account *models.Account, se
 		if token, jwtErr := session.authForJWT.TyrzLoginContext(ctx, refreshed.SSOToken); jwtErr == nil && token != "" {
 			session.jwtToken = token
 			session.ssoToken = refreshed.SSOToken
-		} else if jwtErr != nil {
-			log.Printf("[TokenManager] 账号 %d authorization 刷新成功但 JWT 重取失败，将保留已有 JWT: %v", account.ID, jwtErr)
+		} else {
+			if jwtErr == nil {
+				jwtErr = fmt.Errorf("JWT token 为空")
+			}
+			return fmt.Errorf("authorization 已轮换但 JWT 重取失败: %w", jwtErr)
 		}
 	}
 

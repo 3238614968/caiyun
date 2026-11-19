@@ -18,7 +18,7 @@ func (api *CaiyunAPI) ensureMarketDeviceIDContext(ctx context.Context) {
 	}
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
-	_ = api.client.EnsureShumeiDeviceIDForPage(ctx, MarketUserAgent, api.buildMarketPageURL(""))
+	_ = api.client.EnsureShumeiDeviceIDWithUserAgent(ctx, MarketUserAgent)
 }
 
 func (api *CaiyunAPI) buildMarketPageURL(sourceID string) string {

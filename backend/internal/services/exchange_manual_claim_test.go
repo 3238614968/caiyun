@@ -28,7 +28,7 @@ func (f *manualClaimFixture) GetByID(uint) (*models.ExchangeTask, error) {
 	return &task, nil
 }
 
-func (f *manualClaimFixture) TryMarkForManualExecution(id, userID uint, status string, updatedAt time.Time) (bool, string, error) {
+func (f *manualClaimFixture) TryMarkForManualExecution(id, userID uint, status string, updatedAt time.Time, _ string) (bool, string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.claimCalls++
@@ -71,7 +71,7 @@ func TestManualRetryClaimsFailedTask156AndStartsFreshRetryRound(t *testing.T) {
 		RetryCount: 3, AttemptedCount: 4, FailCount: 4,
 	}}
 	task, _ := fixture.GetByID(156)
-	claim, err := claimExchangeTaskManually(fixture, task, now, time.Minute)
+	claim, err := claimExchangeTaskManually(fixture, task, now, time.Minute, "")
 	if err != nil || !claim.started || claim.token == "" || claim.task.Status != "running" || claim.task.RetryCount != 0 || claim.task.LastResult != "" {
 		t.Fatalf("failed GK task was not restarted: %+v, %v", claim, err)
 	}
@@ -89,7 +89,7 @@ func TestConcurrentManualRetryOnlyClaimsFailedTaskOnce(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			claim, err := claimExchangeTaskManually(fixture, task, now, time.Minute)
+			claim, err := claimExchangeTaskManually(fixture, task, now, time.Minute, "")
 			if err != nil {
 				t.Errorf("claim error: %v", err)
 			}
@@ -112,7 +112,7 @@ func TestManualRetryDoesNotClaimCompletedOrUncertainResults(t *testing.T) {
 		now := time.Now()
 		fixture := &manualClaimFixture{task: models.ExchangeTask{ID: 156, UserID: 7, Status: tc.status, LastResult: tc.result, UpdatedAt: now}}
 		task, _ := fixture.GetByID(156)
-		claim, err := claimExchangeTaskManually(fixture, task, now, time.Minute)
+		claim, err := claimExchangeTaskManually(fixture, task, now, time.Minute, "")
 		if err != nil || claim.started || claim.reason == "" || fixture.claimCalls != 0 {
 			t.Fatalf("unsafe claim for %s/%s: %+v %v", tc.status, tc.result, claim, err)
 		}
@@ -132,7 +132,7 @@ func TestManualRetryUsesLatestOwnerAndResultAfterSnapshotChanges(t *testing.T) {
 			}
 		}
 		task, _ := fixture.GetByID(156)
-		claim, err := claimExchangeTaskManually(fixture, task, now, time.Minute)
+		claim, err := claimExchangeTaskManually(fixture, task, now, time.Minute, "")
 		if claim.started || (changeOwner && !errors.Is(err, ErrExchangePermissionDenied)) || (!changeOwner && claim.reason == "") {
 			t.Fatalf("updated owner/result bypassed: %+v, %v", claim, err)
 		}
@@ -144,7 +144,7 @@ func TestManualRetryDoesNotRecoverAnOwnerWhoseHeartbeatWasRenewed(t *testing.T) 
 	fixture := &manualClaimFixture{task: models.ExchangeTask{ID: 156, UserID: 7, Status: "running", UpdatedAt: now.Add(-time.Hour)}}
 	fixture.beforeRecover = func(task *models.ExchangeTask) { task.UpdatedAt = now }
 	task, _ := fixture.GetByID(156)
-	claim, err := claimExchangeTaskManually(fixture, task, now, time.Minute)
+	claim, err := claimExchangeTaskManually(fixture, task, now, time.Minute, "")
 	if err != nil || claim.started || fixture.claimCalls != 0 || fixture.recoveryCalls != 1 || !strings.Contains(claim.reason, "正在执行") {
 		t.Fatalf("fresh owner was displaced: %+v, %v", claim, err)
 	}
@@ -154,13 +154,13 @@ func TestManualRetryRecoversStaleOwnerAndReportsDuplicateActiveTask(t *testing.T
 	now := time.Now()
 	fixture := &manualClaimFixture{task: models.ExchangeTask{ID: 156, UserID: 7, Status: "running", UpdatedAt: now.Add(-time.Hour)}}
 	task, _ := fixture.GetByID(156)
-	claim, err := claimExchangeTaskManually(fixture, task, now, time.Minute)
+	claim, err := claimExchangeTaskManually(fixture, task, now, time.Minute, "")
 	if err != nil || !claim.started || fixture.recoveryCalls != 1 {
 		t.Fatalf("stale task not recovered: %+v %v", claim, err)
 	}
 	fixture = &manualClaimFixture{task: models.ExchangeTask{ID: 156, UserID: 7, Status: "failed", UpdatedAt: now}, claimErr: repository.ErrDuplicateActiveExchangeTask}
 	task, _ = fixture.GetByID(156)
-	if _, err := claimExchangeTaskManually(fixture, task, now, time.Minute); !errors.Is(err, ErrExchangeTaskAlreadyExists) {
+	if _, err := claimExchangeTaskManually(fixture, task, now, time.Minute, ""); !errors.Is(err, ErrExchangeTaskAlreadyExists) {
 		t.Fatalf("duplicate active task exposed as a database error: %v", err)
 	}
 }

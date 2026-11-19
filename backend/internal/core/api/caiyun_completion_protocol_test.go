@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"testing"
+	"time"
 
 	corehttp "caiyun/internal/core/http"
 )
@@ -26,6 +27,9 @@ func TestCompletionActivityURLsHaveSingleYcloudPrefix(t *testing.T) {
 			client := corehttp.NewClient(corehttp.WithTransport(mailRoundTripFunc(func(req *http.Request) (*http.Response, error) {
 				if req.URL.Path != tc.path {
 					t.Fatalf("path=%s want=%s", req.URL.Path, tc.path)
+				}
+				if tc.path == "/ycloud/south/national/familyCircle/queryBackupState" {
+					return mailTestResponse(req, 200, `{"code":0,"result":1}`), nil
 				}
 				return mailTestResponse(req, 200, `{"code":0,"result":{"result":[],"totalPages":1}}`), nil
 			})))
@@ -80,12 +84,12 @@ func TestCompletionResponsesUseActualUpstreamEnvelopes(t *testing.T) {
 }
 
 func TestFamilyCircleBaseOverrideIsPerClient(t *testing.T) {
-	for _, host := range []string{"family.example", "m.mcloud.139.com"} {
+	for _, host := range []string{"family.example", "caiyun.feixin.10086.cn"} {
 		client := corehttp.NewClient(corehttp.WithTransport(mailRoundTripFunc(func(req *http.Request) (*http.Response, error) {
 			if req.URL.Host != host {
 				t.Fatalf("family host=%s want=%s", req.URL.Host, host)
 			}
-			return mailTestResponse(req, 200, `{"code":0}`), nil
+			return mailTestResponse(req, 200, `{"code":0,"result":0}`), nil
 		})))
 		claims := base64.RawURLEncoding.EncodeToString([]byte(`{"sub":{"userDomainId":"test-user"}}`))
 		client.SetJWTToken("header." + claims + ".signature")
@@ -93,7 +97,7 @@ func TestFamilyCircleBaseOverrideIsPerClient(t *testing.T) {
 		if host == "family.example" {
 			a.SetFamilyCircleBase("https://family.example/api")
 		}
-		if _, err := a.FamilyCircleBackupState(""); err != nil {
+		if _, err := a.FamilyCircleBackupState("group-fixture"); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -135,12 +139,12 @@ func TestKnowledgeTaskReusesExistingTaskLibrary(t *testing.T) {
 				switch req.URL.Path {
 				case "/api/outer/assistant/knowledge/personal/v2/base/list":
 					if existing {
-						return mailTestResponse(req, 200, `{"code":"0000","data":{"baseList":[{"name":"云盘任务知识库-20260929-120000"}]}}`), nil
+						return mailTestResponse(req, 200, `{"code":"0000","data":{"baseList":[{"name":"云盘任务知识库-20261112","baseId":"today","baseType":1,"openLevel":0}]}}`), nil
 					}
 					return mailTestResponse(req, 200, `{"code":"0000","data":{"baseList":[]}}`), nil
 				case "/api/outer/assistant/knowledge/personal/v2/base/create":
 					created++
-					return mailTestResponse(req, 200, `{"code":"0000"}`), nil
+					return mailTestResponse(req, 200, `{"code":"0000","data":{"base":{"baseId":"created-base"}}}`), nil
 				default:
 					t.Fatalf("unexpected knowledge URL: %s", req.URL)
 				}
@@ -148,7 +152,7 @@ func TestKnowledgeTaskReusesExistingTaskLibrary(t *testing.T) {
 			})))
 			claims := base64.RawURLEncoding.EncodeToString([]byte(`{"sub":{"userDomainId":"test-user"}}`))
 			client.SetJWTToken("h." + claims + ".s")
-			if err := NewCaiyunAPI(client).CreateTaskKnowledgeBase(); err != nil {
+			if err := NewCaiyunAPI(client).createTaskKnowledgeBase(time.Date(2026, 11, 12, 4, 0, 0, 0, time.FixedZone("CST", 8*3600))); err != nil {
 				t.Fatal(err)
 			}
 			if (existing && created != 0) || (!existing && created != 1) {

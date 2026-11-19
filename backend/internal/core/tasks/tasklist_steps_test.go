@@ -139,6 +139,9 @@ func TestTaskCenterSkipsTasksCompletedSinceBatchSnapshot(t *testing.T) {
 
 func TestTaskCenterSummaryDistinguishesDailyAndUnfinished(t *testing.T) {
 	job := taskStepTestJob(t, func(req *http.Request) string {
+		if strings.HasSuffix(req.URL.Path, "taskListV2") {
+			return `{"code":0,"result":{"beiyong1":[]}}`
+		}
 		if strings.HasSuffix(req.URL.Path, "taskListV3") {
 			var payload struct {
 				Market string `json:"marketname"`
@@ -177,7 +180,9 @@ func TestTaskCenterRealUploadsKeepAppAndPCChannels(t *testing.T) {
 				steps++
 			case "/ycloud/signin/task/taskListV3":
 				state := "WAIT"
-				if steps >= 3 {
+				// 每轮 reportTaskAction 登记 4 个 key（task/sendcloud/nda/click），
+				// 服务端确认后任务翻 FINISH。
+				if steps >= 4 {
 					state = "FINISH"
 				}
 				return taskStepJSON(api.Task{ID: tc.id, State: state, CurrStep: steps})
@@ -187,7 +192,7 @@ func TestTaskCenterRealUploadsKeepAppAndPCChannels(t *testing.T) {
 		if handled, err := job.handleSpecialTask(taskListItem{MarketName: "sign_in_3", Task: api.Task{ID: tc.id, State: "WAIT"}}); !handled || err != nil {
 			t.Fatalf("handled=%v err=%v", handled, err)
 		}
-		if uploads != 1 || steps != 3 || job.Pending() {
+		if uploads != 1 || steps != 4 || job.Pending() {
 			t.Fatalf("uploads=%d steps=%d pending=%v", uploads, steps, job.Pending())
 		}
 	}

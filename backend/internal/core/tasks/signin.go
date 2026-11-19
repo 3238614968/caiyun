@@ -1,6 +1,7 @@
 package tasks
 
 import (
+	"errors"
 	"fmt"
 	"time"
 
@@ -47,9 +48,17 @@ func (t *SignInTask) Run() error {
 	time.Sleep(1 * time.Second)
 	signInResp, err := t.api.SignIn()
 	if err != nil {
+		latestInfo, latestErr := t.api.GetCloudInfo()
+		if latestErr == nil && latestInfo != nil && latestInfo.IsSuccess() && latestInfo.Result.TodaySigned() {
+			t.logger.Success("签到请求结果不明，已复查确认今日已签到")
+			return nil
+		}
 		t.logger.Error("执行签到失败:", err)
 		t.logger.Debug("详细错误:", err.Error())
-		return err
+		if latestErr != nil {
+			return fmt.Errorf("签到请求失败且状态复查失败: %w", errors.Join(err, latestErr))
+		}
+		return fmt.Errorf("签到请求结果待确认: %w", err)
 	}
 	if !signInResp.IsSuccess() {
 		msg := signInResp.MessageText()

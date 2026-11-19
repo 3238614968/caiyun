@@ -350,6 +350,11 @@ func (s *Scheduler) recordResult(result *JobResult) {
 func (s *Scheduler) validateSchedule(schedule string) error {
 	// 检查基本的cron表达式格式
 	parts := strings.Fields(schedule)
+	// robfig/cron supports per-job timezone prefixes. Validate the time fields
+	// separately; AddFunc remains responsible for validating the timezone.
+	if len(parts) > 0 && (strings.HasPrefix(parts[0], "CRON_TZ=") || strings.HasPrefix(parts[0], "TZ=")) {
+		parts = parts[1:]
+	}
 	if len(parts) != 5 && len(parts) != 6 {
 		return fmt.Errorf("无效的cron表达式格式: %s", schedule)
 	}

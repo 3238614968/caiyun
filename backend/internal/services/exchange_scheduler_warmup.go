@@ -125,7 +125,7 @@ func (s *ExchangeScheduler) preheatAccountsForTasks(slot string, tasks []*models
 				resultMu.Unlock()
 				return
 			}
-			authCtx := &exchangeAuthContext{jwtToken: tokenInfo.JWTToken, ssoToken: tokenInfo.SSOToken}
+			authCtx := &exchangeAuthContext{jwtToken: tokenInfo.JWTToken, ssoToken: tokenInfo.SSOToken, authorization: tokenInfo.Auth}
 			// Device profiling and HTTP/cookie initialization happen before :00,
 			// leaving the live captcha and submission on the critical path.
 			limiter <- struct{}{}

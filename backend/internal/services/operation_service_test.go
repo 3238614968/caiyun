@@ -76,6 +76,38 @@ func newOperationServiceTest(t *testing.T) (*OperationService, *operationQueueSt
 	return service, q, db
 }
 
+func TestScheduledMonthlyExchangePersistsOneSystemOperationPerCSTDay(t *testing.T) {
+	service, queue, db := newOperationServiceTest(t)
+	firstAt := time.Date(2026, 11, 14, 16, 1, 0, 0, time.UTC)
+	first, created, dispatchErr, err := service.SubmitScheduledMonthlyExchange(context.Background(), firstAt)
+	if err != nil || dispatchErr != nil || !created {
+		t.Fatalf("created=%t dispatch=%v err=%v", created, dispatchErr, err)
+	}
+	if first.UserID != 0 || first.OperationType != models.OperationTypeExchangeMonthly || first.IdempotencyKey != "cron:exchange.monthly:2026-11-15" {
+		t.Fatalf("invalid system operation: %+v", first)
+	}
+	if _, err := repository.NewOperationRepository(db).GetByID(first.ID); err != nil {
+		t.Fatal("operation was enqueued without persistence:", err)
+	}
+	if len(queue.messages) != 1 || queue.messages[0].OperationID != first.ID {
+		t.Fatal("queue lost the persisted operation ID")
+	}
+	same, created, _, err := service.SubmitScheduledMonthlyExchange(context.Background(), firstAt.Add(10*time.Hour))
+	if err != nil || created || same.ID != first.ID {
+		t.Fatalf("same day created another operation: %+v %v", same, err)
+	}
+	next, created, _, err := service.SubmitScheduledMonthlyExchange(context.Background(), firstAt.Add(24*time.Hour))
+	if err != nil || !created || next.ID == first.ID {
+		t.Fatalf("next day operation missing: %+v %v", next, err)
+	}
+	if _, _, _, err := service.Submit(context.Background(), SubmitOperationRequest{OperationType: models.OperationTypeExchangeMonthly, Payload: struct{}{}}); err == nil {
+		t.Fatal("public Submit accepted an anonymous system operation")
+	}
+	if _, err := service.GetForUser(context.Background(), first.ID, 7); !errors.Is(err, ErrOperationNotFound) {
+		t.Fatalf("system operation visible to an unrelated user: %v", err)
+	}
+}
+
 func TestOperationSubmitIsDurableAndIdempotent(t *testing.T) {
 	service, q, db := newOperationServiceTest(t)
 	ctx := context.Background()
@@ -164,7 +196,7 @@ func TestOperationLifecyclePublishesSafeStateTransitions(t *testing.T) {
 		}
 	}
 	failed := publisher.updates[2]
-	if failed.ErrorSummary != "操作执行失败，请稍后重试" {
+	if failed.ErrorSummary != "操作未完成，请查看任务明细" {
 		t.Fatalf("unsafe error leaked in event: %q", failed.ErrorSummary)
 	}
 }

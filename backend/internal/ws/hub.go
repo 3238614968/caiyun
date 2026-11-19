@@ -105,14 +105,17 @@ type SSEClient struct {
 }
 
 type Client struct {
-	hub       *Hub
-	conn      *websocket.Conn
-	send      chan []byte
-	done      chan struct{}
-	closeOnce sync.Once
-	userID    uint
-	pendingMu sync.Mutex
-	pending   map[string]*pendingDelivery
+	hub           *Hub
+	conn          *websocket.Conn
+	send          chan []byte
+	done          chan struct{}
+	closeOnce     sync.Once
+	userID        uint
+	session       *SessionAuthorization
+	sessionCtx    context.Context
+	cancelSession context.CancelFunc
+	pendingMu     sync.Mutex
+	pending       map[string]*pendingDelivery
 }
 
 type Hub struct {
@@ -333,34 +336,44 @@ func (h *Hub) beginOperation() bool {
 func (h *Hub) deliverOfflineMessages(client *Client, repo *repository.WSMessageRepository) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	messages, err := repo.WithContext(ctx).GetUndeliveredMessages(client.userID, 50)
-	if err != nil {
-		log.Printf("[WS] 获取用户 %d 离线消息失败: %v", client.userID, err)
-		return
-	}
-	for _, stored := range messages {
-		if h.isStopped() {
+	lastSequence := uint64(0)
+	for {
+		messages, err := repo.WithContext(ctx).GetMessagesAfterSequence(client.userID, lastSequence, 50)
+		if err != nil {
+			log.Printf("[WS] 获取用户 %d 离线消息失败: %v", client.userID, err)
 			return
 		}
-		var data interface{}
-		if err := json.Unmarshal([]byte(stored.Data), &data); err != nil {
-			data = stored.Data
+		for _, stored := range messages {
+			if h.isStopped() {
+				return
+			}
+			if stored.Sequence <= lastSequence {
+				continue
+			}
+			lastSequence = stored.Sequence
+			var data interface{}
+			if err := json.Unmarshal([]byte(stored.Data), &data); err != nil {
+				data = stored.Data
+			}
+			expires := int64(0)
+			if stored.ExpiresAt != nil {
+				expires = stored.ExpiresAt.UnixMilli()
+			}
+			messageID := stored.MessageID
+			if messageID == "" {
+				messageID = fmt.Sprintf("legacy-%d", stored.ID)
+			}
+			msg := Message{Type: stored.Type, Data: data, UserID: stored.UserID, MessageID: messageID,
+				Sequence: stored.Sequence, CreatedAtMS: stored.CreatedAt.UnixMilli(), ExpiresAtMS: expires}
+			payload, marshalErr := json.Marshal(msg)
+			if marshalErr != nil {
+				continue
+			}
+			client.enqueue(msg, payload)
 		}
-		expires := int64(0)
-		if stored.ExpiresAt != nil {
-			expires = stored.ExpiresAt.UnixMilli()
+		if len(messages) < 50 {
+			return
 		}
-		messageID := stored.MessageID
-		if messageID == "" {
-			messageID = fmt.Sprintf("legacy-%d", stored.ID)
-		}
-		msg := Message{Type: stored.Type, Data: data, UserID: stored.UserID, MessageID: messageID,
-			Sequence: stored.Sequence, CreatedAtMS: stored.CreatedAt.UnixMilli(), ExpiresAtMS: expires}
-		payload, marshalErr := json.Marshal(msg)
-		if marshalErr != nil {
-			continue
-		}
-		client.enqueue(msg, payload)
 	}
 }
 
@@ -568,18 +581,27 @@ func (h *Hub) tryUnregister(client *Client) {
 	}
 }
 
-func (h *Hub) HandleWebSocket(w http.ResponseWriter, r *http.Request, userID uint) {
+func (h *Hub) HandleWebSocket(w http.ResponseWriter, r *http.Request, userID uint, authorizations ...SessionAuthorization) {
 	if !h.beginOperation() {
 		http.Error(w, "service shutting down", http.StatusServiceUnavailable)
 		return
 	}
 	defer h.operationWG.Done()
+	authorization := connectionAuthorization(authorizations)
+	if !authorization.valid(r.Context()) {
+		http.Error(w, "session revoked", http.StatusUnauthorized)
+		return
+	}
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		log.Printf("[WS] 升级失败: %v", err)
 		return
 	}
 	client := &Client{hub: h, conn: conn, send: make(chan []byte, 256), done: make(chan struct{}), userID: userID, pending: make(map[string]*pendingDelivery)}
+	// The HTTP upgrade handler returns immediately. Use a connection-owned
+	// context instead of the request context, which ends at handler return.
+	client.session = authorization
+	client.sessionCtx, client.cancelSession = context.WithCancel(context.Background())
 	select {
 	case h.register <- client:
 	case <-h.stopCh:
@@ -633,6 +655,9 @@ func (c *Client) close() {
 		return
 	}
 	c.closeOnce.Do(func() {
+		if c.cancelSession != nil {
+			c.cancelSession()
+		}
 		if c.done != nil {
 			close(c.done)
 		}
@@ -640,6 +665,15 @@ func (c *Client) close() {
 			_ = c.conn.Close()
 		}
 	})
+}
+
+func (c *Client) closeUnauthorized() {
+	// WriteControl may run concurrently with the data writer. This also lets
+	// the read pump reject commands after revocation without racing writes.
+	if c.conn != nil {
+		_ = c.conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(4001, "session expired or revoked"), time.Now().Add(time.Second))
+	}
+	c.close()
 }
 
 func (c *Client) ack(messageID string) {
@@ -689,6 +723,10 @@ func (c *Client) readPump() {
 		if err != nil {
 			return
 		}
+		if !c.session.valid(c.sessionCtx) {
+			c.closeUnauthorized()
+			return
+		}
 		_ = c.conn.SetReadDeadline(time.Now().Add(60 * time.Second))
 		var command struct {
 			Type      string `json:"type"`
@@ -730,7 +768,13 @@ func (c *Client) writePump() {
 	}
 	retry := time.NewTicker(retryEvery)
 	defer func() { heartbeat.Stop(); retry.Stop(); c.close() }()
+	expired, recheck, stopSessionTimers := c.session.timers()
+	defer stopSessionTimers()
 	write := func(kind int, data []byte) error {
+		if !c.session.valid(c.sessionCtx) {
+			c.closeUnauthorized()
+			return fmt.Errorf("session revoked")
+		}
 		_ = c.conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
 		return c.conn.WriteMessage(kind, data)
 	}
@@ -738,6 +782,14 @@ func (c *Client) writePump() {
 		select {
 		case <-c.done:
 			return
+		case <-expired:
+			c.closeUnauthorized()
+			return
+		case <-recheck:
+			if !c.session.valid(c.sessionCtx) {
+				c.closeUnauthorized()
+				return
+			}
 		case message, ok := <-c.send:
 			if !ok {
 				_ = write(websocket.CloseMessage, nil)

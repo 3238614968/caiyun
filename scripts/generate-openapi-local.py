@@ -262,16 +262,27 @@ def resource_schemas() -> dict[str, dict[str, Any]]:
             "properties": {"id": positive, "phone": {"type": "string"}, "remark": {"type": "string"}},
         },
         "TaskLog": {
-            "type": "object", "required": ["id", "user_id", "account_id", "task_type", "status", "message", "cloud_gained", "execution_time", "created_at"],
+            "type": "object", "required": ["id", "user_id", "account_id", "task_type", "status", "message", "cloud_gained", "migu_notes_gained", "execution_time", "created_at"],
             "properties": {
                 "id": positive, "user_id": positive, "account_id": positive, "task_type": {"type": "string"}, "status": {"type": "string"},
-                "message": {"type": "string"}, "cloud_gained": {"type": "integer"}, "execution_time": integer, "created_at": time,
+                "message": {"type": "string"}, "cloud_gained": {"type": "integer"}, "migu_notes_gained": integer, "execution_time": integer, "created_at": time,
                 "account": {"$ref": "#/components/schemas/TaskLogAccount"},
             },
         },
         "TaskLogList": {
             "type": "object", "required": ["task_logs", "total", "page", "page_size"],
             "properties": {"task_logs": {"type": "array", "items": {"$ref": "#/components/schemas/TaskLog"}}, "total": integer, "page": positive, "page_size": positive},
+        },
+        "TaskDailySummary": {
+            "type": "object", "required": ["account_id", "phone", "remark", "cloud_gained", "migu_notes_gained", "success_count", "failed_count", "pending_count", "skipped_count", "last_executed_at"],
+            "properties": {
+                "account_id": positive, "phone": {"type": "string"}, "remark": {"type": "string"}, "cloud_gained": integer, "migu_notes_gained": integer,
+                "success_count": integer, "failed_count": integer, "pending_count": integer, "skipped_count": integer, "last_executed_at": time,
+            },
+        },
+        "TaskDailySummaryList": {
+            "type": "object", "required": ["date", "accounts", "total", "page", "page_size"],
+            "properties": {"date": {"type": "string", "format": "date"}, "accounts": {"type": "array", "items": {"$ref": "#/components/schemas/TaskDailySummary"}}, "total": integer, "page": positive, "page_size": positive},
         },
         "QueueBackendMeta": {
             "type": "object", "properties": {
@@ -342,7 +353,7 @@ def resource_schemas() -> dict[str, dict[str, Any]]:
                 "restock_day_of_month": {"type": ["integer", "null"], "minimum": 1, "maximum": 31}, "restock_times": {"type": "string"}, "custom_cron": {"type": "string"},
                 "calendar_policy": {"type": "string", "enum": ["all", "workday", "holiday"]}, "holiday_dates": {"type": "string"}, "workday_dates": {"type": "string"},
                 "skip_reason": {"type": "string"}, "attempted_count": integer, "status": {"type": "string", "enum": ["pending", "running", "completed", "failed"]},
-                "last_attempt_at": time, "last_result": {"type": "string"}, "next_run_at": time, "priority": {"type": "integer"}, "task_group": {"type": "string"},
+                "last_attempt_at": time, "last_result": {"type": "string"}, "outcome": {"type": "string", "enum": ["not_submitted", "accepted", "rejected", "unknown"]}, "next_run_at": time, "priority": {"type": "integer"}, "task_group": {"type": "string"},
                 "timeout_seconds": positive, "max_retries": integer, "retry_count": integer, "last_retry_at": time, "success_count": integer, "fail_count": integer,
                 "created_at": time, "updated_at": time, "exchange_account": {"$ref": "#/components/schemas/ExchangeRule"}, "product": {"$ref": "#/components/schemas/Product"},
             },
@@ -363,7 +374,7 @@ def resource_schemas() -> dict[str, dict[str, Any]]:
             "type": "object", "required": ["id", "user_id", "exchange_account_id", "product_id", "prize_id", "prize_name", "status", "message", "execution_time_ms", "created_at"],
             "properties": {
                 "id": positive, "user_id": positive, "exchange_account_id": positive, "exchange_task_id": positive, "product_id": positive, "prize_id": {"type": "string"},
-                "prize_name": {"type": "string"}, "status": {"type": "string", "enum": ["success", "failed"]}, "message": {"type": "string"}, "execution_time_ms": integer,
+                "prize_name": {"type": "string"}, "status": {"type": "string", "enum": ["success", "failed"]}, "outcome": {"type": "string", "enum": ["not_submitted", "accepted", "rejected", "unknown"]}, "message": {"type": "string"}, "execution_time_ms": integer,
                 "created_at": time, "exchange_account": {"$ref": "#/components/schemas/ExchangeRule"}, "product": {"$ref": "#/components/schemas/Product"},
             },
         },
@@ -471,6 +482,7 @@ def apply_typed_resource_contract(paths: dict[str, dict[str, dict[str, Any]]]) -
         ("/api/v1/accounts/sms/status/{task_id}", "get"): ("SmsStatus", None),
         ("/api/v1/accounts/sms/verify", "post"): ("Account", "SmsLoginRequest"),
         ("/api/v1/tasks/logs", "get"): ("TaskLogList", None),
+        ("/api/v1/tasks/daily-summary", "get"): ("TaskDailySummaryList", None),
         ("/api/v1/tasks/status", "get"): ("TaskStatus", None, [query_parameter("account_id", {"type": "integer", "minimum": 1}, "Optionally filter recent task status by account.")]),
         ("/api/v1/tasks/queue-status", "get"): ("QueueStatus", None),
         ("/api/v1/admin/tasks/dead-letters", "get"): ("DeadLetterList", None),

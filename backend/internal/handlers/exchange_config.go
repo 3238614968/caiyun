@@ -39,15 +39,17 @@ func (h *ExchangeHandler) GetExchangeConfig(c *gin.Context) {
 	}
 
 	// 获取启用状态
-	enabled := true
-	if config, err := h.exchangeService.GetSystemConfig("exchange_enabled"); err == nil {
-		enabled = config.KeyValue == "true" || config.KeyValue == "1" || config.KeyValue == "yes"
+	enabled, err := h.exchangeService.ExchangeEnabled(c.Request.Context())
+	if err != nil {
+		respondInternalServer(c)
+		return
 	}
 
 	// 获取兑换月卡开关
-	exchangeMonthlyEnabled := false
-	if config, err := h.exchangeService.GetSystemConfig("exchange_monthly_enabled"); err == nil {
-		exchangeMonthlyEnabled = config.KeyValue == "true" || config.KeyValue == "1" || config.KeyValue == "yes"
+	exchangeMonthlyEnabled, err := h.exchangeService.MonthlyExchangeEnabled(c.Request.Context())
+	if err != nil {
+		respondInternalServer(c)
+		return
 	}
 
 	// 获取兑换月卡时间
@@ -84,9 +86,10 @@ func (h *ExchangeHandler) GetExchangeConfigPublic(c *gin.Context) {
 	// 只返回普通用户需要的配置
 
 	// 获取启用状态
-	enabled := true
-	if config, err := h.exchangeService.GetSystemConfig("exchange_enabled"); err == nil {
-		enabled = config.KeyValue == "true" || config.KeyValue == "1" || config.KeyValue == "yes"
+	enabled, err := h.exchangeService.ExchangeEnabled(c.Request.Context())
+	if err != nil {
+		respondInternalServer(c)
+		return
 	}
 
 	// 获取立即兑换开关

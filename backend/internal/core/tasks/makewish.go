@@ -36,7 +36,6 @@ func (t *MakeWishTask) SetAccountContext(phone, authToken string) *MakeWishTask 
 
 // makewishManualTasks 需要真实好友或人工体验入口的进阶任务。
 var makewishManualTasks = map[string]string{
-	"MOMENTS_9PIC":   "体验朋友圈9图",
 	"CLOUD_EXCHANGE": "AI豆兑换抽奖码",
 }
 
@@ -111,6 +110,13 @@ func (t *MakeWishTask) Run() error {
 		}
 		performedAction := false
 		switch task.TaskCode {
+		case "MOMENTS_9PIC":
+			if _, err := t.api.CompleteNineGridTask(); err != nil {
+				issues = append(issues, fmt.Errorf("许愿九宫格: %w", err))
+				continue
+			}
+			advanceIDs = append(advanceIDs, task.TaskID)
+			performedAction = true
 		case "AI_CAMERA":
 			if err := t.api.CompleteAICameraTask(); err != nil {
 				issues = append(issues, fmt.Errorf("许愿 AI 相机: %w", err))

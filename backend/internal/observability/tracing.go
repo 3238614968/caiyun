@@ -156,7 +156,7 @@ func StartTracing(ctx context.Context, config TraceConfig) (func(context.Context
 	)
 	provider := sdktrace.NewTracerProvider(
 		sdktrace.WithSampler(sdktrace.ParentBased(sdktrace.TraceIDRatioBased(config.SampleRatio))),
-		sdktrace.WithBatcher(exporter),
+		sdktrace.WithSpanProcessor(httpPrivacyProcessor{sdktrace.NewBatchSpanProcessor(exporter)}),
 		sdktrace.WithResource(res),
 	)
 	otel.SetTracerProvider(provider)

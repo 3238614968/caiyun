@@ -14,9 +14,8 @@ import (
 	"github.com/google/uuid"
 )
 
-// LoginH5Session logs in on the caller's browser-session client. The cookie jar
-// already contains that session's SDK cookies; all Set-Cookie fields remain in
-// the same jar subsequently used for eligibility, challenge and exchange.
+// LoginH5Session keeps the SDK and server cookies in the caller's jar. The m
+// gateway ticket is single-use; a failed request is never replayed to gp.
 func LoginH5Session(ctx context.Context, client *http.Client, sso, ua, referer string) (string, error) {
 	if ctx == nil {
 		ctx = context.Background()
@@ -26,7 +25,7 @@ func LoginH5Session(ctx context.Context, client *http.Client, sso, ua, referer s
 	}
 	isolated := *client
 	isolated.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
-	client = &isolated // same jar/transport, but credentials never follow a redirect
+	client = &isolated
 	timestamp := time.Now().UnixMilli()
 	timeCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	r, _ := http.NewRequestWithContext(timeCtx, http.MethodGet, "https://m.mcloud.139.com/ycloud/api/timestamp", nil)
@@ -47,46 +46,39 @@ func LoginH5Session(ctx context.Context, client *http.Client, sso, ua, referer s
 	}
 	cancel()
 	payload, _ := json.Marshal(map[string]interface{}{"token": sso, "openAccount": 0, "marketName": "sign_in_3", "sourceId": "1097"})
-	var lastErr error
-	for _, host := range []string{"m.mcloud.139.com", "gp.mcloud.139.com"} {
-		if err := ctx.Err(); err != nil {
-			return "", err
-		}
-		r, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://"+host+"/ycloud/auth-service/auth/tyrzLogin", bytes.NewReader(payload))
-		if err != nil {
-			return "", err
-		}
-		id, nonce, ts := uuid.NewString(), uuid.NewString(), strconv.FormatInt(timestamp, 10)
-		for key, value := range map[string]string{
-			"User-Agent": ua, "Referer": referer, "Origin": "https://m.mcloud.139.com", "Accept": "*/*",
-			"Content-Type": "application/json;charset=UTF-8", "activityid": "sign_in_3", "appversion": "13.2.5.0",
-			"X-Requested-With": "com.chinamobile.mcloud", "Cache-Control": "no-cache", "showloading": "true",
-			"x-request-id": id, "x-nonce": nonce, "x-timestamp": ts, "x-signature": h5AuthSignature(id, ts, nonce),
-		} {
-			r.Header.Set(key, value)
-		}
-		resp, err := client.Do(r)
-		if err != nil {
-			lastErr = fmt.Errorf("H5 会话登录请求失败: host=%s", host)
-			continue
-		}
-		var result struct {
-			Code   *int
-			Result struct{ Token string }
-		}
-		err = json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&result)
-		resp.Body.Close()
-		if err != nil {
-			lastErr = fmt.Errorf("H5 会话登录响应无法解析: host=%s http_status=%d", host, resp.StatusCode)
-			continue
-		}
-		if resp.StatusCode != 200 || result.Code == nil || *result.Code != 0 || result.Result.Token == "" {
-			lastErr = fmt.Errorf("H5 会话登录未成功: host=%s http_status=%d code=%s", host, resp.StatusCode, loginCode(result.Code))
-			continue
-		}
-		return result.Result.Token, nil
+	const host = "m.mcloud.139.com"
+	if err := ctx.Err(); err != nil {
+		return "", err
 	}
-	return "", lastErr
+	r, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://"+host+"/ycloud/auth-service/auth/tyrzLogin", bytes.NewReader(payload))
+	if err != nil {
+		return "", err
+	}
+	id, nonce, ts := uuid.NewString(), uuid.NewString(), strconv.FormatInt(timestamp, 10)
+	for key, value := range map[string]string{
+		"User-Agent": ua, "Referer": referer, "Origin": "https://m.mcloud.139.com", "Accept": "*/*",
+		"Content-Type": "application/json;charset=UTF-8", "activityid": "sign_in_3", "appversion": "13.2.5.0",
+		"X-Requested-With": "com.chinamobile.mcloud", "Cache-Control": "no-cache", "showloading": "true",
+		"x-request-id": id, "x-nonce": nonce, "x-timestamp": ts, "x-signature": h5AuthSignature(id, ts, nonce),
+	} {
+		r.Header.Set(key, value)
+	}
+	resp, err := client.Do(r)
+	if err != nil {
+		return "", fmt.Errorf("H5 会话登录请求失败: host=%s: %w", host, err)
+	}
+	defer resp.Body.Close()
+	var result struct {
+		Code   *int
+		Result struct{ Token string }
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&result); err != nil {
+		return "", fmt.Errorf("H5 会话登录响应无法解析: host=%s http_status=%d", host, resp.StatusCode)
+	}
+	if resp.StatusCode != 200 || result.Code == nil || *result.Code != 0 || result.Result.Token == "" {
+		return "", fmt.Errorf("H5 会话登录未成功: host=%s http_status=%d code=%s", host, resp.StatusCode, loginCode(result.Code))
+	}
+	return result.Result.Token, nil
 }
 
 func loginCode(code *int) string {

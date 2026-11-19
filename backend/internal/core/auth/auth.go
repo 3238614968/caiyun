@@ -170,14 +170,79 @@ func (a *Auth) RefreshToken(token, phone string) (string, error) {
 	return newToken, nil
 }
 
+type specTokenCode string
+
+func (code *specTokenCode) UnmarshalJSON(raw []byte) error {
+	var text string
+	if err := json.Unmarshal(raw, &text); err != nil {
+		var number int64
+		if err := json.Unmarshal(raw, &number); err != nil {
+			return errors.New("出票响应状态码不是字符串或整数")
+		}
+		text = strconv.FormatInt(number, 10)
+	}
+	*code = specTokenCode(strings.TrimSpace(text))
+	return nil
+}
+
+func (code specTokenCode) failed() bool { return strings.Trim(string(code), "0") != "" }
+
 // SpecTokenResp SpecToken 响应
 type SpecTokenResp struct {
-	Success bool   `json:"success"`
-	Code    string `json:"code"` // 注意：code 是字符串类型
-	Message string `json:"message"`
+	Success bool          `json:"success"`
+	Code    specTokenCode `json:"code"`
+	Message string        `json:"message"`
 	Data    struct {
-		Token string `json:"token"`
+		Token  string `json:"token"`
+		Result struct {
+			Code        specTokenCode `json:"resultCode"`
+			Description string        `json:"resultDesc"`
+		} `json:"result"`
 	} `json:"data"`
+}
+
+func (result *SpecTokenResp) issuedTicket(sourceID string) (string, error) {
+	if result.Code == "05050006" || result.Code == "1010010015" {
+		return "", fmt.Errorf("%w: querySpecToken code=%s", ErrCredentialExpired, result.Code)
+	}
+	inner := result.Data.Result
+	if !result.Success || result.Code.failed() || inner.Code.failed() {
+		if result.Code == "" && inner.Code == "" && result.Message == "" && inner.Description == "" {
+			return "", errors.New("出票响应未确认成功且缺少业务状态码")
+		}
+		message := inner.Description
+		if message == "" {
+			message = result.Message
+		}
+		return "", &SpecTokenError{SourceID: sourceID, Code: string(result.Code), ResultCode: string(inner.Code), Message: message}
+	}
+	ticket := strings.TrimSpace(result.Data.Token)
+	if ticket == "" {
+		return "", errors.New("出票响应中的票据为空")
+	}
+	return ticket, nil
+}
+
+// SpecTokenError preserves the issuer's nested result. An unavailable target
+// channel is distinct from expired account credentials and must not disable it.
+type SpecTokenError struct {
+	SourceID, Code, ResultCode, Message string
+}
+
+func (e *SpecTokenError) Error() string {
+	code := e.Code
+	if e.ResultCode != "" {
+		code += "/" + e.ResultCode
+	}
+	return fmt.Sprintf("统一认证出票失败（%s）：%s", code, e.Message)
+}
+
+func (e *SpecTokenError) TargetUnavailable() bool {
+	return e != nil && (e.TicketNotIssued() || e.Code == "1010000500")
+}
+
+func (e *SpecTokenError) TicketNotIssued() bool {
+	return e != nil && e.ResultCode == "05010048" && (e.Code == "1010199999" || !specTokenCode(e.Code).failed())
 }
 
 // QuerySpecToken 获取 SpecToken
@@ -314,8 +379,10 @@ func (a *Auth) QuerySpecTokenForJWTContext(ctx context.Context, phone string) (s
 
 // TyrzLoginResp tyrzLogin 响应
 type TyrzLoginResp struct {
-	Code   *int `json:"code"`
-	Result struct {
+	Code    *int   `json:"code"`
+	Msg     string `json:"msg"`
+	Message string `json:"message"`
+	Result  struct {
 		Token string `json:"token"`
 	} `json:"result"`
 }
@@ -341,23 +408,32 @@ func (a *Auth) GetJWTTokenWithSSOTokenContext(ctx context.Context, phone string)
 	if err := ctx.Err(); err != nil {
 		return "", "", err
 	}
-	// 1. 获取 ssoToken
-	ssoToken, err := a.QuerySpecTokenForJWTContext(ctx, phone)
-	if err != nil {
-		return "", "", fmt.Errorf("获取 ssoToken 失败: %w", err)
+	// Each retry uses a newly issued SSO ticket. TyrzLogin itself consumes a
+	// ticket once and must not replay it after an uncertain transport outcome.
+	var lastErr error
+	for attempt := 0; attempt < 2; attempt++ {
+		if attempt > 0 {
+			if err := sleepAuthContext(ctx, 600*time.Millisecond); err != nil {
+				return "", "", err
+			}
+		}
+		ssoToken, err := a.QuerySpecTokenForJWTContext(ctx, phone)
+		if err != nil {
+			return "", "", fmt.Errorf("获取 ssoToken 失败: %w", err)
+		}
+		if ssoToken == "" {
+			return "", "", fmt.Errorf("ssoToken 为空")
+		}
+		jwtToken, err := a.TyrzLoginContext(ctx, ssoToken)
+		if err == nil && jwtToken != "" {
+			return jwtToken, ssoToken, nil
+		}
+		lastErr = fmt.Errorf("获取 JWT token 失败: %w", err)
+		if errors.Is(err, ErrCredentialExpired) {
+			break
+		}
 	}
-
-	if ssoToken == "" {
-		return "", "", fmt.Errorf("ssoToken 为空")
-	}
-
-	// 2. 使用 ssoToken 获取 JWT token
-	jwtToken, err := a.TyrzLoginContext(ctx, ssoToken)
-	if err != nil {
-		return "", ssoToken, fmt.Errorf("获取 JWT token 失败: %w", err)
-	}
-
-	return jwtToken, ssoToken, nil
+	return "", "", lastErr
 }
 
 // GetJWTToken 获取 JWT Token（完整流程）
@@ -367,4 +443,44 @@ func (a *Auth) GetJWTToken(phone string) (string, error) {
 		return "", err
 	}
 	return jwtToken, nil
+}
+
+// GetGPJWTToken 获取 gp 域 JWT（完整流程：独立取票 → gp auth-service tyrzLogin）。
+// 2026-11-03 起 JWT 按网关分域，gp 宿主活动（GP 任务表/抽抽乐/我的账单/开福袋）
+// 必须用 gp 票。ssoToken 单次消费，这里单独 querySpecToken，不复用 m 流程的 sso。
+func (a *Auth) GetGPJWTToken(phone string) (string, error) {
+	return a.GetGPJWTTokenContext(context.Background(), phone)
+}
+
+func (a *Auth) GetGPJWTTokenContext(ctx context.Context, phone string) (string, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	var lastErr error
+	for attempt := 0; attempt < 2; attempt++ {
+		if attempt > 0 {
+			if err := sleepAuthContext(ctx, 600*time.Millisecond); err != nil {
+				return "", err
+			}
+		}
+		ssoToken, err := a.QuerySpecTokenForJWTContext(ctx, phone)
+		if err != nil {
+			return "", fmt.Errorf("获取 gp 通道 ssoToken 失败: %w", err)
+		}
+		if ssoToken == "" {
+			return "", fmt.Errorf("gp 通道 ssoToken 为空")
+		}
+		jwtToken, err := a.TyrzLoginGPContext(ctx, ssoToken)
+		if err == nil {
+			return jwtToken, nil
+		}
+		lastErr = err
+		if GPAccountRequiresActivation(err) {
+			break
+		}
+	}
+	return "", fmt.Errorf("获取 gp 域 JWT 失败: %w", lastErr)
 }

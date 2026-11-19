@@ -1,0 +1,23 @@
+{
+  "wasmSHA256": "4f6f69cf9a46a8a2c3fb23ed4c31b08a9da5b2afc1bc2149ee7364c77f0570a8",
+  "clock": 1794438000123,
+  "businessToken": "fixture-business-token",
+  "request": {
+    "url": "https://dev.coc.10086.cn/coc3/gr/risk-ability/wasm/gettoken",
+    "method": "POST",
+    "headers": {
+      "coc-aurora": "Qa43BKDrEi5LaQjICAsqHz7seenjOlXU5PMptoVRJcUPlXGGOehnHGRCpuhx9Qd+8HwQvW0Fy7CjOQn7/p8hkzd7Xm5LHzG2TVRemAw1/9fx3HvH76GIUoAQZdkAHGSgzebRsbHjPQTPegT1Jbq0GC/s1PYyFeerHPHmHpBL8NgW01hR84aGPl/ukHr2piuLEb4rA/NPKh4oW0nc/JaFcV2wT7Xuxd5iVxD3lHXVDRjcxlEHzpB8PmTLL/dE8ds1lScnqtbL/m1Cw1ZWCi+aPqkAeMwmwQ7w9mA52F8FTqZstJRSwQRdyul+urKaTlUD/8x/4pkkG8o4qfgOhsrvHA==",
+      "content-type": "application/json"
+    },
+    "body": "{\"benefit_phone\":\"fixture-business-token\",\"encryptedText\":\"ICEiIyQlJicoKSorqRjCERj5ODRhXiOttXGCkKQwpfilukHfXM9eIXmzbzFHt9UmogdRv2KUDfcMZnStjAjWrLhBAUOrDAl0Pt1ksL1IuSms7Mf15AaFQtgpUA67yEdt2p6kJP54+x4uL6bsMmQfZPtovJCm889uxqmofRHz4yf1/JVrMZ50atml5k1ekRr5Xpxc1QD7xwl6WniE7ecaGfH8v/xZa9hw+rqpqLWqTk6omhiu29m80MoGOc/OxdXnLJy7UgClgIbcYY6GwccTYADpqzMmQtrOir2J9qtEmW2j8zH6d9pnKDR2cS8eOEzj/B0bizIWvs6Kmf5yvw3A7F1pfBGECy1XYxsLgrTrJkSoPE9wkzQ7GtGRtPDK8fovDjfp0wYJWkYn3RnG9kqYUr3Bj2Y7osxCwAD9U66GObh//eGkizj8dvBnI8es5HQE40++tZKecfCZP6hcQts4ETrfPK3w6n9oYGYRL1XHxVuSLhudsydDHN9ugBNSh10cCB5q3SMIUUs21tcK6INhW2IE+aQSjGiBXZIOMI0AGYnpDSRVy2qNKoL538ILjVQkcI2MnXb/RGfCULvHgRbVQd5OY/ueptCmqD1s4LV4bwU15TeOtGhS61sIBIlO5NmxKuCDJBB8nYsTiiIRjAjVIMS94k9ohT1G1j91q4xdS/+Sc3JV9RPAwxGJNQOgu0xnuY6XeJ5NqY/vw+r5STPoF8TWccsBKqyEc+LyRJFe7UZeLtKbi5FLokALHUlBTJRmMOUDtHuKipsBkTUoqmuvhxKDVGALwDA4pdsNWWtX0bfnzdRpZVXSF+LcomKcgJhrQpGrc2ihTmwqNBQGTkDijP8W/H/qXoz3KnbbFRrtTrLGRMSBBQy2PlOPgHb1z8NgPLFmtlJGRPUR1ivhMzlT5wt50tFjP3+yQ4eKwuvvs79m1oBfAf5b5lOPXK/o+Bk68GaeVfBzZ9rfQROD2m+J8lMWa3b50amnW4MsaX6qg4tXs9e9DpGRTqS7RoGKi1H6EfrCwL286IA676RTq9I0JUMNSxFmTflCS/Pa8KizuIzi5zgKRFt7KfeCEqOcGo6YIzII9InA83UHdSe+o4+ypMhAvfOfqNrm2v0Uy6hVWxpkwfozITzrt1oRJSnY24UnQpGffk3YZq+Fvcd1Fjim02PeHDLYM1OeqG6GmojFHFAqNPbAQI8zy9yyOyVRDpcAJyhCoFUnxUxiff9EvDxYhmVqi01EmZ6quhB7gqK1CYFBwRJ46Xe4vcICdvcuJdGOe+kHxZFO+68vGSssKqQcPRw4GzcIO7JCj2XkC08qGzNOXBBSqhS6aVRm5/BoNyGzxXYzjkkB75987TS5FPNIeNpMjCH00dd9s1JNOkIFAHoYICsZhuN86WdBTmB3V1xeJYZQ8+imeJb4xnpObscsyksM/1hC3aZL9sPbEsUO+ZgGqrVb3SUiGQSAar6B2y05fsJ72Ms/FS7/L1HxK/KwjpSZiEVzf4wEXOXWjPlnGLsck0hdfV5Wjz8KQGhLW/KoYVSUeFuazREOHL4dgEvxOFC+f3StvsrzDi5fmE82zhITDHB2tq8bAZTW8CBFhfF93l6BxSExGuuSlGBoTm2XTE9P4x6BJd9mEW+BA3kCRiLO/iJrVfGTzeHLexjPesBGpP/j9qC3Y3JRJzwxhdVnspN/jobteYV6MFDPIra/o2dgx7rrrzdxrRI5N+NY8H0WW36PIngJpUJeBd8gxDuyFGz0WYgHFq9RE5Vs5bVR3MiQpyJdXyZ1HirgXuGMPjuZKHj97x52K5AQh+1+8e9QHfv2jzosVP57FEDDQQcuXHu3Upo=\",\"timestamp\":1794438000123}"
+  },
+  "response": {
+    "status": 200,
+    "body": "{\"code\":\"0\",\"success\":true,\"data\":\"fixture-device-token\"}"
+  },
+  "expectedRejection": true,
+  "params": [
+    "JHEsYmTG3ATDWL5wd4oSIgegt5nlEi5MAdVDZU4czaj25YESKT7daT3NiOLFp7CAn6sBOaT6QOBfqdo8UPo8I7WUa1Tlfhq+YIw4WpavsT439WrrggiZFKAFWPZ0YNAMF4g00S+v/XcB+M8B1vUdqOOM9wJqV7tO8fmI11pFzk0oKOK8g0q6QaQDegk92XMB1B45QKFb4SeGELiYhLqKdQJFDxPpJjCGtbb47kdTMScu4/syj1xnM30sFwuqs5x1gfMkaVjPJzJp3XY1OdMl7ojW7kniq7HAQ565ZovBEhLQkGvk2AfRbMiHH6mfW+JUbebPQ0eLAcKoNhsPUtzZiw==",
+    "bG1ub3BxcnN0dXZ3kJiy7nyWcYouDYC6lnjc2skU9tY1T0la5dTLnIvWoCrhFvF+Q28IuJBBM96EGtQXJuGxRtSfyp0SnpCTlUoXUfE4T89Y2bTUa8+ZHJHQVnSD3/eZW83vh+/8eOOeSBqxsnra4hoHOXffZrVRzI7Rv4FN7kQWpsL/sgJZnlhXkAx1a2MOyLkwsRe/mRiFJ4AAH9ECHMStqsM8yLgIFjdrwe9rq9OGUbHwPHSNmJyjYkpc7C0xfZymjbxKZfnRpt5t2FL6lRofHnbr91WJgjh2OVKDMuA4S/wULSYwly9dB1lkXAI9LpJJptK+LZiCM+Ct2hmfgw6SzBT2IxYDWe7ildEL4EnsGdHJik7FlIsywI4NzvFYdRjFTpIYFIdJNhHJzbTKgA0Tc8nXO7ZUq61I0eZPhTz2Cb038sG6yUJLYb9C8MimRGNAsV93Twhxus/Zc7gFqukpMRy0zWDfEqYJWlyBtoVulxephEA0J1cv5qTw/W5COFBfUhsxVpH2fE8/02cLCmyhu0OVXMwSMV0z9PTCNBdivOvTuob81KclUS6BcfXdAnPL9tNHCG4bUjHw08a5aSuTfpMffT7O321ASfNDoFu5UDJaFe6DNNaLMtUhel9WCEp6TNEeYw=="
+  ]
+}

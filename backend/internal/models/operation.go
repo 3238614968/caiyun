@@ -26,7 +26,8 @@ const (
 // source for an asynchronous command. The Redis message only carries the ID;
 // the Worker always reloads the authoritative payload from this row.
 type Operation struct {
-	ID             string          `gorm:"primaryKey;size:36" json:"id"`
+	ID string `gorm:"primaryKey;size:36" json:"id"`
+	// Zero is reserved for internal scheduled commands, never HTTP submissions.
 	UserID         uint            `gorm:"not null;index;uniqueIndex:uq_operations_user_idempotency" json:"-"`
 	OperationType  string          `gorm:"column:operation_type;size:64;not null;index" json:"type"`
 	Status         OperationStatus `gorm:"size:16;not null;index" json:"status"`

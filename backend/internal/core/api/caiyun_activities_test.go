@@ -185,6 +185,20 @@ func TestNormalizeDataURL(t *testing.T) {
 	}
 }
 
+func TestBillExecuteValidatesTaskCodes(t *testing.T) {
+	api := &CaiyunAPI{}
+	// 以下校验都在发请求前完成，无需 transport。
+	if _, err := api.BillExecute("SHARE_BINDING", nil); err == nil {
+		t.Fatal("SHARE_BINDING 无自助路径，必须拒绝执行")
+	}
+	if _, err := api.BillExecute("UNKNOWN_CODE", nil); err == nil {
+		t.Fatal("未知账单任务码必须拒绝")
+	}
+	if _, err := api.BillExecute("QUESTIONNAIRE", nil); err == nil {
+		t.Fatal("QUESTIONNAIRE 缺少问卷答案必须拒绝")
+	}
+}
+
 func TestParseUpgradeGiftPrizePool(t *testing.T) {
 	entries := ParseUpgradeGiftPrizePool(&CaiyunResponse{Result: map[string]interface{}{
 		"prizeId":             "260512001",

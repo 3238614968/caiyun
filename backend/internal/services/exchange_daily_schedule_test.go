@@ -20,21 +20,22 @@ func TestTaskCreationKeepsDailySlotsWhenLegacyCronIsPresent(t *testing.T) {
 func TestLongTermExchangeContinuesAfterSoldOutAndExhaustedSlotRetries(t *testing.T) {
 	task := &models.ExchangeTask{TaskType: "long_term", MaxAttempts: 1, AttemptedCount: 20, MaxRetries: 3}
 	for _, reason := range []string{"奖品单日已耗尽", "奖品已兑完", "库存不足", "活动异常，请稍后重试！Error Code：GK", "云朵不足"} {
-		if got := exchangeTaskFinalStatus(task, false, reason, 3); got != models.ExchangeTaskPending {
+		task.RetryCount = 3
+		if got := exchangeTaskFinalStatus(task, rejectedExchangeResult(reason, 0, false)); got != models.ExchangeTaskPending {
 			t.Fatalf("long-term task stopped after %q: %s", reason, got)
 		}
 	}
-	if got := exchangeTaskFinalStatus(task, true, "兑换成功", 0); got != models.ExchangeTaskPending {
+	if got := exchangeTaskFinalStatus(task, acceptedExchangeResult("兑换成功", 0)); got != models.ExchangeTaskPending {
 		t.Fatal("long-term task stopped after success")
 	}
-	if got := exchangeTaskFinalStatus(task, false, "兑换结果待确认", 0); got != models.ExchangeTaskFailed {
+	if got := exchangeTaskFinalStatus(task, unknownExchangeResult("兑换结果待确认", 0)); got != models.ExchangeTaskFailed {
 		t.Fatal("uncertain acceptance was scheduled again")
 	}
 	task.TaskType = "fixed"
-	if got := exchangeTaskFinalStatus(task, false, "云朵不足", 0); got != models.ExchangeTaskFailed {
+	if got := exchangeTaskFinalStatus(task, rejectedExchangeResult("云朵不足", 0, true)); got != models.ExchangeTaskFailed {
 		t.Fatal("single-run task repeated after a failed attempt")
 	}
-	if got := exchangeTaskFinalStatus(task, true, "兑换成功", 0); got != models.ExchangeTaskCompleted {
+	if got := exchangeTaskFinalStatus(task, acceptedExchangeResult("兑换成功", 0)); got != models.ExchangeTaskCompleted {
 		t.Fatal("single-run task repeated after success")
 	}
 }

@@ -198,13 +198,17 @@ func (s *ExchangeScheduler) recoverStaleRunningTasks(source string) {
 		timeout = exchangeTaskRunningTimeoutFromEnv()
 		s.runningTimeout = timeout
 	}
-	recovered, err := s.exchangeTaskRepo.RecoverStaleRunning(timeout)
+	result, err := s.exchangeTaskRepo.RecoverStaleRunningWithResults(timeout)
 	if err != nil {
 		log.Printf("【抢兑调度器】恢复超时 running 任务失败 source=%s err=%v", source, err)
 		return
 	}
-	if recovered > 0 {
-		log.Printf("【抢兑调度器】已恢复 %d 个超时 running 抢兑任务 source=%s", recovered, source)
+	if result.Resumed > 0 {
+		log.Printf("【抢兑调度器】已恢复 %d 个未提交 running 抢兑任务 source=%s", result.Resumed, source)
+	}
+	for _, task := range result.Unknown {
+		log.Printf("【抢兑调度器】已保存待核对抢兑结果: task_id=%d source=%s", task.ID, source)
+		s.recordResult(task, unknownExchangeResult("兑换结果待确认，请核对领奖专区及兑换记录，暂勿重复兑换", 0), 0)
 	}
 }
 
@@ -222,6 +226,17 @@ func (s *ExchangeScheduler) isStopped() bool {
 	default:
 		return false
 	}
+}
+
+func (s *ExchangeScheduler) schedulingEnabled(ctx context.Context) bool {
+	if s.configRepo == nil {
+		return false
+	}
+	enabled, err := s.configRepo.WithContext(ctx).ExchangeEnabled()
+	if err != nil {
+		log.Printf("【抢兑调度器】读取抢兑开关失败，跳过本轮: %v", err)
+	}
+	return err == nil && enabled
 }
 
 // checkAndPrepareExchange 检查并准备抢兑（支持自定义时间）
@@ -383,7 +398,7 @@ func (s *ExchangeScheduler) prepareQueueByTime(hour, minute int) {
 }
 
 func (s *ExchangeScheduler) prepareQueueForSlot(slotStart time.Time) {
-	if s.isStopped() {
+	if s.isStopped() || !s.schedulingEnabled(s.executionContext()) {
 		return
 	}
 	hour, minute := slotStart.Hour(), slotStart.Minute()
@@ -452,7 +467,7 @@ func (s *ExchangeScheduler) executeExchangeForSlot(slotStart time.Time) {
 	if s.isStopped() {
 		return
 	}
-	if time.Now().Before(slotStart.Add(exchangeFireOffset())) {
+	if time.Now().Before(slotStart.Add(exchangeFireOffset())) || !s.schedulingEnabled(s.executionContext()) {
 		return
 	}
 	hour, minute := slotStart.Hour(), slotStart.Minute()

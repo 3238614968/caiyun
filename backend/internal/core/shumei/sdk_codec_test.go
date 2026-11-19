@@ -97,11 +97,11 @@ func TestCodecMatchesCapturedOfficialSDKFunctions(t *testing.T) {
 }
 
 func TestGeneratedProfileUsesNormalSDKEnvelopeAndFreshKeys(t *testing.T) {
-	first, err := generateDeviceProfileForPage("fixture-agent", "https://m.mcloud.139.com/portal/mobilecloud/index.html?path=newsignin")
+	first, err := generateDeviceProfile("fixture-agent")
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := generateDeviceProfileForPage("fixture-agent", "https://m.mcloud.139.com/portal/mobilecloud/index.html?path=newsignin")
+	second, err := generateDeviceProfile("fixture-agent")
 	if err != nil {
 		t.Fatal(err)
 	}

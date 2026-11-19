@@ -120,9 +120,9 @@ func TestPreparedRetryKeepsAccountSessionAndReportsGKDiagnostics(t *testing.T) {
 	session.loggedIn = true // This test starts with an already bound page session.
 	prepared := &exchangePreparedSession{auth: &exchangeAuthContext{jwtToken: "fixture-jwt"}, http: session}
 	for i := 0; i < 2; i++ {
-		ok, message, _ := performExchangePreparedContext(context.Background(), nil, "12345", nil, prepared)
-		if ok || !strings.Contains(message, "code=610") || !strings.Contains(message, "offset=18") {
-			t.Fatalf("GK outcome=%v %s", ok, message)
+		result := performExchangePreparedContext(context.Background(), nil, "12345", nil, prepared)
+		if result.success || !strings.Contains(result.message, "code=610") || !strings.Contains(result.message, "offset=18") {
+			t.Fatalf("GK outcome=%+v", result)
 		}
 		if prepared.http != session {
 			t.Fatal("retry discarded the account HTTP session")

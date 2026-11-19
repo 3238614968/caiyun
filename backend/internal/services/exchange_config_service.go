@@ -4,6 +4,7 @@ import (
 	"caiyun/internal/constants"
 	"caiyun/internal/models"
 	"caiyun/internal/repository"
+	"context"
 	"fmt"
 	"strconv"
 )
@@ -53,6 +54,14 @@ func (s *ExchangeService) SetExchangeConcurrency(concurrency int) error {
 // GetSystemConfig 获取系统配置
 func (s *ExchangeService) GetSystemConfig(key string) (*models.SystemConfig, error) {
 	return s.configRepo.GetByKey(key)
+}
+
+func (s *ExchangeService) ExchangeEnabled(ctx context.Context) (bool, error) {
+	return s.configRepo.WithContext(ctx).ExchangeEnabled()
+}
+
+func (s *ExchangeService) MonthlyExchangeEnabled(ctx context.Context) (bool, error) {
+	return s.configRepo.WithContext(ctx).MonthlyExchangeEnabled()
 }
 
 // SystemConfigUpdate 表示一次系统配置更新请求。
