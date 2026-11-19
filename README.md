@@ -1,6 +1,6 @@
 # 移动云盘管理系统
 
-[![Go](https://img.shields.io/badge/Go-1.25.13-00ADD8?logo=go&logoColor=white)](./backend/go.mod)
+[![Go](https://img.shields.io/badge/Go-1.26.11-00ADD8?logo=go&logoColor=white)](./backend/go.mod)
 [![Vue](https://img.shields.io/badge/Vue-3-42B883?logo=vuedotjs&logoColor=white)](./frontend/package.json)
 [![MySQL](https://img.shields.io/badge/MySQL-8.0+-4479A1?logo=mysql&logoColor=white)](./docker-compose.yml)
 [![Redis](https://img.shields.io/badge/Redis-7.0+-DC382D?logo=redis&logoColor=white)](./docker-compose.yml)
@@ -116,7 +116,7 @@ flowchart LR
 
 | 层级 | 组件 |
 | --- | --- |
-| 后端 | Go 1.25.13、Gin、GORM |
+| 后端 | Go 1.26.11、Gin、GORM |
 | 前端 | Vue 3、TypeScript、Vite |
 | 数据 | MySQL 8、Redis 7 |
 | 测试 | Go testing、Vitest、Playwright |
@@ -149,7 +149,7 @@ docker compose up --build -d
 ### 环境要求
 
 - Docker Engine 与 Docker Compose v2（Docker 部署）
-- Go `1.25.13` 或更高版本（后端源码开发）
+- Go `1.26.11` 或更高版本（后端源码开发）
 - Node.js `20.19+（20.x）` 或 `22.12+` 与 npm（前端源码开发，需满足 Vite 的 engines 要求）
 - 可通过 `python` 命令调用的 Python 3（用于生成本地接口契约）
 - MySQL `8.0+`、Redis `7.0+`（仅源码开发或外部依赖部署）
