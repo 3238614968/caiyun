@@ -141,6 +141,7 @@ try {
     $sbom = @{
         bomFormat = "CycloneDX"
         specVersion = "1.5"
+        serialNumber = "urn:uuid:$([System.Guid]::NewGuid())"
         version = 1
         metadata = @{
             timestamp = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")

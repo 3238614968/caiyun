@@ -22,6 +22,7 @@ import datetime as dt
 import hashlib
 import json
 import sys
+import uuid
 
 target = Path(sys.argv[1])
 out = Path(sys.argv[2])
@@ -42,6 +43,7 @@ for item in sorted(target.iterdir(), key=lambda p: p.name):
 doc = {
     "bomFormat": "CycloneDX",
     "specVersion": "1.5",
+    "serialNumber": uuid.uuid4().urn,
     "version": 1,
     "metadata": {
         "timestamp": dt.datetime.utcnow().replace(microsecond=0).isoformat() + "Z",

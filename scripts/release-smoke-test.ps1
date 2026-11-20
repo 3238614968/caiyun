@@ -144,6 +144,7 @@ Assert-True ($k8sEntries -contains 'k8s/observability-otel-collector.yaml') 'Kub
 
 $sbomRaw = Get-Content -LiteralPath (Join-Path $ReleaseDir $sbomFile) -Raw | ConvertFrom-Json
 Assert-True ($sbomRaw.bomFormat -eq 'CycloneDX') 'SBOM bomFormat must be CycloneDX'
+Assert-True ($sbomRaw.serialNumber -cmatch '^urn:uuid:[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$') 'SBOM serialNumber must be a UUIDv4 URN'
 Assert-True ($sbomRaw.components.Count -ge 17) 'SBOM components unexpectedly small'
 
 Write-Host "release smoke test passed: $ReleaseDir"
