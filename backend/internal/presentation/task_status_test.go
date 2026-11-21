@@ -15,3 +15,16 @@ func TestSavedTaskLogCannotClaimThatAWorkerIsStillRunning(t *testing.T) {
 		t.Fatal("partial reward confirmation was lost")
 	}
 }
+
+func TestGPLoginFailureShowsOnlyBusinessCodeInTaskLogs(t *testing.T) {
+	const raw = "获取 gp 域 JWT 失败: gp.mcloud.139.com 登录失败: code=200050409 token=fixture | body=private | build=fixture"
+	const want = "GP 渠道登录失败（上游业务码 200050409），本次任务未执行"
+	for _, taskType := range []string{"tasklist_gp", "annual_bill", "luckybag"} {
+		if got := TaskLogMessage(taskType, "failed", raw); got != want {
+			t.Errorf("%s log = %q, want %q", taskType, got, want)
+		}
+	}
+	if got := TaskLogMessage("tasklist", "failed", raw); got != "获取 gp 域 JWT 失败: gp.mcloud.139.com 登录失败:" {
+		t.Errorf("unrelated task log retained diagnostics: %q", got)
+	}
+}

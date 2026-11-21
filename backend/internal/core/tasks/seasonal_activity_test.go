@@ -122,6 +122,49 @@ func TestCloudPhoneRegistersOnlyProtocolTasksAndChecksBalance(t *testing.T) {
 	}
 }
 
+func TestCloudPhoneBalanceFailureReportsWhetherTaskWasExecuted(t *testing.T) {
+	for _, tc := range []struct {
+		name, detail string
+		failedRead   int
+		wantSigns    int
+	}{
+		{"before execution", "执行前读取云币余额失败，本次任务未执行", 1, 0},
+		{"after execution", "执行后云币余额复查失败，到账待确认", 2, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			balances, signs := 0, 0
+			client := corehttp.NewClient(corehttp.WithTransport(hiddenRewardRoundTrip(func(req *http.Request) (*http.Response, error) {
+				switch req.URL.Path {
+				case "/orchestration/auth-rebuild/token/v1.0/querySpecToken":
+					return hiddenRewardReply(req, `{"data":{"token":"test-sso"}}`), nil
+				case "/cloudphone-market/user/tokenValidate":
+					return hiddenRewardReply(req, `{"header":{"status":200},"data":{"token":"test-session"}}`), nil
+				case "/cloudphone-market/redpacket/userAccountInfo":
+					balances++
+					if balances == tc.failedRead {
+						return hiddenRewardReply(req, `{"header":{"status":500,"errMsg":"内部服务执行错误"},"data":null}`), nil
+					}
+					return hiddenRewardReply(req, `{"header":{"status":200},"data":{"info":{"canAmount":50}}}`), nil
+				case "/cloudphone-market/redpacket/userSign":
+					signs++
+					return hiddenRewardReply(req, `{"header":{"status":200},"data":{"status":1}}`), nil
+				case "/cloudphone-market/redpacket/configTaskList":
+					return hiddenRewardReply(req, `{"header":{"status":200},"data":{"configTaskDailyList":[]}}`), nil
+				default:
+					t.Fatalf("unexpected endpoint: %s", req.URL)
+					return nil, nil
+				}
+			})))
+			task := NewCloudPhonePartyTask(client, nil, nil)
+			task.SetAccountPhone("13800000001")
+			err := task.Run()
+			if err == nil || !strings.Contains(err.Error(), tc.detail) || !strings.Contains(err.Error(), "status=500") || balances != tc.failedRead || signs != tc.wantSigns {
+				t.Fatalf("balance reads=%d, sign requests=%d, error=%v", balances, signs, err)
+			}
+		})
+	}
+}
+
 func TestLanternStopsOnLimitAndNeverDrawsWrongAnswers(t *testing.T) {
 	freezeActivityClock(t)
 	for _, tc := range []struct {

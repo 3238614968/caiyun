@@ -36,7 +36,7 @@ func (t *CloudPhonePartyTask) Run() error {
 	}
 	before, err := t.api.CloudPhoneBalance(token)
 	if err != nil {
-		return err
+		return fmt.Errorf("执行前读取云币余额失败，本次任务未执行（%w）", err)
 	}
 	var issues []error
 	var parts []string
@@ -85,7 +85,7 @@ func (t *CloudPhonePartyTask) Run() error {
 	}
 	after, err := t.api.CloudPhoneBalance(token)
 	if err != nil {
-		issues = append(issues, err)
+		issues = append(issues, fmt.Errorf("执行后云币余额复查失败，到账待确认（%w）", err))
 		parts = append(parts, "云币余额复查失败，未确认到账")
 	} else {
 		parts = append(parts, fmt.Sprintf("云币%d→%d（变化%+d，不计入云朵收益）", before, after, after-before))
